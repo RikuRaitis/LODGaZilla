@@ -46,7 +46,10 @@ from src.gui.plots.series import (
 OPENFREEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 TERRARIUM_TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 # The terrain's most detailed elevation tiles; Follow ground and Auto read the same ones.
-DEM_ZOOM = 15
+# Not above the map's own vector tiles (OpenFreeMap: zoom 14): MapLibre cannot drape a
+# stretched map tile on more detailed terrain ("cannot calculate elevation if elevation
+# maxzoom > source.maxzoom").
+DEM_ZOOM = 14
 ALTITUDE_AXIS = 2
 FLAT_ALTITUDE_LABEL = "0 m (flat)"
 MAX_EXAGGERATION = 10.0
@@ -238,7 +241,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.track_offset_input.setAccessibleName("Track altitude offset value in metres")
         self.follow_ground = QToolButton()
         self.follow_ground.setCheckable(True)
-        self.follow_ground.setToolTip("Follow ground: draw the track on the ground, ignoring its altitude")
+        self.follow_ground.setToolTip("Follow ground: draw the track on the ground, ignoring its altitude and offset")
         self.follow_ground.setAccessibleName("Follow ground")
         self.auto_button = QToolButton()
         self.auto_button.setToolTip("Auto: set the offset that puts the track's lowest point on the ground")
@@ -884,7 +887,7 @@ function setMapOpacity(opacity){{
 function applyTerrain(){{
   if(!mapReady)return;
   const shown=viewSettings.mapOpacity>0;
-  if(shown&&!terrainAdded){{map.addSource('terrain-dem',{{type:'raster-dem',tiles:[DEM_TILE_URL],tileSize:256,encoding:'terrarium',maxzoom:15}});terrainAdded=true;}}
+  if(shown&&!terrainAdded){{map.addSource('terrain-dem',{{type:'raster-dem',tiles:[DEM_TILE_URL],tileSize:256,encoding:'terrarium',maxzoom:DEM_ZOOM}});terrainAdded=true;}}
   if(terrainAdded)map.setTerrain(shown?{{source:'terrain-dem',exaggeration:viewSettings.altitudeExaggeration}}:null);
 }}
 function setAltitudeExaggeration(factor){{

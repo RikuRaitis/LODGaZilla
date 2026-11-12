@@ -398,7 +398,10 @@ class Gnss3DControlsTests(unittest.TestCase):
         self.assertFalse(self.widget.track_offset_input.isEnabled())
         self.assertFalse(self.widget.track_altitude_offset.isEnabled())
         # The ground comes from the terrain's own elevation tiles.
-        self.assertTrue(self.js("demRequests.every(url => url.includes('/terrarium/15/'))"))
+        # At the zoom the terrain uses too, which the map's own tiles also reach.
+        from src.gui.plots.gnss_3d import DEM_ZOOM
+        self.assertEqual(DEM_ZOOM, 14)
+        self.assertTrue(self.js(f"demRequests.every(url => url.includes('/terrarium/{DEM_ZOOM}/'))"))
         self.widget.follow_ground.setChecked(False)
         self.assertEqual(self.js("routeCoordinates().map(p=>p[2])"), [100, 80, 70])
         self.assertTrue(self.widget.track_offset_input.isEnabled())

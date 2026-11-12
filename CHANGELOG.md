@@ -23,6 +23,8 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Fixed
 
+- The 3D Map's terrain no longer goes beyond the map tiles' zoom, so MapLibre drapes the map
+  correctly when zoomed in close (no more "cannot calculate elevation" warnings).
 - H5 generation builds each LOD level from the level below, so long series need far less
   memory; without a conversion, `value_raw` is no longer a second copy of the values.
 - Series whose names become the same H5 name (such as "Speed (km/h)" and "Speed [km/h]")
