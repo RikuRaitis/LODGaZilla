@@ -529,8 +529,9 @@ Plugins are released separately, each in its own Git repository named
 
 In **Settings > Plugins**, **Check now** looks in the **Plugin sources**, which start
 with `https://github.com/RikuRaitis`; add any GitHub account or Bitbucket workspace that
-publishes plugins. LODGaZilla lists the `LODGaZilla-*` repositories it finds there, with **Install** and **Update** buttons. New plugins start disabled:
-restart LODGaZilla, then enable them in Settings.
+publishes plugins. LODGaZilla lists the `LODGaZilla-*` repositories it finds there, with
+**Install** and **Update** buttons. New plugins start disabled: restart LODGaZilla, then
+enable them in Settings.
 
 LODGaZilla never stores passwords or tokens. Only install plugins you trust: a plugin
 runs Python code with your permissions.

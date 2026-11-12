@@ -9,9 +9,9 @@ core tests must pass with no plugin checkouts present.
 
 Each plugin repository root contains `plugin.json`, implementation files,
 `requirements.txt`, `constraints.txt`, `README.md` and `tests/`. Importers also
-contain `importer.json`. Plugins live in separate repositories. All repositories
-remain private during migration; moving the private integrations to their final
-host and preparing clean public histories are later phases.
+contain `importer.json`. Plugins live in separate repositories, public or private;
+the public ones are listed in the README. A private plugin needs the user's own Git
+access to its repository.
 
 An installed checkout goes directly under `plugin/<id>/`. The host reads only
 immediate-child manifests, never manifests inside tests or other nested folders.
@@ -190,11 +190,9 @@ Tests resolve their own plugin resources relative to their file. The supplied ho
 checkout can be a pinned release or the candidate host change. `--all-plugins`
 adds installed siblings for integration checks; omission proves independence.
 
-Public CI should run core plus the three public plugins. Private CI should run
-each private plugin against the same pinned host and then the full installation.
-Cross-repository CI wiring remains a separate step while the repositories require
-private access credentials. Keep private
-fixtures and logs in their private repositories. Native graphics and physical-device
+CI should run the core and each public plugin against the same pinned host; a
+private plugin is tested the same way where its repository is accessible. Keep
+private fixtures and logs in their private repositories. Native graphics and physical-device
 tests need appropriate runners and remain separate from headless tests.
 
 ## Runtime discovery and installation
