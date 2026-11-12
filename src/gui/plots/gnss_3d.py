@@ -155,7 +155,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self._marker_revision = 0
         # A new card applies Auto to its first tracks; a card from a workspace keeps its saved settings.
         self._auto_pending = True
-        self._marker_times = {FIRST_MARKER: None, SECOND_MARKER: None}
+        self._init_point_markers()
         self._value_box_times = {FIRST_MARKER: None, SECOND_MARKER: None}
         self.setMinimumHeight(360)
 
@@ -173,10 +173,11 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.bridge = Gnss3DBridge(self)
         self.channel.registerObject("gnssBridge", self.bridge)
         self.map_view.page().setWebChannel(self.channel)
-        self.bridge.point_selected.connect(lambda timestamp: self._select_from_map(FIRST_MARKER, timestamp))
-        self.bridge.second_point_selected.connect(lambda timestamp: self._select_from_map(SECOND_MARKER, timestamp))
-        self.bridge.marker_clear_requested.connect(lambda: self._clear_marker_from_map(FIRST_MARKER))
-        self.bridge.second_marker_clear_requested.connect(lambda: self._clear_marker_from_map(SECOND_MARKER))
+        self.bridge.point_selected.connect(lambda timestamp: self._place_marker_from_view(FIRST_MARKER, timestamp))
+        self.bridge.second_point_selected.connect(
+            lambda timestamp: self._place_marker_from_view(SECOND_MARKER, timestamp))
+        self.bridge.marker_clear_requested.connect(lambda: self._clear_marker_from_view(FIRST_MARKER))
+        self.bridge.second_marker_clear_requested.connect(lambda: self._clear_marker_from_view(SECOND_MARKER))
         self._watch_map_events(self.map_view)
         self.map_stack.addWidget(self.loading)
         self.map_stack.addWidget(self.map_view)
@@ -358,7 +359,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         times = [self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]]
         selection = list(selection_rgba(2.0))
         colors = [list(marker_color(index).getRgb()) for index in (FIRST_MARKER, SECOND_MARKER)]
-        sync = getattr(self, "_sync_time", None)
+        sync = self._sync_time
         sync_color = [int(sync_marker_color()[i:i + 2], 16) for i in (1, 3, 5)] + [255]
         self._run_map_script(f"setMarkers({json.dumps(times)}, {json.dumps(colors)}, "
                              f"{marker_width()}, {json.dumps(selection)}, {json.dumps(sync)}, {json.dumps(sync_color)});")

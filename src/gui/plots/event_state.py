@@ -23,6 +23,7 @@ from src.gui.plots.base import (
     SERIES_COLORS, PlotBaseWidget, apply_view_range_state, assign_series_colors, series_legend_name, state_entry,
     view_range_state,
 )
+from src.gui.plots.card_markers import TimeCardMarkers
 from src.gui.plots.legend import LegendEntry, PlotLegendWidget
 from src.gui.plots.theme import apply_plot_palette
 from src.gui.plots.marker_info import marker_entries_from_samples
@@ -30,7 +31,7 @@ from src.gui.plots.markers import FIRST_MARKER, SECOND_MARKER
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.gui.plots.series import (
     TimeAxisMetadata,
-    MarkerDataLoadCoordinator,
+    MarkerValueLoads,
     MarkerSample,
     VisibleDataLoadCoordinator,
     _attribute_text,
@@ -252,7 +253,7 @@ def render_event_state_lane(plot_item, lane, data, color):
     return items
 
 
-class EventStatePlotWidget(PlotBaseWidget):
+class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
     """Compact one-lane-per-series timeline for indexed events and states."""
     help_topic = "event"
 
@@ -314,11 +315,7 @@ class EventStatePlotWidget(PlotBaseWidget):
         self._series_colors: dict[tuple[Path, str], str] = {}
         self._colors: list[str] = []
         self.time_axis_metadata: TimeAxisMetadata | None = None
-        self._marker_request_ids = {FIRST_MARKER: 0, SECOND_MARKER: 0}
-        self._marker_loads = {index: MarkerDataLoadCoordinator(self) for index in (FIRST_MARKER, SECOND_MARKER)}
-        for index, loads in self._marker_loads.items():
-            loads.loaded.connect(lambda request_id, x_value, samples, index=index:
-                                 self._show_loaded_marker_data(index, request_id, x_value, samples))
+        self._marker_loads = MarkerValueLoads(self, self._show_loaded_marker_data)
         self.value_boxes = ValueBoxLayer(self.plot_widget)
         self.plot_widget.marker_cleared.connect(lambda: self.hide_marker_data(FIRST_MARKER))
         self.plot_widget.second_marker_cleared.connect(lambda: self.hide_marker_data(SECOND_MARKER))
@@ -336,12 +333,6 @@ class EventStatePlotWidget(PlotBaseWidget):
         super().resizeEvent(event)
         self.legend.reposition()
         QTimer.singleShot(0, self._update_lane_vertical_scale)
-
-    def time_axis_representation(self) -> str:
-        return self.plot_widget.time_axis.representation
-
-    def set_time_axis_representation(self, representation: str) -> None:
-        self.plot_widget.time_axis.set_representation(representation)
 
     def plot_view_box(self):  # type: ignore[no-untyped-def]
         return self.plot_item.getViewBox()
@@ -369,27 +360,12 @@ class EventStatePlotWidget(PlotBaseWidget):
         if self.time_axis_metadata is not None:
             self.set_time_axis_display_metadata(self.time_axis_metadata)
 
-    def set_vertical_marker(self, x_value: float, index: int = 0) -> None:
+    def set_vertical_marker(self, x_value: float, index: int = FIRST_MARKER) -> None:
+        # Outside the lanes' data the marker is not drawn on this card.
         if self._contains_time(x_value):
-            self.plot_widget.set_vertical_marker(x_value, index)
+            super().set_vertical_marker(x_value, index)
         else:
-            self.plot_widget.clear_vertical_marker(index)
-
-    def clear_vertical_marker(self, index: int = 0) -> None:
-        self.plot_widget.clear_vertical_marker(index)
-
-    def set_sync_marker(self, x_value: float | None) -> None:
-        self.plot_widget.set_sync_marker(x_value)
-
-    def apply_marker_style(self) -> None:
-        self.plot_widget.apply_marker_style()
-        self.value_boxes.apply_style()
-
-    def marker_values(self) -> tuple[float | None, float | None]:
-        return tuple(self.plot_widget.marker_value(index) for index in (0, 1))
-
-    def set_marker_snap_enabled(self, enabled: bool) -> None:
-        self.plot_widget.snap_marker_to_nearest_point = bool(enabled)
+            self.clear_vertical_marker(index)
 
     def set_data_time_range(self, time_range: tuple[float, float] | None) -> None:
         """Filter timeline data while preserving the user's current ViewBox."""
@@ -420,19 +396,16 @@ class EventStatePlotWidget(PlotBaseWidget):
         # State rectangles can intentionally extend past their last recorded
         # transition. Show the nearest state/event for every assigned series
         # instead of omitting a lane whose raw samples stop earlier.
-        self._marker_request_ids[index] = self._marker_loads[index].request(
-            x_value, list(self.series), allow_outside_series=True
-        )
+        self._marker_loads.request(index, x_value, list(self.series), allow_outside_series=True)
 
     def hide_marker_data(self, index: int | None = None) -> None:
+        self._marker_loads.invalidate(index)
         for marker in (FIRST_MARKER, SECOND_MARKER) if index is None else (index,):
-            self._marker_request_ids[marker] = self._marker_loads[marker].invalidate()
             self.value_boxes.clear(marker)
 
     def dispose(self) -> None:
         self._visible_reload_timer.stop()
-        for loads in self._marker_loads.values():
-            loads.shutdown()
+        self._marker_loads.shutdown()
         self._visible_loads.shutdown()
 
     def set_series_color(self, index: int, color: str) -> None:
@@ -720,11 +693,7 @@ class EventStatePlotWidget(PlotBaseWidget):
     def _update_lane_heights(self, *_args):
         update_event_state_lane_heights(self.plot_item, self._items)
 
-    def _show_loaded_marker_data(
-        self, index: int, request_id: int, x_value: float, samples: list[MarkerSample]
-    ) -> None:
-        if request_id != self._marker_request_ids[index]:
-            return
+    def _show_loaded_marker_data(self, index: int, x_value: float, samples: list[MarkerSample]) -> None:
         # Each box sits on its series' lane.
         lanes = {source_index: lane for lane, (source_index, _path, _name) in enumerate(self._timeline_entries)}
         items = []

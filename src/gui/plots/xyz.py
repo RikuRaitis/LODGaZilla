@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QToolButton
 
 from src.data.xyz import XYZ_MAXIMUM_POINTS, AxisSource, XYZData
 from src.gui.plots.base import PlotBaseWidget
+from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.icons import plot_control_icon
 from src.gui.plots.theme import canvas_background
 from src.gui.plots.legend import PlotLegendWidget
@@ -71,7 +72,7 @@ class XYZView(gl.GLViewWidget):
         event.accept()
 
 
-class XYZPlotWidget(PlotBaseWidget):
+class XYZPlotWidget(PointMarkers, PlotBaseWidget):
     """One or more 3D traces, each aligning three scalar sources by timestamp."""
     help_topic = "xyz"
 
@@ -106,8 +107,7 @@ class XYZPlotWidget(PlotBaseWidget):
         self._marker_items = []
         # Each trace's selection stretch, sync point and two marker points, reused.
         self._trace_marker_items: dict[int, dict] = {}
-        self._marker_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
-        self._sync_time = None
+        self._init_point_markers()
         self._value_box_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
         self.loader = XYZLoadCoordinator(self)
         self.loader.loaded.connect(self._loaded)
@@ -351,36 +351,15 @@ class XYZPlotWidget(PlotBaseWidget):
                 best = (distances[point], float(self.results[trace_index].time[point]))
         if best is None:
             return
-        self.set_vertical_marker(best[1], index)
-        (self.marker_placed if index == FIRST_MARKER else self.second_marker_placed).emit(best[1])
+        self._place_marker_from_view(index, best[1])
 
     def _on_view_double_clicked(self, button):
         index = {Qt.MouseButton.LeftButton: FIRST_MARKER, Qt.MouseButton.RightButton: SECOND_MARKER}.get(button)
-        if index is not None and self._marker_times[index] is not None:
-            self.clear_vertical_marker(index)
-            (self.marker_cleared if index == FIRST_MARKER else self.second_marker_cleared).emit()
+        if index is not None:
+            self._clear_marker_from_view(index)
 
-    def set_vertical_marker(self, time_value, index=FIRST_MARKER):
-        self._marker_times[index] = float(time_value)
+    def _redraw_markers(self):
         self._draw_markers()
-        self._update_selection()
-
-    def clear_vertical_marker(self, index=FIRST_MARKER):
-        self._marker_times[index] = None
-        self._draw_markers()
-        self.hide_marker_data(index)
-        self._update_selection()
-
-    def marker_values(self):
-        return self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]
-
-    def set_sync_marker(self, time_value):
-        self._sync_time = time_value
-        self._draw_markers()
-
-    def selection_range(self):
-        times = self.marker_values()
-        return None if None in times else tuple(sorted(times))
 
     def apply_marker_style(self):
         self._draw_markers()

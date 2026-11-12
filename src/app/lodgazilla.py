@@ -354,13 +354,11 @@ def run_reimport_process(
         events.put(("finished", 0, 0, str(error)))
 
 
-# Cards with first and second markers and the selection between them.
-TWO_MARKER_CARD_TYPES = (
-    LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget, XYPlotWidget, GnssPlotWidget, XYZPlotWidget,
-    Gnss3DPlotWidget,
-)
-# Cards with a time axis whose views can be linked.
+# Cards with a time axis whose views can be linked. Use this, not the classes written out,
+# so a new time card is added in one place.
 TIME_CARD_TYPES = (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget)
+# Cards with first and second markers and the selection between them.
+TWO_MARKER_CARD_TYPES = (*TIME_CARD_TYPES, XYPlotWidget, GnssPlotWidget, XYZPlotWidget, Gnss3DPlotWidget)
 
 
 def _has_empty_axis(card: PlotBaseWidget) -> bool:
@@ -722,7 +720,7 @@ class PlotWorkspace(QScrollArea):
         self._series_drop_finished(plot)
 
     def _series_drop_finished(self, plot: PlotBaseWidget) -> None:
-        if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget)):
+        if isinstance(plot, TIME_CARD_TYPES):
             self.update_x_axis_links()
             self.update_time_axis_format_links()
             self.schedule_y_axis_alignment()
@@ -1092,7 +1090,7 @@ class PlotWorkspace(QScrollArea):
             # Cards filter their data in their own time, before the offset.
             offset = plot.time_offset
             card_range = (time_range[0] - offset, time_range[1] - offset)
-        if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget, XYPlotWidget, XYZPlotWidget)):
+        if isinstance(plot, (*TIME_CARD_TYPES, XYPlotWidget, XYZPlotWidget)):
             plot.set_data_time_range(card_range)
         elif isinstance(plot, (GnssPlotWidget, Gnss3DPlotWidget)):
             plot.time_range = card_range
@@ -1179,7 +1177,7 @@ class PlotWorkspace(QScrollArea):
             return
         value = self._marker_value_for_plot(source, timestamp)
         source.set_vertical_marker(value, index)
-        if not isinstance(source, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget)):
+        if not isinstance(source, TIME_CARD_TYPES):
             # Only time canvases announce markers set in code; share the others' here.
             (self.on_marker_placed if index == 0 else self.on_second_marker_placed)(source, value)
 
@@ -1210,7 +1208,7 @@ class PlotWorkspace(QScrollArea):
     def set_marker_snap_to_nearest_point(self, enabled: bool) -> None:
         self.snap_vertical_marker_to_nearest_point = bool(enabled)
         for plot in self.plots():
-            if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget)):
+            if isinstance(plot, TIME_CARD_TYPES):
                 plot.set_marker_snap_enabled(enabled)
 
     def set_time_axis_display(self, mode: str) -> None:
@@ -1234,7 +1232,7 @@ class PlotWorkspace(QScrollArea):
     def update_time_axis_visibility(self) -> None:
         """Show the time axis on every time card, only on the lowest one, or on none."""
         time_cards = [plot for plot in self.plots()
-                      if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget))]
+                      if isinstance(plot, TIME_CARD_TYPES)]
         for plot in time_cards:
             shown = self.time_axis_display == "all" or (
                 self.time_axis_display == "bottom" and plot is time_cards[-1])
@@ -1309,7 +1307,7 @@ class PlotWorkspace(QScrollArea):
     def apply_theme(self) -> None:
         """Refresh plot libraries and overlays after Qt's palette has changed."""
         for plot in self.plots():
-            if isinstance(plot, (LinePlotWidget, XYPlotWidget, XYZPlotWidget, GnssPlotWidget, Gnss3DPlotWidget, VideoPlotWidget, EventStatePlotWidget, FrequencyPlotWidget)):
+            if isinstance(plot, (*TWO_MARKER_CARD_TYPES, VideoPlotWidget)):
                 plot.apply_theme()
 
     def on_marker_placed(self, source: PlotBaseWidget, x_value: float) -> None:
@@ -1354,7 +1352,7 @@ class PlotWorkspace(QScrollArea):
         """Line up each Video card's Timeline slider with the first time card's plot area."""
         edges = None
         for plot in self.plots():
-            if not isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget)):
+            if not isinstance(plot, TIME_CARD_TYPES):
                 continue
             try:
                 box = plot.plot_view_box()
@@ -1397,7 +1395,7 @@ class PlotWorkspace(QScrollArea):
         time_plots = [
             plot
             for plot in self.plots()
-            if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget))
+            if isinstance(plot, TIME_CARD_TYPES)
         ]
         if not time_plots:
             return
@@ -1551,7 +1549,7 @@ class PlotWorkspace(QScrollArea):
         time_plots = [
             plot
             for plot in self.plots()
-            if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget))
+            if isinstance(plot, TIME_CARD_TYPES)
         ]
         if not time_plots:
             return
@@ -1579,7 +1577,7 @@ class PlotWorkspace(QScrollArea):
         time_plots = [
             plot
             for plot in self.plots()
-            if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget))
+            if isinstance(plot, TIME_CARD_TYPES)
         ]
         if not time_plots:
             return
@@ -1630,7 +1628,7 @@ class PlotWorkspace(QScrollArea):
         time_plots = [
             plot
             for plot in self.plots()
-            if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget))
+            if isinstance(plot, TIME_CARD_TYPES)
         ]
         if not time_plots:
             return
@@ -1649,7 +1647,7 @@ class PlotWorkspace(QScrollArea):
         self._synchronizing_time_axis_format = True
         try:
             for plot in self.plots():
-                if isinstance(plot, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget)) and plot is not source:
+                if isinstance(plot, TIME_CARD_TYPES) and plot is not source:
                     plot.set_time_axis_representation(representation)
         finally:
             self._synchronizing_time_axis_format = False
@@ -1848,7 +1846,7 @@ class PlotWorkspace(QScrollArea):
         """
         for card, record in cards:
             view = record.get("view")
-            if (card in self.plots() and isinstance(card, (LinePlotWidget, EventStatePlotWidget, FrequencyPlotWidget))
+            if (card in self.plots() and isinstance(card, TIME_CARD_TYPES)
                     and card.plot_view_box().linkedView(0) is None
                     and isinstance(view, list) and view and len(view[0]) == 2):
                 card.plot_view_box().setXRange(float(view[0][0]), float(view[0][1]), padding=0)

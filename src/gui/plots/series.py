@@ -241,6 +241,32 @@ class MarkerDataLoadCoordinator(_LatestRequestCoordinator):
         )
 
 
+class MarkerValueLoads:
+    """The two markers' value reads for one card.
+
+    ``loaded(index, x_value, samples)`` is called only for each marker's newest read; a newer
+    request or ``invalidate`` makes earlier reads obsolete.
+    """
+
+    def __init__(self, owner: QWidget, loaded) -> None:  # type: ignore[no-untyped-def]
+        self._request_ids = {FIRST_MARKER: 0, SECOND_MARKER: 0}
+        self._loads = {index: MarkerDataLoadCoordinator(owner) for index in (FIRST_MARKER, SECOND_MARKER)}
+        for index, loads in self._loads.items():
+            loads.loaded.connect(lambda request_id, x_value, samples, index=index: (
+                request_id == self._request_ids[index] and loaded(index, x_value, samples)))
+
+    def request(self, index: int, x_value: float, entries: list[tuple[Path, str]], **options) -> None:  # type: ignore[no-untyped-def]
+        self._request_ids[index] = self._loads[index].request(x_value, entries, **options)
+
+    def invalidate(self, index: int | None = None) -> None:
+        for marker in (FIRST_MARKER, SECOND_MARKER) if index is None else (index,):
+            self._request_ids[marker] = self._loads[marker].invalidate()
+
+    def shutdown(self) -> None:
+        for loads in self._loads.values():
+            loads.shutdown()
+
+
 class SelectionStatisticsLoader(QThread):
     """Read complete selected ranges off the GUI thread for exact statistics."""
 
@@ -802,11 +828,7 @@ class SeriesPlotWidget(QWidget):
         )
         self._statistics: list[SelectionStatistics] = []
         self._marker_x: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
-        self._marker_request_ids = {FIRST_MARKER: 0, SECOND_MARKER: 0}
-        self._marker_loads = {index: MarkerDataLoadCoordinator(self) for index in (FIRST_MARKER, SECOND_MARKER)}
-        for index, loads in self._marker_loads.items():
-            loads.loaded.connect(lambda request_id, x_value, samples, index=index:
-                                 self._show_loaded_marker_values(index, request_id, x_value, samples))
+        self._marker_loads = MarkerValueLoads(self, self._show_loaded_marker_values)
         self._selection_request_id = 0
         self._selection_range: tuple[float, float] | None = None
         self._selection_loads = SelectionStatisticsLoadCoordinator(self)
@@ -953,7 +975,7 @@ class SeriesPlotWidget(QWidget):
     def hide_marker_values(self, index: int | None = None) -> None:
         """Hide a marker's values boxes, or both, and make outstanding reads obsolete."""
         for marker in (FIRST_MARKER, SECOND_MARKER) if index is None else (index,):
-            self._marker_request_ids[marker] = self._marker_loads[marker].invalidate()
+            self._marker_loads.invalidate(marker)
             self._marker_x[marker] = None
             self.value_boxes.clear(marker)
 
@@ -969,8 +991,7 @@ class SeriesPlotWidget(QWidget):
     def dispose(self) -> None:
         """Release UI callbacks while background HDF5 reads finish safely."""
         self._view_update_timer.stop()
-        for loads in self._marker_loads.values():
-            loads.shutdown()
+        self._marker_loads.shutdown()
         self._visible_loads.shutdown()
         self.hide_selection_statistics()
         self._selection_loads.shutdown()
@@ -1043,14 +1064,9 @@ class SeriesPlotWidget(QWidget):
             # Values here describe intervals, not samples: show only selection statistics.
             self._show_statistics_boxes()
             return
-        self._marker_request_ids[index] = self._marker_loads[index].request(
-            x_value, list(self._series_entries), x_offsets=self.entry_time_offsets())
+        self._marker_loads.request(index, x_value, list(self._series_entries), x_offsets=self.entry_time_offsets())
 
-    def _show_loaded_marker_values(
-        self, index: int, request_id: int, x_value: float, samples: list[MarkerSample]
-    ) -> None:
-        if request_id != self._marker_request_ids[index]:
-            return
+    def _show_loaded_marker_values(self, index: int, x_value: float, samples: list[MarkerSample]) -> None:
         entries = marker_entries_from_samples(samples, self.series_colors())
         items = []
         for sample, entry in zip(samples, entries):

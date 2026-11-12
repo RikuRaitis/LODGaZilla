@@ -173,6 +173,9 @@ An H5 file supplies data series; it is not a separate tree item type.
   conventions, and avoid unrelated refactoring or overwriting existing work.
 - **Share common behavior.** Put common card interactions in the base widget or
   an appropriate shared helper. Keep card-specific behavior with its card type.
+  Marker code is shared in `src/gui/plots/card_markers.py`: `TimeCardMarkers` for
+  cards on a time axis (Line, Event/state, Frequency) and `PointMarkers` for cards
+  that mark points (X/Y, 3D plot, Map); marker value reads use `MarkerValueLoads`.
 - **Share card-selection rules.** `src/data/plot_policy.py` defines default cards
   and minimum-card packing for Navigator menus, activation, and data drops.
   Explicit grouped-card choices retain incomplete groups; incompatible selected
@@ -207,6 +210,9 @@ An H5 file supplies data series; it is not a separate tree item type.
   dependencies and documentation. See `docs/Plugin_API.md`. Use
   `python tools/run_tests.py --isolated` for a protected, plugin-free core run,
   or add `--plugin PATH` to test an independent plugin checkout.
+- **Keep plugin reviews separate.** A code review writes its host findings to
+  `Code_review.md` and its plugin findings to `Code_review_plugin.md`, in the same
+  structure. `Code_review.md` never names private plugins or their findings.
 - **Keep plugin repositories separate.** The root `plugin/` directory is ignored
   by the application repository and contains optional independent Git checkouts.
   Commit plugin changes in their own repository; do not force-add their source

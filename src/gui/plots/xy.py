@@ -10,6 +10,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from src.gui.plots.base import PlotBaseWidget, apply_view_range_state, view_range_state
+from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.interactive import use_full_viewport_updates
 from src.gui.plots.legend import PlotLegendWidget
 from src.data.sampling import SampledResult, decimation_step
@@ -23,7 +24,7 @@ from src.gui.plots.markers import (
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.gui.plots.series import (
-    MarkerDataLoadCoordinator,
+    MarkerValueLoads,
     MarkerSample,
     SelectionStatistics,
     SelectionStatisticsLoadCoordinator,
@@ -56,7 +57,7 @@ class XYInteractivePlotWidget(pg.PlotWidget):
 XY_MAXIMUM_POINTS = 100_000
 
 
-class XYPlotWidget(PlotBaseWidget):
+class XYPlotWidget(PointMarkers, PlotBaseWidget):
     """One or more X/Y graphs with independently assigned axis pairs."""
     help_topic = "xy"
 
@@ -105,9 +106,8 @@ class XYPlotWidget(PlotBaseWidget):
             size=16, brush=None, pen=pg.mkPen(sync_marker_color(), width=2, style=Qt.PenStyle.DashLine))
         self.sync_highlight.setZValue(19)
         self.plot_item.addItem(self.sync_highlight)
-        self._sync_time: float | None = None
+        self._init_point_markers()
         self._selection_items: list[pg.PlotDataItem] = []
-        self._marker_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
         # Marker times whose values boxes are shown; a reload shows them again.
         self._value_box_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
         self._graph_items = [(self.curve, self.points)]
@@ -115,11 +115,7 @@ class XYPlotWidget(PlotBaseWidget):
         self._x = np.empty(0)
         self._y = np.empty(0)
         self.time_range = time_range
-        self._marker_request_ids = {FIRST_MARKER: 0, SECOND_MARKER: 0}
-        self._marker_loads = {index: MarkerDataLoadCoordinator(self) for index in (FIRST_MARKER, SECOND_MARKER)}
-        for index, loads in self._marker_loads.items():
-            loads.loaded.connect(lambda request_id, time_value, samples, index=index:
-                                 self._show_loaded_marker_data(index, request_id, time_value, samples))
+        self._marker_loads = MarkerValueLoads(self, self._show_loaded_marker_data)
         self._selection_request_id = 0
         self._selection_loads = SelectionStatisticsLoadCoordinator(self)
         self._selection_loads.loaded.connect(self._show_loaded_selection_statistics)
@@ -210,40 +206,22 @@ class XYPlotWidget(PlotBaseWidget):
         if auto_range and self._auto_range_load and complete:
             self.plot_item.enableAutoRange()
         # Markers keep their times across reloads; redraw them on the new data.
-        for index in (FIRST_MARKER, SECOND_MARKER):
-            self._draw_marker(index)
+        self._redraw_markers()
         self._update_selection()
-        self.set_sync_marker(self._sync_time)
         if complete:
             # Values boxes follow the reloaded points (Sample limit, trim, legend change).
             for index, time_value in self._value_box_times.items():
                 if time_value is not None:
                     self.show_marker_data(time_value, index)
 
-    def set_vertical_marker(self, time_value: float, index: int = FIRST_MARKER) -> None:
-        self._marker_times[index] = float(time_value)
-        self._draw_marker(index)
-        self._update_selection()
-
-    def clear_vertical_marker(self, index: int = FIRST_MARKER) -> None:
-        self._marker_times[index] = None
-        self.highlights[index].setData([], [])
-        self.hide_marker_data(index)
-        self._update_selection()
-
-    def marker_values(self) -> tuple[float | None, float | None]:
-        return self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]
-
-    def set_sync_marker(self, time_value: float | None) -> None:
-        self._sync_time = time_value
+    def _redraw_markers(self) -> None:
+        """Each graph's points nearest the two markers and the sync marker."""
         self.sync_highlight.setPen(pg.mkPen(sync_marker_color(), width=2, style=Qt.PenStyle.DashLine))
-        points = [point for point in (self._point_at(result, time_value) for result in self.results) if point]
-        self.sync_highlight.setData([point[0] for point in points], [point[1] for point in points])
-
-    def _draw_marker(self, index: int) -> None:
-        points = [self._point_at(result, self._marker_times[index]) for result in self.results]
-        points = [point for point in points if point is not None]
-        self.highlights[index].setData([point[0] for point in points], [point[1] for point in points])
+        for item, time_value in ((self.highlights[FIRST_MARKER], self._marker_times[FIRST_MARKER]),
+                                 (self.highlights[SECOND_MARKER], self._marker_times[SECOND_MARKER]),
+                                 (self.sync_highlight, self._sync_time)):
+            points = [point for point in (self._point_at(result, time_value) for result in self.results) if point]
+            item.setData([point[0] for point in points], [point[1] for point in points])
 
     @staticmethod
     def _point_at(result, time_value: float | None) -> tuple[float, float] | None:  # type: ignore[no-untyped-def]
@@ -256,10 +234,6 @@ class XYPlotWidget(PlotBaseWidget):
         lower = max(0, upper - 1)
         index = lower if abs(time_value - times[lower]) <= abs(times[upper] - time_value) else upper
         return float(result[1][index]), float(result[2][index])
-
-    def selection_range(self) -> tuple[float, float] | None:
-        times = self.marker_values()
-        return None if None in times else tuple(sorted(times))
 
     def _update_selection(self) -> None:
         """Highlight each graph between the markers and load the selection statistics."""
@@ -312,20 +286,19 @@ class XYPlotWidget(PlotBaseWidget):
         if not self._contains_time(time_value):
             self.hide_marker_data(index, forget=False)
             return
-        self._marker_request_ids[index] = self._marker_loads[index].request(time_value, list(self.series))
+        self._marker_loads.request(index, time_value, list(self.series))
 
     def hide_marker_data(self, index: int | None = None, *, forget: bool = True) -> None:
         """Hide values boxes; ``forget=False`` shows them again after the next reload."""
+        self._marker_loads.invalidate(index)
         for marker in (FIRST_MARKER, SECOND_MARKER) if index is None else (index,):
-            self._marker_request_ids[marker] = self._marker_loads[marker].invalidate()
             self.value_boxes.clear(marker)
             if forget:
                 self._value_box_times[marker] = None
 
     def dispose(self) -> None:
         self.loader.shutdown()
-        for loads in self._marker_loads.values():
-            loads.shutdown()
+        self._marker_loads.shutdown()
         self._selection_loads.shutdown()
 
     def set_data_time_range(self, time_range: tuple[float, float] | None) -> None:
@@ -355,8 +328,7 @@ class XYPlotWidget(PlotBaseWidget):
             return
         mouse_event.accept()
         if mouse_event.double():
-            self.clear_vertical_marker(index)
-            (self.marker_cleared if index == FIRST_MARKER else self.second_marker_cleared).emit()
+            self._clear_marker_from_view(index)
             return
         if not len(self._time):
             return
@@ -364,16 +336,10 @@ class XYPlotWidget(PlotBaseWidget):
         distances = (self._x - point.x()) ** 2 + (self._y - point.y()) ** 2
         if not np.any(np.isfinite(distances)):
             return
-        time_value = float(self._time[int(np.nanargmin(distances))])
-        self.set_vertical_marker(time_value, index)
-        (self.marker_placed if index == FIRST_MARKER else self.second_marker_placed).emit(time_value)
+        self._place_marker_from_view(index, float(self._time[int(np.nanargmin(distances))]))
 
-    def _show_loaded_marker_data(
-        self, index: int, request_id: int, time_value: float, samples: list[MarkerSample]
-    ) -> None:
+    def _show_loaded_marker_data(self, index: int, time_value: float, samples: list[MarkerSample]) -> None:
         """One values box per graph, at its point nearest the marker."""
-        if request_id != self._marker_request_ids[index]:
-            return
         entries = dict(zip((self.series[sample.series_index] for sample in samples),
                            marker_entries_from_samples(samples, ["#000000"] * len(self.series))))
         items = []

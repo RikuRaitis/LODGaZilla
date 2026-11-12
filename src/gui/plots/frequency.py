@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QColorDialog, QDialog, QInputDialog, QLabel, QMenu
 
 from src.data.frequency import FFTSettings, FFT_WINDOW_SIZES, colour_values
 from src.gui.plots.base import PlotBaseWidget, apply_view_range_state, series_legend_name, view_range_state
+from src.gui.plots.card_markers import TimeCardMarkers
 from src.gui.plots.frequency_data import FrequencyData, load_frequency_data
 from src.gui.plots.frequency_settings import FrequencySettingsDialog
 from src.gui.plots.icons import plot_control_icon
@@ -51,7 +52,7 @@ class FrequencyCanvas(InteractivePlotWidget):
         event.accept()
 
 
-class FrequencyPlotWidget(PlotBaseWidget):
+class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
     help_topic = "frequency"
     accepts_series_drop = True
 
@@ -410,12 +411,6 @@ class FrequencyPlotWidget(PlotBaseWidget):
     def plot_view_box(self):
         return self.plot_item.getViewBox()
 
-    def time_axis_representation(self):
-        return self.plot_widget.time_axis.representation
-
-    def set_time_axis_representation(self, representation):
-        self.plot_widget.time_axis.set_representation(representation)
-
     def set_time_axis_display_metadata(self, metadata):
         self._display_metadata = metadata
         self.plot_widget.configure_time_axis(**_display_time_axis_metadata(metadata).__dict__)
@@ -428,25 +423,9 @@ class FrequencyPlotWidget(PlotBaseWidget):
         self.data_time_range = tuple(sorted(time_range)) if time_range is not None else None
         self._range_changed()
 
-    def set_vertical_marker(self, x_value, index=0):
-        self.plot_widget.set_vertical_marker(x_value, index)
-
-    def clear_vertical_marker(self, index=0):
-        self.plot_widget.clear_vertical_marker(index)
+    def clear_vertical_marker(self, index=FIRST_MARKER):
+        super().clear_vertical_marker(index)
         self.hide_marker_data(index)
-
-    def set_sync_marker(self, x_value):
-        self.plot_widget.set_sync_marker(x_value)
-
-    def apply_marker_style(self):
-        self.plot_widget.apply_marker_style()
-        self.value_boxes.apply_style()
-
-    def marker_values(self):
-        return tuple(self.plot_widget.marker_value(index) for index in (0, 1))
-
-    def set_marker_snap_enabled(self, enabled):
-        self.plot_widget.snap_marker_to_nearest_point = bool(enabled)
 
     def nearest_time(self, x_value):
         if self.data is None:

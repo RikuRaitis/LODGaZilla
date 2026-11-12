@@ -147,7 +147,7 @@ class GnssTrackTests(_TempCase):
     def test_g5_2d_map_receives_tracks_only_after_ready(self):
         page = mock.Mock()
         card = SimpleNamespace(
-            _map_ready=False, _map_failed=False, _map_generation=1, _marker_times={0: None, 1: None}, _value_box_times={0: None, 1: None}, value_boxes=mock.Mock(),
+            _map_ready=False, _map_failed=False, _map_generation=1, _marker_times={0: None, 1: None}, _sync_time=None, _value_box_times={0: None, 1: None}, value_boxes=mock.Mock(),
             _marker_revision=0, _marker_in_flight=False, _track_data=[], _loading=True,
             map_view=mock.Mock(), map_stack=mock.Mock(), map_loading=mock.Mock(), map_type=mock.Mock(),
             legend=mock.Mock(), satellite_radio=mock.Mock(),

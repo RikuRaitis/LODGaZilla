@@ -11,11 +11,12 @@ from PySide6.QtWidgets import QColorDialog, QLabel, QWidget
 from src.gui.plots.base import (
     PlotBaseWidget, apply_view_range_state, series_legend_name, state_entry, view_range_state,
 )
+from src.gui.plots.card_markers import TimeCardMarkers
 from src.gui.plots.legend import LegendEntry, PlotLegendWidget
 from src.gui.plots.series import SeriesPlotWidget, TimeAxisMetadata
 
 
-class LinePlotWidget(PlotBaseWidget):
+class LinePlotWidget(TimeCardMarkers, PlotBaseWidget):
     """An LOD-aware line plot hosted inside the reusable plot-card frame."""
     help_topic = "line"
 
@@ -133,21 +134,11 @@ class LinePlotWidget(PlotBaseWidget):
     def plot_view_box(self):  # type: ignore[no-untyped-def]
         return self.series_plot.plot_item.getViewBox()
 
-    def set_vertical_marker(self, x_value: float, index: int = 0) -> None:
-        self.series_plot.plot_widget.set_vertical_marker(x_value, index)
+    def marker_canvas(self):  # type: ignore[no-untyped-def]
+        return self.series_plot.plot_widget
 
-    def clear_vertical_marker(self, index: int = 0) -> None:
-        self.series_plot.plot_widget.clear_vertical_marker(index)
-
-    def set_sync_marker(self, x_value: float | None) -> None:
-        self.series_plot.plot_widget.set_sync_marker(x_value)
-
-    def apply_marker_style(self) -> None:
-        self.series_plot.plot_widget.apply_marker_style()
-        self.series_plot.value_boxes.apply_style()
-
-    def marker_values(self) -> tuple[float | None, float | None]:
-        return tuple(self.series_plot.plot_widget.marker_value(index) for index in (0, 1))
+    def marker_value_boxes(self):  # type: ignore[no-untyped-def]
+        return self.series_plot.value_boxes
 
     def show_marker_data(self, x_value: float, index: int = 0) -> None:
         self.series_plot.show_marker_values(x_value, index)
@@ -158,17 +149,8 @@ class LinePlotWidget(PlotBaseWidget):
     def dispose(self) -> None:
         self.series_plot.dispose()
 
-    def set_marker_snap_enabled(self, enabled: bool) -> None:
-        self.series_plot.set_marker_snap_enabled(enabled)
-
     def set_data_time_range(self, time_range: tuple[float, float] | None) -> None:
         self.series_plot.set_data_time_range(time_range)
-
-    def time_axis_representation(self) -> str:
-        return self.series_plot.plot_widget.time_axis.representation
-
-    def set_time_axis_representation(self, representation: str) -> None:
-        self.series_plot.plot_widget.time_axis.set_representation(representation)
 
     def time_axis_metadata(self) -> TimeAxisMetadata | None:
         return self.series_plot.time_axis_metadata

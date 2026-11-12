@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.gui.plots.base import PlotBaseWidget, series_from_mime
+from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.legend import PlotLegendWidget
 from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup
 from src.data.sampling import decimation_step
@@ -124,53 +125,23 @@ class GnssMapView(QWebEngineView):
 MAP_MAXIMUM_POINTS = 20_000
 
 
-class MapMarkersMixin:
+class MapMarkersMixin(PointMarkers):
     """Two markers, the selection and values boxes for a web map card.
 
-    The card provides ``_track_data`` (tracks with ``time``, ``lat`` and
-    ``lon`` lists, in the page's track order), ``map_view``, ``map_container``,
-    ``value_boxes``, ``_map_generation``, the marker signals, ``_marker_times``,
+    The card calls ``_init_point_markers()`` and provides ``_track_data`` (tracks with
+    ``time``, ``lat`` and ``lon`` lists, in the page's track order), ``map_view``,
+    ``map_container``, ``value_boxes``, ``_map_generation``, the marker signals,
     ``_value_box_times``, ``_marker_revision``, ``_flush_marker()`` and
-    ``_markers_ready()``. Its page provides ``setMarkers`` and
-    ``markerScreenPositions``.
+    ``_markers_ready()``. Its page provides ``setMarkers`` and ``markerScreenPositions``.
     """
 
-    def set_vertical_marker(self, timestamp: float, index: int = FIRST_MARKER) -> None:
-        self._marker_times[index] = float(timestamp)
-        self._marker_revision += 1
-        self._flush_marker()
-        self._update_selection()
-
-    def clear_vertical_marker(self, index: int = FIRST_MARKER) -> None:
-        self._marker_times[index] = None
-        self._marker_revision += 1
-        self._flush_marker()
-        self.hide_marker_data(index)
-        self._update_selection()
-
-    def marker_values(self) -> tuple[float | None, float | None]:
-        return self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]
-
-    def set_sync_marker(self, timestamp: float | None) -> None:
-        """Show a Video card's stored sync data marker on each track."""
-        self._sync_time = timestamp
+    def _redraw_markers(self) -> None:
         self._marker_revision += 1
         self._flush_marker()
 
     def apply_marker_style(self) -> None:
-        self._marker_revision += 1
-        self._flush_marker()
+        self._redraw_markers()
         self.value_boxes.apply_style()
-
-    def _select_from_map(self, index: int, timestamp: float) -> None:
-        self.set_vertical_marker(timestamp, index)
-        (self.marker_placed if index == FIRST_MARKER else self.second_marker_placed).emit(timestamp)
-
-    def _clear_marker_from_map(self, index: int) -> None:
-        if self._marker_times[index] is None:
-            return
-        self.clear_vertical_marker(index)
-        (self.marker_cleared if index == FIRST_MARKER else self.second_marker_cleared).emit()
 
     def hide_marker_data(self, index: int | None = None) -> None:
         for marker in (FIRST_MARKER, SECOND_MARKER) if index is None else (index,):
@@ -355,7 +326,7 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.legend.set_group_model(self.grouped_series)
         # Values boxes are siblings of the web view, like the legend, so they draw above it.
         self.value_boxes = ValueBoxLayer(self.map_container)
-        self._marker_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
+        self._init_point_markers()
         self._value_box_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
         for widget in (self.map_container, self.map_type, self.legend):
             widget.installEventFilter(self)
@@ -500,10 +471,11 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.bridge = GnssBridge(self)
         self.channel.registerObject("gnssBridge", self.bridge)
         self.map_view.page().setWebChannel(self.channel)
-        self.bridge.point_selected.connect(lambda timestamp: self._select_from_map(FIRST_MARKER, timestamp))
-        self.bridge.second_point_selected.connect(lambda timestamp: self._select_from_map(SECOND_MARKER, timestamp))
-        self.bridge.marker_clear_requested.connect(lambda: self._clear_marker_from_map(FIRST_MARKER))
-        self.bridge.second_marker_clear_requested.connect(lambda: self._clear_marker_from_map(SECOND_MARKER))
+        self.bridge.point_selected.connect(lambda timestamp: self._place_marker_from_view(FIRST_MARKER, timestamp))
+        self.bridge.second_point_selected.connect(
+            lambda timestamp: self._place_marker_from_view(SECOND_MARKER, timestamp))
+        self.bridge.marker_clear_requested.connect(lambda: self._clear_marker_from_view(FIRST_MARKER))
+        self.bridge.second_marker_clear_requested.connect(lambda: self._clear_marker_from_view(SECOND_MARKER))
         self.bridge.view_changed.connect(self._refresh_value_box_positions)
         self.bridge.view_reported.connect(self._view_reported)
         # Right click places the second marker instead of opening a browser menu.
@@ -556,7 +528,7 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         times = [self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]]
         selection = _css_rgba(selection_rgba(2.0))
         colors = [_css_rgba(marker_color(index).getRgb()) for index in (FIRST_MARKER, SECOND_MARKER)]
-        sync = json.dumps(getattr(self, "_sync_time", None))
+        sync = json.dumps(self._sync_time)
         command = (f"setMarkers({json.dumps(times)}, {json.dumps(colors)}, {marker_width()}, {json.dumps(selection)}, "
                    f"{sync}, {json.dumps(sync_marker_color())});")
         self.map_view.page().runJavaScript(
