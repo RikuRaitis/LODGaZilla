@@ -1,0 +1,456 @@
+"""Cartesian 3D card with independently assigned X/Y/Z sources per trace."""
+
+import numpy as np
+import pyqtgraph as pg
+import pyqtgraph.opengl as gl
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QFont, QVector3D
+from PySide6.QtWidgets import QApplication, QToolButton
+
+from src.data.xyz import XYZ_MAXIMUM_POINTS, AxisSource, XYZData
+from src.gui.plots.base import PlotBaseWidget
+from src.gui.plots.icons import plot_control_icon
+from src.gui.plots.theme import canvas_background
+from src.gui.plots.legend import PlotLegendWidget
+from src.gui.plots.marker_info import MarkerInfoEntry
+from src.gui.plots.markers import (
+    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
+)
+from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
+from src.jobs.xyz import XYZLoadCoordinator
+
+
+class XYZView(gl.GLViewWidget):
+    scroll_requested = Signal(int)
+    # A press and release without dragging, which would otherwise rotate.
+    clicked = Signal(object, object)
+    double_clicked = Signal(object)
+    camera_changed = Signal()
+
+    def mousePressEvent(self, event):
+        self._press_position = event.position()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        start = getattr(self, "_press_position", None)
+        self._press_position = None
+        if start is not None and (event.position() - start).manhattanLength() < QApplication.startDragDistance():
+            self.clicked.emit(event.button(), event.position())
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self._press_position = None
+        self.double_clicked.emit(event.button())
+
+    def paintGL(self, *args, **kwargs):
+        super().paintGL(*args, **kwargs)
+        self.camera_changed.emit()
+
+    def project(self, positions):
+        """Canvas pixels of scene positions for the current camera; NaN behind it."""
+        width, height = max(1, self.width()), max(1, self.height())
+        matrix = self.projectionMatrix((0, 0, width, height), (0, 0, width, height)) * self.viewMatrix()
+        transform = np.array(matrix.data(), dtype=float).reshape(4, 4).T
+        points = np.c_[np.asarray(positions, dtype=float), np.ones(len(positions))] @ transform.T
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ndc = points[:, :2] / points[:, 3:4]
+        ndc[points[:, 3] <= 0] = np.nan
+        return np.c_[(ndc[:, 0] + 1) / 2 * width, (1 - ndc[:, 1]) / 2 * height]
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.opts["distance"] = max(0.2, min(200, self.opts["distance"] * 0.999 ** event.angleDelta().y()))
+            self.update()
+        else:
+            self.scroll_requested.emit(event.angleDelta().y())
+        event.accept()
+
+
+class XYZPlotWidget(PlotBaseWidget):
+    """One or more 3D traces, each aligning three scalar sources by timestamp."""
+    help_topic = "xyz"
+
+    series_changed = Signal()
+    plot_status_changed = Signal(str)
+    marker_placed = Signal(float)
+    marker_cleared = Signal()
+    second_marker_placed = Signal(float)
+    second_marker_cleared = Signal()
+    view_class = XYZView
+    accepts_axis_drop = True
+    accepts_time_axis_drop = True
+    default_sample_limit = XYZ_MAXIMUM_POINTS
+    sample_limit_noun = "trace"
+    # Auto draws each trace as a line with its points.
+    supports_draw_style = True
+
+    def __init__(self, x_entry, y_entry=None, z_entry=None, parent=None):
+        super().__init__(*x_entry, parent)
+        self.setMinimumHeight(220)
+        self.configure_legend_groups("XYZ", title="Trace", allow_time=True)
+        self.traces = self.grouped_series.groups
+        self.results = []
+        self.time_range = None
+        self._disposed = False
+        self._items = []
+        self._loading = False
+        self._extent = None
+        self._fixed_extent = None
+        # Scene positions of each trace as drawn, for picking and marker points.
+        self._scene_positions: list[np.ndarray | None] = []
+        self._marker_items = []
+        self._marker_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
+        self._sync_time = None
+        self._value_box_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
+        self.loader = XYZLoadCoordinator(self)
+        self.loader.loaded.connect(self._loaded)
+
+        self.reset_button = QToolButton(self)
+        self.reset_button.setToolTip("Reset camera")
+        self.reset_button.setAccessibleName("Reset camera")
+        self.reset_button.setAutoRaise(True)
+        self.reset_button.setFixedSize(self.close_button.size())
+        self.reset_button.setIconSize(QSize(20, 20))
+        self.reset_button.setIcon(plot_control_icon(self, "reset-camera"))
+        self.reset_button.clicked.connect(self.reset_camera)
+        self.header_controls.append(self.reset_button)
+        self.view = self.view_class(self)
+        self.view.setMinimumHeight(100)
+        self.view.scroll_requested.connect(self.wheel_scrolled)
+        self.view.clicked.connect(self._on_view_clicked)
+        self.view.double_clicked.connect(self._on_view_double_clicked)
+        self.value_boxes = ValueBoxLayer(self.view)
+        self.view.camera_changed.connect(self.value_boxes.reposition)
+        self.content_layout.addWidget(self.view, 1)
+        self.legend = PlotLegendWidget(self.view)
+        self.legend.set_group_model(self.grouped_series)
+        self.reset_camera()
+        self.add_trace((x_entry, y_entry, z_entry))
+
+    def add_trace(self, entries):
+        if len(entries) != 3:
+            raise ValueError("Select exactly three data series for a 3D trace")
+        sources = tuple(AxisSource(*entry) if entry is not None else None for entry in entries)
+        self.grouped_series.insert(sources)
+
+    def remove_trace(self, index):
+        self.grouped_series.remove(index)
+
+    def on_series_changed(self):
+        self._fixed_extent = None
+        self._request()
+
+    def set_axis_component(self, key, component):
+        if component not in {"value", "time"} or not 0 <= key < len(self.traces) * 3:
+            return
+        axis = self.grouped_series.axis(key)
+        if axis is not None:
+            self.replace_legend_series(key, (axis.path, axis.name), component)
+
+    def on_sample_limit_changed(self):
+        # Keep the axis scaling so the camera shows the same region at the new limit.
+        if self._fixed_extent is None and any(isinstance(result, XYZData) for result in self.results):
+            self._fixed_extent = self._extent
+        self._request()
+
+    def _request(self):
+        self.series = self.grouped_series.entries()
+        self._loading = True
+        self.results = []
+        self._render()
+        self.current_status = "Loading 3D data…"
+        self.loader.request([trace.axes for trace in self.traces], self.time_range, self.sample_limit)
+        self.series_changed.emit()
+
+    def _loaded(self, results):
+        if self._disposed:
+            return
+        self._loading = False
+        self.results = results
+        self.update_sample_coverage(results)
+        messages = []
+        for index, result in enumerate(results):
+            if isinstance(result, XYZData):
+                count = int(np.count_nonzero(np.all(np.isfinite(result.positions), axis=1)))
+                messages.append(f"Trace {index + 1}: {count:,} points" + (" (sampled)" if result.sampled else ""))
+            else:
+                messages.append(f"Trace {index + 1}: " + ("assign the empty axes" if result is None else str(result)))
+        self.current_status = "; ".join(messages)
+        self.plot_status_changed.emit(self.current_status)
+        self._render()
+
+    def _render(self):
+        for item in self._items:
+            self.view.removeItem(item)
+        self._items.clear()
+        self.view.setBackgroundColor(canvas_background(self))
+        finite = [result.positions[np.all(np.isfinite(result.positions), axis=1)]
+                  for result in self.results if isinstance(result, XYZData)]
+        if self._fixed_extent is not None:
+            low, high = self._fixed_extent
+            if not self._loading:
+                self._fixed_extent = None
+        else:
+            if finite:
+                low = np.min([points.min(axis=0) for points in finite], axis=0)
+                high = np.max([points.max(axis=0) for points in finite], axis=0)
+            else:
+                low, high = np.zeros(3), np.ones(3)
+            # Constant axes still need a meaningful numeric extent around the data.
+            padding = np.where(high > low, 0, np.maximum(np.abs(low) * 0.01, 1))
+            low, high = low - padding, high + padding
+        self._extent = (low, high)
+        center = low / 2 + high / 2
+        scale = high / 2 - low / 2
+        self._scene_positions = []
+        for index, result in enumerate(self.results):
+            if not isinstance(result, XYZData):
+                self._scene_positions.append(None)
+                continue
+            positions = (result.positions - center) / scale
+            self._scene_positions.append(positions)
+            valid = np.all(np.isfinite(positions), axis=1)
+            pairs = np.stack((positions[:-1], positions[1:]), axis=1)
+            pairs = pairs[valid[:-1] & valid[1:]].reshape(-1, 3)
+            color = pg.glColor(self.traces[index].color)
+            if self.draw_style != "points":
+                self._add_item(gl.GLLinePlotItem(pos=pairs.astype(np.float32), color=color, width=2, mode="lines",
+                                                 antialias=True, glOptions="opaque"))
+            if self.draw_style != "lines":
+                # Points alone are drawn larger, so the trace still reads.
+                self._add_item(gl.GLScatterPlotItem(pos=positions[valid].astype(np.float32), color=color,
+                                                    size=4 if self.draw_style == "points" else 3, pxMode=True,
+                                                    glOptions="opaque"))
+        text_color = self.palette().text().color()
+        font = QFont(self.font())
+        font.setPointSize(9)
+        for axis_index, axis_name in enumerate("XYZ"):
+            start, end = np.full(3, -1.0), np.full(3, -1.0)
+            end[axis_index] = 1.0
+            self._add_item(gl.GLLinePlotItem(pos=np.array([start, end]), color=pg.glColor(text_color), width=1, glOptions="opaque"))
+            for fraction in (0, 0.5, 1):
+                pos = start.copy()
+                pos[axis_index] = -1 + 2 * fraction
+                pos[(axis_index + 1) % 3] -= 0.16
+                value = low[axis_index] + fraction * (high[axis_index] - low[axis_index])
+                span = high[axis_index] - low[axis_index]
+                if abs(value) < 1e-6 * span:
+                    value = 0.0
+                # Preserve small differences around a large offset (Unix time).
+                digits = min(16, max(6, int(np.ceil(np.log10(max(abs(value), 1)) - np.log10(span))) + 3))
+                label = f"{axis_name} {value:.{digits}g}"
+                self._add_item(gl.GLTextItem(pos=pos, text=label, color=text_color, font=font))
+        self._update_legend()
+        self._draw_markers()
+        for index in (FIRST_MARKER, SECOND_MARKER):
+            if self._value_box_times[index] is not None:
+                self.show_marker_data(self._value_box_times[index], index)
+
+    def apply_draw_style(self, style: str) -> None:
+        self._render()
+
+    def _marker_point(self, trace_index, time_value):
+        """Index of a trace's drawn point nearest a marker time, or None outside the trace."""
+        result = self.results[trace_index] if trace_index < len(self.results) else None
+        if time_value is None or not isinstance(result, XYZData) or not len(result.time):
+            return None
+        if not result.time[0] <= time_value <= result.time[-1]:
+            return None
+        point = int(np.argmin(np.abs(result.time - time_value)))
+        return point if np.all(np.isfinite(result.positions[point])) else None
+
+    def _draw_markers(self):
+        """Marker points in their colors, and each trace's stretch between the markers."""
+        for item in self._marker_items:
+            self.view.removeItem(item)
+        self._marker_items.clear()
+        selection = self.selection_range()
+        for trace_index, positions in enumerate(self._scene_positions):
+            if positions is None:
+                continue
+            if selection is not None:
+                times = self.results[trace_index].time
+                inside = (times >= selection[0]) & (times <= selection[1]) & np.all(np.isfinite(positions), axis=1)
+                if np.count_nonzero(inside) > 1:
+                    color = tuple(value / 255 for value in selection_rgba(2.0))
+                    self._add_marker_item(gl.GLLinePlotItem(pos=positions[inside].astype(np.float32), color=color,
+                                                            width=6, mode="line_strip", antialias=True))
+            point = self._marker_point(trace_index, self._sync_time)
+            if point is not None:
+                self._add_marker_item(gl.GLScatterPlotItem(
+                    pos=positions[point:point + 1].astype(np.float32), color=pg.glColor(sync_marker_color()),
+                    size=16, pxMode=True, glOptions="translucent"))
+            for index in (FIRST_MARKER, SECOND_MARKER):
+                point = self._marker_point(trace_index, self._marker_times[index])
+                if point is not None:
+                    self._add_marker_item(gl.GLScatterPlotItem(
+                        pos=positions[point:point + 1].astype(np.float32), color=pg.glColor(marker_color(index)),
+                        size=10 + 2 * marker_width(), pxMode=True, glOptions="translucent"))
+
+    def _add_marker_item(self, item):
+        self.view.addItem(item)
+        self._marker_items.append(item)
+
+    def _on_view_clicked(self, button, position):
+        index = {Qt.MouseButton.LeftButton: FIRST_MARKER, Qt.MouseButton.RightButton: SECOND_MARKER}.get(button)
+        if index is None:
+            return
+        best = None
+        for trace_index, positions in enumerate(self._scene_positions):
+            if positions is None or not len(positions):
+                continue
+            pixels = self.view.project(positions)
+            distances = (pixels[:, 0] - position.x()) ** 2 + (pixels[:, 1] - position.y()) ** 2
+            if not np.any(np.isfinite(distances)):
+                continue
+            point = int(np.nanargmin(distances))
+            if best is None or distances[point] < best[0]:
+                best = (distances[point], float(self.results[trace_index].time[point]))
+        if best is None:
+            return
+        self.set_vertical_marker(best[1], index)
+        (self.marker_placed if index == FIRST_MARKER else self.second_marker_placed).emit(best[1])
+
+    def _on_view_double_clicked(self, button):
+        index = {Qt.MouseButton.LeftButton: FIRST_MARKER, Qt.MouseButton.RightButton: SECOND_MARKER}.get(button)
+        if index is not None and self._marker_times[index] is not None:
+            self.clear_vertical_marker(index)
+            (self.marker_cleared if index == FIRST_MARKER else self.second_marker_cleared).emit()
+
+    def set_vertical_marker(self, time_value, index=FIRST_MARKER):
+        self._marker_times[index] = float(time_value)
+        self._draw_markers()
+        self._update_selection()
+
+    def clear_vertical_marker(self, index=FIRST_MARKER):
+        self._marker_times[index] = None
+        self._draw_markers()
+        self.hide_marker_data(index)
+        self._update_selection()
+
+    def marker_values(self):
+        return self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]
+
+    def set_sync_marker(self, time_value):
+        self._sync_time = time_value
+        self._draw_markers()
+
+    def selection_range(self):
+        times = self.marker_values()
+        return None if None in times else tuple(sorted(times))
+
+    def apply_marker_style(self):
+        self._draw_markers()
+        self.value_boxes.apply_style()
+
+    def show_marker_data(self, time_value, index=FIRST_MARKER):
+        """One values box per trace, beside its drawn point nearest the marker."""
+        self._value_box_times[index] = float(time_value)
+        items = []
+        for trace_index, positions in enumerate(self._scene_positions):
+            point = self._marker_point(trace_index, time_value)
+            if positions is None or point is None:
+                continue
+            result = self.results[trace_index]
+            values = result.positions[point]
+            entry = MarkerInfoEntry(
+                f"Trace {trace_index + 1}", self.traces[trace_index].color,
+                ", ".join(f"{value:.6g}" for value in values),
+                tuple(f"{label or axis}: {value:.9g}" for axis, label, value in zip("XYZ", result.labels, values))
+                + (f"Time: {float(result.time[point]):.6f} s", "Nearest drawn point"),
+            )
+            items.append(ValueBoxItem(
+                _trace_key(self.traces[trace_index]), entry, None,
+                anchor=lambda positions=positions, point=point: _pixel(self.view, positions[point]),
+            ))
+        if items:
+            self.value_boxes.set_items(index, time_value, items)
+        else:
+            self.value_boxes.clear(index)
+
+    def hide_marker_data(self, index=None):
+        for marker in (FIRST_MARKER, SECOND_MARKER) if index is None else (index,):
+            self._value_box_times[marker] = None
+            self.value_boxes.clear(marker)
+
+    def _update_selection(self):
+        """Selection Δt and each trace's drawn points and ranges for the expanded boxes."""
+        selection = self.selection_range()
+        if selection is None:
+            self.value_boxes.set_selection_duration(None)
+            return
+        self.value_boxes.set_selection_duration(selection[1] - selection[0])
+        statistics = {}
+        for trace, result in zip(self.traces, self.results):
+            if not isinstance(result, XYZData):
+                continue
+            inside = (result.time >= selection[0]) & (result.time <= selection[1])
+            positions = result.positions[inside]
+            lines = [f"Points: {len(positions):,} (drawn)"]
+            if len(positions):
+                for axis, label, column in zip("XYZ", result.labels, positions.T):
+                    lines.append(f"{label or axis}: min {np.nanmin(column):.6g}, max {np.nanmax(column):.6g}, "
+                                 f"average {np.nanmean(column):.6g}")
+            statistics[_trace_key(trace)] = tuple(lines)
+        self.value_boxes.set_statistics(statistics)
+
+    def _add_item(self, item):
+        self.view.addItem(item)
+        self._items.append(item)
+
+    def _update_legend(self):
+        labels = {}
+        for index, trace in enumerate(self.traces):
+            if index < len(self.results) and isinstance(self.results[index], XYZData):
+                labels.update({index * 3 + axis: label for axis, label in enumerate(self.results[index].labels)})
+        self.legend.refresh_groups(labels)
+
+    def set_data_time_range(self, time_range):
+        self.time_range = tuple(sorted(time_range)) if time_range is not None else None
+        self._fixed_extent = None
+        self._request()
+
+    def workspace_state(self):
+        opts = self.view.opts
+        center = opts["center"]
+        return {**super().workspace_state(), "camera": {
+            "center": [center.x(), center.y(), center.z()], "distance": opts["distance"],
+            "elevation": opts["elevation"], "azimuth": opts["azimuth"], "fov": opts["fov"]}}
+
+    def restore_workspace_state(self, state):
+        super().restore_workspace_state(state)
+        camera = state.get("camera")
+        try:
+            self.view.opts["fov"] = float(camera["fov"])
+            self.view.setCameraPosition(pos=QVector3D(*(float(value) for value in camera["center"])),
+                                        distance=float(camera["distance"]), elevation=float(camera["elevation"]),
+                                        azimuth=float(camera["azimuth"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    def reset_camera(self):
+        self.view.setCameraPosition(pos=QVector3D(0, 0, 0), distance=6, elevation=25, azimuth=45)
+
+    def apply_theme(self):
+        self.reset_button.setIcon(plot_control_icon(self, "reset-camera"))
+        self.value_boxes.apply_style()
+        self._render()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "legend"):
+            self.legend.reposition()
+
+    def dispose(self):
+        self._disposed = True
+        self.loader.shutdown()
+
+
+def _trace_key(trace):
+    """Identify a 3D trace by its axis sources, for its values boxes."""
+    return tuple((axis.path, axis.name, axis.component) if axis is not None else None for axis in trace.axes)
+
+
+def _pixel(view, position):
+    pixel = view.project(np.asarray([position]))[0]
+    return None if not np.all(np.isfinite(pixel)) else (float(pixel[0]), float(pixel[1]))

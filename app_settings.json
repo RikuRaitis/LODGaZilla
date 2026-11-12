@@ -1,0 +1,125 @@
+{
+  "navigator_controls": {
+    "align_columns_of_different_type": true,
+    "hide_irrelevant_series": true,
+    "recent_folders": []
+  },
+  "appearance": {
+    "theme": "dark"
+  },
+  "plot": {
+    "multi_selected_line_width": 5,
+    "multi_series_lane_height_percent": 20,
+    "multi_filmstrip_height_pixels": 30,
+    "minimum_diagnostic_width_pixels": 1,
+    "show_sample_loss_areas": false,
+    "show_clipping_areas": false,
+    "first_marker_color": "#ff3b30",
+    "second_marker_color": "#00c853",
+    "marker_width": 3,
+    "marker_opacity_percent": 100,
+    "selection_color": "#2196f3",
+    "selection_opacity_percent": 22,
+    "sync_marker_color": "#8e49e6",
+    "values_box_opacity_percent": 70,
+    "series_colors": [
+      "#ff9800",
+      "#9c27b0",
+      "#d81b60",
+      "#00897b",
+      "#9e9d24",
+      "#757575"
+    ]
+  },
+  "lodgazilla": {
+    "navigator_width_ratio": 0.24,
+    "default_plot_heights": {
+      "line": 200,
+      "multi": 200,
+      "event": 100,
+      "interval": 200,
+      "xy": 200,
+      "xyz": 380,
+      "frequency": 300,
+      "gnss": 500,
+      "gnss_3d": 500,
+      "image": 200,
+      "video": 500
+    },
+    "link_plot_x_axes": true,
+    "link_plot_time_format": true,
+    "link_markers": false,
+    "snap_vertical_marker_to_nearest_point": false,
+    "time_axis_display": "none",
+    "marker_info_display": "active",
+    "show_legends": false,
+    "show_card_controls": true,
+    "show_plot_navigator_time_row": true,
+    "plot_navigator_expanded": false,
+    "ai_panel_expanded": true,
+    "internal_log_expanded": false,
+    "internal_log_expanded_height": 261,
+    "internal_log_maximum_lines": 5000,
+    "plot_navigator_icon_size": 25,
+    "card_drop_selector_delay_ms": 1000,
+    "plot_navigator_colors": {
+      "line": "#2196f3",
+      "multi": "#00acc1",
+      "event": "#ff9800",
+      "xy": "#9c27b0",
+      "xyz": "#00897b",
+      "gnss": "#20c56b",
+      "frequency": "#7c4dff",
+      "interval": "#8d6e63",
+      "video": "#e53935",
+      "other": "#9e9e9e"
+    },
+    "max_background_processes": 8,
+    "recent_workspaces": [],
+    "offer_demo_data": true
+  },
+  "plugins": {
+    "enabled": {},
+    "sources": [],
+    "check_at_startup": true
+  },
+  "navigator_diagnostics": {
+    "order": [
+      "sample_loss",
+      "clipping"
+    ],
+    "sample_loss": {
+      "enabled": false,
+      "color": "#ff0000",
+      "bold": true,
+      "italic": false
+    },
+    "clipping": {
+      "enabled": false,
+      "color": "#8a8a00",
+      "bold": true,
+      "italic": false
+    }
+  },
+  "hdf5": {
+    "compression": "none",
+    "compression_level": 0,
+    "chunk_rows": 65536,
+    "lod_target_buckets": 1983,
+    "lod_bucket_growth": 2
+  },
+  "tree_columns": {
+    "shared_widths": {},
+    "profiles": {}
+  },
+  "ai": {
+    "claude_path": "",
+    "codex_path": "",
+    "magic_drop_consent": false,
+    "codex_magic_drop_consent": false,
+    "claude_web_access": true,
+    "codex_web_access": true,
+    "max_budget_usd": 2.0,
+    "time_limit_minutes": 15
+  }
+}

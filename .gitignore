@@ -1,0 +1,21 @@
+# Local data and logs, at the repository root only (src/data/ is source code).
+/data/
+# Synthetic demo data, made by tools/create_demo_dataset.py or at LODGaZilla's first start.
+/demodata/
+*.h5
+*.hdf5
+/logs/
+__pycache__/
+*.py[cod]
+.venv/
+.lodgazilla_dependencies
+.lodgazilla_dependencies.json
+app_settings.json.corrupt-*
+app_settings_debug.json
+app_settings_debug.json.corrupt-*
+
+# Optional plugins are independent repositories installed locally.
+/plugin/
+
+# Personal to-do list, never committed.
+Todo.txt
