@@ -162,7 +162,11 @@ from src.app.graphics import configure_graphics, shutdown_web_engine
 from src.jobs.process_tree import start_process_tree
 from src.jobs.magic_drop import MagicDropJob, SignInCheck
 from src.jobs.plugin_chat import PluginChatJob
-from src.ai.plugin_builder import check_plugin_id, plugin_id_from
+from src.jobs.plugin_examples import PluginExamplesJob
+from src.ai.plugin_builder import (
+    check_plugin_id, copy_examples, example_sources, examples_folder, plugin_has_importer, plugin_id_from,
+)
+from src.plugins.catalog import PLUGIN_ROOT
 from src.ai.providers import PROVIDERS, AgentProvider, provider_named
 from src.jobs.cache_files import is_cache_output
 
@@ -2142,6 +2146,8 @@ class LODGaZillaWindow(QMainWindow):
         self.magic_drop_job: MagicDropJob | None = None
         # Create plugin: the plugin being built (plugin/<id>), and each provider's session in it.
         self.plugin_chat_job: PluginChatJob | None = None
+        # Imports the example files with the plugin being created, after each answer.
+        self.plugin_examples_job: PluginExamplesJob | None = None
         self.plugin_chat_id: str | None = None
         self._plugin_chat_sessions: dict[str, str] = {}
         # Each queued drop keeps the data folder it was dropped into.
@@ -2715,6 +2721,8 @@ class LODGaZillaWindow(QMainWindow):
                 return
             self.plugin_chat_id = plugin_id
             self._plugin_chat_sessions = {}
+        if files:
+            self._copy_plugin_examples([Path(path) for path in files])
         settings = load_ai_settings(self.settings_path)
         job = PluginChatJob(executable, self.plugin_chat_id, text, [Path(path) for path in files],
                             session_id=self._plugin_chat_sessions.get(provider.name, ""), provider=provider,
@@ -2752,9 +2760,54 @@ class LODGaZillaWindow(QMainWindow):
             self.ai_panel.append_note(note)
         if succeeded:
             self.ai_panel.set_signed_in(provider.name, True)
+            self._import_plugin_examples()
         else:
             self.internal_logger.warning(f"Create plugin: {note}")
         self.ai_panel.set_busy(self.magic_drop_job is not None)
+
+    def _plugin_examples_folder(self) -> Path | None:
+        data_folder = self.navigator.data_folder()
+        if self.plugin_chat_id is None or data_folder is None or not Path(data_folder).is_dir():
+            return None
+        return examples_folder(Path(data_folder), self.plugin_chat_id)
+
+    def _copy_plugin_examples(self, files: list[Path]) -> None:
+        """Files attached while creating a plugin also go to a folder of the data folder,
+        where each answer's plugin turns them into H5 files."""
+        folder = self._plugin_examples_folder()
+        if folder is None:
+            self.ai_panel.append_note("Choose a data folder to see the example files as H5 files there.")
+            return
+        try:
+            copy_examples(folder, self.plugin_chat_id, files)
+        except (OSError, ValueError) as error:
+            self.ai_panel.append_note(f"Could not copy the files to {folder}: {error}")
+            return
+        self.ai_panel.append_note(f"Copied to the folder {folder.name} in the data folder.")
+        self.navigator.refresh_tree(rescan=True)
+
+    def _import_plugin_examples(self) -> None:
+        """After an answer: the plugin's importer, as it is now, on the example files."""
+        folder = self._plugin_examples_folder()
+        plugin_folder = PLUGIN_ROOT / self.plugin_chat_id if self.plugin_chat_id else None
+        if (folder is None or plugin_folder is None or self.plugin_examples_job is not None
+                or not plugin_has_importer(plugin_folder) or not example_sources(folder)):
+            return
+        job = PluginExamplesJob(plugin_folder, folder, parent=self)
+        job.finished.connect(lambda report: self.on_plugin_examples_imported(report, folder))
+        self.plugin_examples_job = job
+        self.ai_panel.append_note(f"Making H5 files of the examples in {folder.name} with plugin/{plugin_folder.name}…")
+        job.start()
+
+    def on_plugin_examples_imported(self, report: str, folder: Path) -> None:
+        job, self.plugin_examples_job = self.plugin_examples_job, None
+        if job is not None:
+            job.deleteLater()
+        self.ai_panel.append_note(report)
+        self.internal_logger.info(f"Create plugin examples in {folder.name}: {report}")
+        current = self.navigator.data_folder()
+        if current is not None and Path(current) == folder.parent:
+            self.navigator.refresh_tree(rescan=True)
 
     def on_metadata_write_failed(self, folder: Path, error: str) -> None:
         self.internal_logger.error(f"Could not save folder metadata for {folder.name}: {error}")
@@ -3783,6 +3836,8 @@ class LODGaZillaWindow(QMainWindow):
             if self.plugin_chat_job is not None:
                 self.plugin_chat_job.cancel()
                 self.plugin_chat_job.wait(10.0)
+            if self.plugin_examples_job is not None:
+                self.plugin_examples_job.detach()
             if self.demo_data_job is not None:
                 # An unfinished set has no demo.umw, so the next start offers it again.
                 self.demo_data_job.cancel()

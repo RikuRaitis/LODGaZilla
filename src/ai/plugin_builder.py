@@ -7,6 +7,8 @@ folder; later runs continue the same session, so the agent remembers the convers
 """
 from __future__ import annotations
 
+import filecmp
+import json
 import re
 import shutil
 import subprocess
@@ -14,12 +16,16 @@ from pathlib import Path
 
 from src.ai.agent_common import NO_WINDOW
 from src.ai.magic_drop import UNITS_SECTION
+from src.data.folder_info import is_info_file, read_existing_info_file, read_info_file, write_info_file
+from src.jobs.cache_files import is_cache_output
 from src.plugins.catalog import PLUGIN_ROOT
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 # The user's example files and trial output, inside the plugin folder but never committed.
 WORK_FOLDER = ".lodgazilla_ai"
 PLUGIN_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+# Read-only folder info entry marking a data folder as a plugin's examples folder.
+EXAMPLES_INFO_KEY = "create plugin"
 
 
 def plugin_id_from(text: str) -> str:
@@ -68,6 +74,9 @@ The user talks to you through LODGaZilla's AI panel; keep replies short and plai
   yourself; use Git only to look (status, diff, log).
 - The plugin test command copies LODGaZilla to the temporary folder. Never copy
   LODGaZilla or other large files into this folder; if a test cannot run, say why.
+- After each of your answers, LODGaZilla copies the example files into the user's data
+  folder (`{plugin_id}` there), imports them with this plugin's importer, if it has one,
+  and shows the user the series found or the error. Keep the importer runnable.
 - When the plugin works, tell the user to restart LODGaZilla and enable it in
   Settings > Plugins.
 
@@ -120,18 +129,73 @@ def _exclude(folder: Path, pattern: str) -> None:
 
 def copy_inputs(folder: Path, files: list[Path]) -> list[Path]:
     """Copy attached files into the plugin's work folder; a name already there gets a number."""
-    inputs = folder / WORK_FOLDER / "inputs"
-    inputs.mkdir(parents=True, exist_ok=True)
+    return _copy_numbered(files, folder / WORK_FOLDER / "inputs")
+
+
+def _copy_numbered(files: list[Path], target_folder: Path, *, keep_identical: bool = False) -> list[Path]:
+    """Copy files into a folder; a name already there gets a number. With ``keep_identical``,
+    a file identical to one already there is not copied again."""
+    target_folder.mkdir(parents=True, exist_ok=True)
     copies = []
     for path in files:
-        target = inputs / path.name
+        target = target_folder / path.name
         number = 2
-        while target.exists():
-            target = inputs / f"{path.stem}_{number}{path.suffix}"
+        while target.exists() and not (keep_identical and filecmp.cmp(path, target, shallow=False)):
+            target = target_folder / f"{path.stem}_{number}{path.suffix}"
             number += 1
-        shutil.copy2(path, target)
+        if not target.exists():
+            shutil.copy2(path, target)
         copies.append(target)
     return copies
+
+
+def examples_folder(data_folder: Path, plugin_id: str) -> Path:
+    """The plugin's example folder in the data folder: ``<plugin_id>``, or a numbered name
+    when a folder of that name holds other data. It may not exist yet."""
+    candidate, number = data_folder / plugin_id, 2
+    while candidate.exists() and _examples_owner(candidate) != plugin_id:
+        candidate = data_folder / f"{plugin_id}_{number}"
+        number += 1
+    return candidate
+
+
+def _examples_owner(folder: Path) -> str | None:
+    try:
+        info = read_existing_info_file(folder)
+    except (OSError, ValueError):
+        return None
+    return info.readonly.get(EXAMPLES_INFO_KEY) if info is not None else None
+
+
+def copy_examples(folder: Path, plugin_id: str, files: list[Path]) -> list[Path]:
+    """Copy the user's files into the examples folder; the originals stay where they are."""
+    # Attaching the same example again does not add a second copy.
+    copies = _copy_numbered(files, folder, keep_identical=True)
+    info = read_info_file(folder)
+    if info.readonly.get(EXAMPLES_INFO_KEY) != plugin_id:
+        info.readonly[EXAMPLES_INFO_KEY] = plugin_id
+        write_info_file(folder, info)
+    return copies
+
+
+def example_sources(folder: Path) -> list[Path]:
+    """The example files to import: not H5 files, folder info or LODGaZilla's working files."""
+    if not folder.is_dir():
+        return []
+    return sorted(path for path in folder.iterdir()
+                  if path.is_file() and not path.name.startswith(".")
+                  and not is_cache_output(path) and not is_info_file(path))
+
+
+def plugin_has_importer(folder: Path) -> bool:
+    """Whether the plugin declares an importer and has its importer.json."""
+    try:
+        manifest = json.loads((folder / "plugin.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    capabilities = manifest.get("capabilities") if isinstance(manifest, dict) else None
+    return (isinstance(capabilities, list) and "importer" in capabilities
+            and (folder / "importer.json").is_file())
 
 
 def plugin_prompt(text: str, copies: list[Path], instructions_file: str, *, first: bool) -> str:

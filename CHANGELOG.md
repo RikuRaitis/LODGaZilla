@@ -6,6 +6,12 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Create plugin copies the attached files to a folder named after the plugin in the data
+  folder and, once the plugin has an importer, imports them with it after each answer,
+  showing the series found or the error in the AI panel.
+
 ### Changed
 
 - Workspaces no longer save the Plot navigator buttons (linking, legends, card controls,

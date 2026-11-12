@@ -511,7 +511,11 @@ is one), and press Enter.
    them. LODGaZilla commits the plugin's changes after each answer; nothing is pushed.
 3. Keep talking: each answer continues the same conversation. Drop more files on the
    box or the conversation whenever they help.
-4. When the plugin works, restart LODGaZilla and enable it in **Settings > Plugins**.
+4. Your files are also copied to a folder named after the plugin in the data folder.
+   Once the plugin has an importer, LODGaZilla imports them with it after each answer,
+   so you see the H5 files in the Navigator and, in the AI panel, the series found or
+   why a file could not be read.
+5. When the plugin works, restart LODGaZilla and enable it in **Settings > Plugins**.
 
 Your files go to the plugin's `.lodgazilla_ai` folder, which is never committed, as
 are the AI's instructions. The AI may write only in the plugin's folder and run

@@ -21,8 +21,10 @@ from src.jobs.import_data import load_import_configuration, select_importer, wri
 
 
 def trial_import(draft: Path, source: Path, output: Path) -> dict:
+    # A plugin.json names the importer's module (Magic drop drafts and Create plugin folders).
+    module = None if (draft / "plugin.json").is_file() else draft / "importer.py"
     configuration = load_import_configuration(draft / "importer.json", hdf5_config=load_hdf5_settings(),
-                                              parser_module_path=draft / "importer.py")
+                                              parser_module_path=module)
     selected, importer = select_importer(source.resolve(), [configuration])
     result = importer.parse(source.resolve())
     write_hdf5_cache(output_path=output.resolve(), input_path=source.resolve(), selected_config=selected,

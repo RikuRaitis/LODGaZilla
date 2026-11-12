@@ -201,5 +201,70 @@ class PluginChatJobTests(unittest.TestCase):
         self.assertIn("/CLAUDE.md", exclude)
 
 
+
+class PluginExamplesTests(unittest.TestCase):
+    """Example files in the data folder, imported with the plugin being created."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.data = self.root / "data"
+        self.data.mkdir()
+        self.source = self.root / "weather.csv"
+        from tests.test_magic_drop import CSV_TEXT
+        self.source.write_text(CSV_TEXT, encoding="utf-8")
+        self.spec = self.root / "spec.pdf"
+        self.spec.write_bytes(b"%PDF-1.4 specification")
+
+    def plugin(self, plugin_id="weather_importer", module="weather_parser.py"):
+        from tests.test_magic_drop import CSV_PARSER
+        folder = self.root / "plugin" / plugin_id
+        folder.mkdir(parents=True)
+        # The manifest names the importer's module, which need not be importer.py.
+        (folder / "plugin.json").write_text(json.dumps({
+            "id": plugin_id, "title": "Weather", "capabilities": ["importer"], "entry_point": module,
+            "api_version": 1, "version": "0.1.0"}), encoding="utf-8")
+        (folder / "importer.json").write_text(json.dumps({"sections": []}), encoding="utf-8")
+        (folder / module).write_text(CSV_PARSER, encoding="utf-8")
+        return folder
+
+    def test_examples_folder_is_reused_and_never_takes_other_data(self):
+        (self.data / "weather_importer").mkdir()  # Someone else's folder of that name.
+        folder = plugin_builder.examples_folder(self.data, "weather_importer")
+        self.assertEqual(folder.name, "weather_importer_2")
+        plugin_builder.copy_examples(folder, "weather_importer", [self.source, self.spec])
+        # Attaching the same file again adds no copy; the folder is found again later.
+        plugin_builder.copy_examples(folder, "weather_importer", [self.source])
+        self.assertEqual(plugin_builder.examples_folder(self.data, "weather_importer"), folder)
+        self.assertEqual([path.name for path in plugin_builder.example_sources(folder)],
+                         ["spec.pdf", "weather.csv"])
+        self.assertTrue(self.source.is_file())
+
+    def test_plugin_has_importer_needs_the_capability_and_importer_json(self):
+        folder = self.plugin()
+        self.assertTrue(plugin_builder.plugin_has_importer(folder))
+        (folder / "importer.json").unlink()
+        self.assertFalse(plugin_builder.plugin_has_importer(folder))
+        self.assertFalse(plugin_builder.plugin_has_importer(self.root / "missing"))
+
+    def test_job_imports_each_example_and_reports_what_it_could_not(self):
+        from src.jobs.plugin_examples import PluginExamplesJob
+        folder = plugin_builder.examples_folder(self.data, "weather_importer")
+        plugin_builder.copy_examples(folder, "weather_importer", [self.source, self.spec])
+        reports = []
+        job = PluginExamplesJob(self.plugin(), folder)
+        self.addCleanup(job.deleteLater)
+        job.finished.connect(reports.append)
+        job.start()
+        self.assertTrue(qt_wait_until(lambda: reports, 120_000))
+        self.assertTrue((folder / "weather.h5").is_file())
+        self.assertIn("weather.csv → weather.h5", reports[0])
+        self.assertIn("Temperature [C]: 3 samples", reports[0])
+        self.assertIn("spec.pdf: not imported", reports[0])
+
+
 if __name__ == "__main__":
     unittest.main()
