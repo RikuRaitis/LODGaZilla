@@ -6,6 +6,13 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.2] - 2026-11-12
+
+### Added
+
+- Settings > Plugins looks for plugins at `https://github.com/RikuRaitis` by default,
+  where the GPX, PicoScope CSV and UBX GNSS importers are published.
+
 ## [1.0.0-beta.1] - 2026-11-12
 
 The first public beta. LODGaZilla's history starts here; the plugins are released

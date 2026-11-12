@@ -34,6 +34,7 @@ from src.app.settings import (
     AI_SECTION,
     APPEARANCE_SECTION,
     DEFAULT_APP_SETTINGS_PATH,
+    DEFAULT_PLUGIN_SOURCES,
     DEFAULT_INFO_METADATA_SECTION,
     DEFAULT_HDF5_SETTINGS,
     HDF5_SECTION,
@@ -536,7 +537,7 @@ class SettingsEditorWidget(QWidget):
         )
         self.default_info_metadata_edit.setPlainText("\n".join(default_info_metadata["keys"]))
         plugin_settings = section_mapping(self.settings_data, PLUGINS_SECTION)
-        sources = plugin_settings.get("sources", [])
+        sources = plugin_settings.get("sources", DEFAULT_PLUGIN_SOURCES)
         self.plugin_sources_edit.setPlainText("\n".join(s for s in sources if isinstance(s, str)) if isinstance(sources, list) else "")
         self.plugin_startup_check.setChecked(bool(plugin_settings.get("check_at_startup", True)))
         enabled_plugins = plugin_settings.get("enabled", {})

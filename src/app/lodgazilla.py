@@ -87,6 +87,7 @@ startup_mark("Qt imports completed")
 from src.app.settings import (
     AI_SECTION,
     DEFAULT_APP_SETTINGS_PATH,
+    DEFAULT_PLUGIN_SOURCES,
     load_ai_settings,
     TIME_AXIS_DISPLAY_MODES,
     begin_app_settings_cache,
@@ -2462,7 +2463,7 @@ class LODGaZillaWindow(QMainWindow):
 
     def check_plugin_updates_at_startup(self) -> None:
         settings = load_settings_section(PLUGINS_SECTION, self.settings_path)
-        sources = settings.get("sources", [])
+        sources = settings.get("sources", DEFAULT_PLUGIN_SOURCES)
         if settings.get("check_at_startup", True) and isinstance(sources, list) and sources:
             self.plugin_updates.check(sources)
 

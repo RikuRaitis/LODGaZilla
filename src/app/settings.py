@@ -39,6 +39,8 @@ PLOT_SECTION = "plot"
 LODGAZILLA_SECTION = "lodgazilla"
 NAVIGATOR_DIAGNOSTICS_SECTION = "navigator_diagnostics"
 PLUGINS_SECTION = "plugins"
+# Where Settings > Plugins looks for LODGaZilla-* plugin repositories by default.
+DEFAULT_PLUGIN_SOURCES = ["https://github.com/RikuRaitis"]
 DEFAULT_INFO_METADATA_SECTION = "default_info_metadata"
 AI_SECTION = "ai"
 
@@ -187,7 +189,7 @@ def default_app_settings_data() -> dict[str, Any]:
             **DEFAULT_LODGAZILLA_SETTINGS,
             "default_plot_heights": dict(DEFAULT_LODGAZILLA_SETTINGS["default_plot_heights"]),
         },
-        PLUGINS_SECTION: {"enabled": {}, "sources": [], "check_at_startup": True},
+        PLUGINS_SECTION: {"enabled": {}, "sources": list(DEFAULT_PLUGIN_SOURCES), "check_at_startup": True},
         DEFAULT_INFO_METADATA_SECTION: dict(DEFAULT_INFO_METADATA_SETTINGS),
         NAVIGATOR_DIAGNOSTICS_SECTION: sanitize_navigator_diagnostics_settings({}),
         HDF5_SECTION: dict(DEFAULT_HDF5_SETTINGS),

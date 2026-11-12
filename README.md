@@ -517,13 +517,19 @@ A plugin adds a file format or an action, such as an export. LODGaZilla runs fin
 without any and still opens existing H5 files, images and videos.
 
 Plugins are released separately, each in its own Git repository named
-`LODGaZilla-<name>`. They'll be announced here as they become available.
+`LODGaZilla-<name>`:
+
+| Plugin | Reads |
+| --- | --- |
+| [GPX importer](https://github.com/RikuRaitis/LODGaZilla-gpx_importer) | GPX tracks: points, segments and elevations |
+| [PicoScope CSV importer](https://github.com/RikuRaitis/LODGaZilla-picoscope_csv_importer) | PicoScope CSV exports |
+| [UBX GNSS importer](https://github.com/RikuRaitis/LODGaZilla-pyubx2_importer) | GNSS receiver logs in UBX and NMEA |
 
 ### Installing plugins
 
-In **Settings > Plugins**, add the GitHub account or Bitbucket workspace that publishes
-the plugins under **Plugin sources**. LODGaZilla lists the `LODGaZilla-*` repositories
-it finds there, with **Install** and **Update** buttons. New plugins start disabled:
+In **Settings > Plugins**, **Check now** looks in the **Plugin sources**, which start
+with `https://github.com/RikuRaitis`; add any GitHub account or Bitbucket workspace that
+publishes plugins. LODGaZilla lists the `LODGaZilla-*` repositories it finds there, with **Install** and **Update** buttons. New plugins start disabled:
 restart LODGaZilla, then enable them in Settings.
 
 LODGaZilla never stores passwords or tokens. Only install plugins you trust: a plugin

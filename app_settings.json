@@ -80,7 +80,9 @@
   },
   "plugins": {
     "enabled": {},
-    "sources": [],
+    "sources": [
+      "https://github.com/RikuRaitis"
+    ],
     "check_at_startup": true
   },
   "navigator_diagnostics": {

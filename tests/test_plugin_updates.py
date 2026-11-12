@@ -21,6 +21,14 @@ URL = "https://github.com/owner/LODGaZilla-example"
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_new_settings_look_for_plugins_in_the_public_account(self):
+        from src.app.settings import DEFAULT_PLUGIN_SOURCES, PLUGINS_SECTION, default_app_settings_data
+        self.assertEqual(DEFAULT_PLUGIN_SOURCES, ["https://github.com/RikuRaitis"])
+        self.assertEqual(default_app_settings_data()[PLUGINS_SECTION]["sources"], DEFAULT_PLUGIN_SOURCES)
+        self.assertEqual(repositories.source_parts(DEFAULT_PLUGIN_SOURCES[0]), ("github.com", "RikuRaitis"))
+        committed = json.loads((Path(__file__).resolve().parents[1] / "app_settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(committed[PLUGINS_SECTION]["sources"], DEFAULT_PLUGIN_SOURCES)
+
     def test_only_account_urls_are_accepted(self):
         self.assertEqual(repositories.source_parts("https://bitbucket.org/example-team/"), ("bitbucket.org", "example-team"))
         for url in ("http://github.com/owner", "https://github.com/owner/repo",
