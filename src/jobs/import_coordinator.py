@@ -93,7 +93,9 @@ class ImportJobCoordinator:
         return any(request_conflicts_with_active(request, active) for active in self.active_imports.values())
 
     def can_start(self, request: JobRequest) -> bool:
-        return not self.has_conflict(request) and self.available_slots() >= request.process_slots
+        # A request queued before the maximum was lowered still starts, with what is there.
+        return not self.has_conflict(request) and self.available_slots() >= min(request.process_slots,
+                                                                                self.maximum_processes)
 
     def enqueue(self, request: JobRequest) -> None:
         self.queue.append(request)

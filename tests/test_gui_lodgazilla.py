@@ -27,10 +27,9 @@ from src.app.lodgazilla import (  # noqa: E402
     LODGaZillaWindow,
     PlotWorkspace,
     combined_process_progress,
-    request_conflicts_with_active,
 )
 from src.gui.plots.line import LinePlotWidget  # noqa: E402
-from src.jobs.import_coordinator import ImportJobCoordinator  # noqa: E402
+from src.jobs.import_coordinator import ImportJobCoordinator, request_conflicts_with_active  # noqa: E402
 
 
 class ImportPluginSelectionTests(unittest.TestCase):

@@ -27,9 +27,9 @@ from src.gui.plots.markers import (
     FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
+from src.data.h5_series import _navigator_series_names
 from src.gui.plots.series import (
     _attribute_text,
-    _navigator_series_names,
     _series_group_for_navigator_name,
     _time_unit_seconds,
     _canonical_time_values, _time_axis_metadata_from_group,
@@ -402,9 +402,6 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         """Remove one GNSS track and close an empty map card."""
         self.grouped_series.remove(index)
 
-    def set_track_color(self, index: int, color: str) -> None:
-        self.grouped_series.set_color(index, color)
-
     def apply_theme(self) -> None:
         """Refresh Qt overlays and WebEngine's initial page background."""
         apply_map_background(self)
@@ -614,13 +611,6 @@ def gnss_pair_for_series(h5_path: Path, series_name: str) -> tuple[Path, str, Pa
     return (h5_path, lat, h5_path, lon) if lat is not None and lon is not None else None
 
 
-def is_gnss_series(h5_path: Path, series_name: str) -> bool:
-    try:
-        return gnss_pair_for_series(h5_path, series_name) is not None
-    except OSError:
-        return False
-
-
 def load_gnss_group(axes, *, time_range=None, cancelled=None, maximum_points=MAP_MAXIMUM_POINTS):
     return load_gnss_track(axes[0].path, axes[0].name, axes[1].path, axes[1].name, time_range=time_range,
                            maximum_points=maximum_points)
@@ -782,7 +772,8 @@ tracks.forEach(track=>{{
   let pts=track.lat.map((lat,j)=>[lat,track.lon[j],track.time[j]]);
   let color=track.color||'#2196f3';
   trackPoints.push(pts);
-  all.push(...pts);
+  // A loop, not all.push(...pts): spreading 200k+ points overflows the call stack.
+  for(const p of pts)all.push(p);
   if(drawStyle==='points')trackLayers.push(L.layerGroup(pts.map(p=>L.circleMarker(p.slice(0,2),
     {{renderer:pointRenderer,radius:2.5,stroke:false,fillColor:color,fillOpacity:1,interactive:false}}))).addTo(map));
   else trackLayers.push(L.polyline(pts.map(p=>p.slice(0,2)),{{color:color,weight:3}}).addTo(map));
@@ -791,7 +782,7 @@ tracks.forEach(track=>{{
   // give it a visible representative point instead of making it look empty.
   if(pts.length){{
     let origin=L.latLng(pts[0][0],pts[0][1]);
-    let span=Math.max(...pts.map(p=>map.distance(origin,L.latLng(p[0],p[1]))));
+    let span=0;for(const p of pts)span=Math.max(span,map.distance(origin,L.latLng(p[0],p[1])));
     if(pts.length===1||span<1){{
       let p=pts[Math.floor(pts.length/2)];
       trackLayers.push(L.circleMarker(p.slice(0,2),{{radius:6,color:color,weight:2,fillColor:color,fillOpacity:0.8}}).addTo(map));

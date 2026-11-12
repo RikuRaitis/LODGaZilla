@@ -73,35 +73,6 @@ def dataset_kwargs(compression: str) -> dict[str, object]:
     return {"compression": compression, "compression_opts": 1} if compression == "gzip" else {"compression": compression}
 
 
-def write_top_lod(group: h5py.Group, time_data: h5py.Dataset, value_data: h5py.Dataset, sample_count: int, kwargs: dict[str, object]) -> None:
-    """Write the compact top LOD required for responsive first rendering."""
-    bucket_size = math.ceil(sample_count / LOD_TARGET_BUCKETS)
-    bucket_count = math.ceil(sample_count / bucket_size)
-    lod = group.create_group("lod")
-    level = lod.create_group("level_001")
-    level.attrs.update(source_sample_count=sample_count, bucket_size_samples=bucket_size, bucket_count=bucket_count)
-    starts = np.arange(bucket_count, dtype=np.int64) * bucket_size
-    ends = np.minimum(starts + bucket_size, sample_count)
-    last = ends - 1
-    arrays: dict[str, np.ndarray] = {
-        "time_start_ms": np.asarray(time_data[starts]), "time_end_ms": np.asarray(time_data[last]),
-        "time_min_ms": np.empty(bucket_count, dtype=np.uint32), "time_max_ms": np.empty(bucket_count, dtype=np.uint32),
-        "value_first": np.asarray(value_data[starts]), "value_last": np.asarray(value_data[last]),
-        "value_min": np.empty(bucket_count, dtype=np.float32), "value_max": np.empty(bucket_count, dtype=np.float32),
-        "sample_index_min": np.empty(bucket_count, dtype=np.int64), "sample_index_max": np.empty(bucket_count, dtype=np.int64),
-        "count": (ends - starts).astype(np.int64), "finite_count": (ends - starts).astype(np.int64),
-    }
-    for bucket, (start, stop) in enumerate(zip(starts, ends)):
-        values = np.asarray(value_data[start:stop])
-        minimum, maximum = int(np.argmin(values)), int(np.argmax(values))
-        arrays["value_min"][bucket], arrays["value_max"][bucket] = values[minimum], values[maximum]
-        arrays["sample_index_min"][bucket], arrays["sample_index_max"][bucket] = start + minimum, start + maximum
-        arrays["time_min_ms"][bucket], arrays["time_max_ms"][bucket] = time_data[start + minimum], time_data[start + maximum]
-    for name, values in arrays.items():
-        level.create_dataset(name, data=values, chunks=True, **kwargs)
-    lod.attrs.update(levels=1, top_level="level_001")
-
-
 def create_h5(binary_path: Path, h5_path: Path, sample_count: int, compression: str) -> None:
     kwargs = dataset_kwargs(compression)
     with h5py.File(h5_path, "w") as h5_file, binary_path.open("rb") as binary_file:

@@ -22,12 +22,17 @@ from src.gui.plots.event_state import (  # noqa: E402
     load_event_state_series,
 )
 from src.gui.plots.gnss import GnssPlotWidget, _normalise_coordinate  # noqa: E402
+from tests.qt_wait import dispose_cards  # noqa: E402
 
 
 class GnssCoordinateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self):
+        # The Event/state cards here are top-level; stop their loaders and delete them now.
+        dispose_cards()
 
     def test_playback_markers_wait_for_ready_and_coalesce(self):
         page = mock.Mock()

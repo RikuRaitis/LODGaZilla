@@ -44,7 +44,12 @@ class XYZView(gl.GLViewWidget):
 
     def paintGL(self, *args, **kwargs):
         super().paintGL(*args, **kwargs)
-        self.camera_changed.emit()
+        # Only a real camera or size change: the values boxes repaint the canvas when told,
+        # and an unconditional signal made every paint request the next one.
+        camera = (repr(self.cameraParams()), self.width(), self.height())
+        if camera != getattr(self, "_painted_camera", None):
+            self._painted_camera = camera
+            self.camera_changed.emit()
 
     def project(self, positions):
         """Canvas pixels of scene positions for the current camera; NaN behind it."""

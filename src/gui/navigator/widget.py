@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 from src.app.settings import (
     DEFAULT_APP_SETTINGS_PATH,
     NAVIGATOR_DIAGNOSTICS_SECTION,
-    NavigatorControlSettings,
     load_default_info_metadata_settings,
     load_navigator_diagnostics_settings,
     load_navigator_control_settings,
@@ -75,7 +74,6 @@ from src.gui.navigator.settings import (
     COLUMN_INFO_PAIR_VALUE,
     COLUMN_LOG_LENGTH,
     CUSTOM_COLUMN_PREFIX,
-    FIXED_FIRST_COLUMN,
     SHARED_WIDTH_COLUMNS,
     ColumnProfileSettings,
     column_profile_settings,
@@ -2398,10 +2396,6 @@ class DataNavigatorWidget(QWidget):
         for index in range(self.tree.topLevelItemCount()):
             visit(self.tree.topLevelItem(index), ())
         return paths
-
-    def expanded_item_paths(self) -> set[tuple[tuple[str, ...], ...]]:
-        """Return visible tree expansion state keyed by row identity paths."""
-        return {path for path, item in self.item_identity_paths().items() if item.isExpanded()}
 
     def restore_expanded_item_paths(self, expanded: set[tuple[tuple[str, ...], ...]]) -> None:
         self._restoring_tree_expansion = True

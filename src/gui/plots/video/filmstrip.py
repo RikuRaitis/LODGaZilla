@@ -106,6 +106,10 @@ class FilmstripFrames(QObject):
         self.cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
         self.info: dict[str, VideoInfo] = {}
         self._running: dict[str, _FrameTask] = {}
+        # Finished tasks, kept until no pool thread can still be inside their run(): the
+        # last reference must not drop on a pool thread, which would free the task and its
+        # signals object (a GUI-thread QObject) from the wrong thread.
+        self._retired: list[_FrameTask] = []
         self._waiting: dict[str, tuple[Path, list[float], int]] = {}
         self._shutdown = threading.Event()
         # Videos whose frames could not be read at all.
@@ -161,7 +165,11 @@ class FilmstripFrames(QObject):
         self.failed.emit(path, error)
 
     def _finished(self, path) -> None:  # type: ignore[no-untyped-def]
-        self._running.pop(str(path), None)
+        task = self._running.pop(str(path), None)
+        if task is not None:
+            self._retired.append(task)
+        if self.pool.activeThreadCount() == 0:
+            self._retired.clear()
         waiting = self._waiting.pop(str(path), None)
         if waiting is not None:
             self.request(*waiting)
@@ -169,4 +177,5 @@ class FilmstripFrames(QObject):
     def shutdown(self) -> None:
         self._shutdown.set()
         self._waiting.clear()
-        self.pool.waitForDone(3000)
+        if self.pool.waitForDone(3000):
+            self._retired.clear()

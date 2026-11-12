@@ -54,7 +54,7 @@ from src.app.settings import (
     save_app_settings_data,
 )
 from src.gui.plots.icons import plot_control_icon
-from src.gui.theme import THEME_OPTIONS, apply_theme, load_theme
+from src.gui.theme import apply_theme, load_theme
 from src.plugins.manager import discover_plugins
 from src.plugins.installation import pending_requests, pending_status
 from src.plugins.updates import PluginUpdates

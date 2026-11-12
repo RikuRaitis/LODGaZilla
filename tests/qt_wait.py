@@ -32,3 +32,28 @@ def qt_wait_until(predicate: Callable[[], object], timeout_ms: int = 5000, step_
         if time.monotonic() >= deadline:
             return bool(predicate())
         qt_wait(step_ms)
+
+
+def dispose_cards() -> None:
+    """Dispose, close and delete every top-level card and series plot, now.
+
+    Cards stop their timers and loader threads in ``dispose()``. Deleting them here,
+    rather than leaving ``deleteLater`` to whichever later test pumps the event loop,
+    keeps one test's widgets and threads from being torn down during another's.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from src.gui.plots.base import PlotBaseWidget
+    from src.gui.plots.series import SeriesPlotWidget
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        if isinstance(widget, (PlotBaseWidget, SeriesPlotWidget)):
+            dispose = getattr(widget, "dispose", None)
+            if callable(dispose):
+                dispose()
+            widget.close()
+            widget.deleteLater()
+    qt_wait(0)

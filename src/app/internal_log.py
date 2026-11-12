@@ -67,12 +67,6 @@ class InternalLogger(QObject):
     def error(self, message: str) -> None:
         self._log(logging.ERROR, message)
 
-    def command(self, message: str) -> None:
-        self._log(logging.INFO, message, message_type="command")
-
-    def reply(self, message: str) -> None:
-        self._log(logging.INFO, message, message_type="reply")
-
     def _log(self, level: int, message: str, *, message_type: str = "message") -> None:
         text = str(message)
         self.logger.log(level, text)

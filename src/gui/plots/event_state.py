@@ -9,7 +9,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QThread, Qt, QTimer, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QFontMetricsF, QPalette
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -596,14 +596,6 @@ class EventStatePlotWidget(PlotBaseWidget):
 
     def _draw_lane(self, lane, data, color, series_index):
         self._items.extend(render_event_state_lane(self.plot_item, lane, data, color))
-
-    def _boolean_color(self, series_index: int, state: str) -> str:
-        color = QColor(self._colors[series_index])
-        if state == "0":
-            # Keep the selected hue but make the inactive/false state clearly
-            # subordinate without requiring a second legend color setting.
-            color = color.darker(170)
-        return color.name()
 
     def _legend_entries(self) -> list[tuple[str, str, int, str | None]]:
         entries: list[tuple[str, str, int, str | None]] = []

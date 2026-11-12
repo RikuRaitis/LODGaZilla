@@ -35,10 +35,10 @@ from src.gui.plots.legend import PlotLegendWidget
 from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup
 from src.data.xyz import AxisSource
 from src.jobs.plot_groups import GroupedPlotLoadCoordinator
+from src.data.h5_series import _navigator_series_names
 from src.gui.plots.series import (
     _attribute_text,
     _canonical_time_values,
-    _navigator_series_names,
     _series_group_for_navigator_name,
     _time_axis_metadata_from_group,
 )

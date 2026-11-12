@@ -1,7 +1,6 @@
 """The camera soundtrack: footsteps, breathing, the forest, the stream and the watch's lap beeps."""
 from __future__ import annotations
 
-import math
 
 import numpy as np
 

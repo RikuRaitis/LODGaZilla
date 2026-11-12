@@ -12,7 +12,6 @@ import logging
 import multiprocessing
 import os
 import queue
-import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -152,9 +151,7 @@ from src.jobs.import_coordinator import (
     PluginJobRequest,
     ImportJobCoordinator,
     ImportRequest,
-    import_scopes_overlap,
     path_is_relative_to,
-    request_conflicts_with_active,
     request_operation,
 )
 from src.jobs.plugin import run_plugin_process
@@ -424,8 +421,10 @@ class PlotWorkspace(QScrollArea):
         self.link_markers = False
         self.snap_vertical_marker_to_nearest_point = False
         self.marker_info_display = "active"
-        self.time_axis_display = "all"
+        self.time_axis_display = "none"  # As the setting's default; the window applies the saved value.
         self.legends_shown = True
+        # Legends read a module-wide flag; a new workspace starts it from its own state.
+        set_legends_shown(self.legends_shown)
         self.card_controls_shown = True
         self._synchronizing_vertical_marker = False
         self._global_marker_timestamp: float | None = None
@@ -912,23 +911,6 @@ class PlotWorkspace(QScrollArea):
                 plot.show_sync_message("Sync: offset could not be saved")
             self.plot_status_changed.emit(f"Video sync offset was not saved: {error}")
 
-    def add_gnss_plot_from_pair(
-        self,
-        first: tuple[Path, str],
-        second: tuple[Path, str],
-        *,
-        time_range: tuple[float, float],
-    ) -> PlotBaseWidget:
-        """Create a GNSS map from selected latitude then longitude series."""
-        plot = GnssPlotWidget(
-            *first,
-            time_range=time_range,
-            coordinate_pair=(first[0], first[1], second[0], second[1]),
-        )
-        plot.marker_placed.connect(lambda x_value, source=plot: self.on_marker_placed(source, x_value))
-        plot.marker_cleared.connect(lambda source=plot: self.on_marker_cleared(source))
-        return self._register_plot(plot, plot_type="gnss")
-
     def _emit_plot_navigator_changed(self) -> None:
         # Cards were added, removed or moved: the bottom card may have changed.
         self.update_time_axis_visibility()
@@ -1197,7 +1179,7 @@ class PlotWorkspace(QScrollArea):
                 plot.set_marker_snap_enabled(enabled)
 
     def set_time_axis_display(self, mode: str) -> None:
-        self.time_axis_display = mode if mode in TIME_AXIS_DISPLAY_MODES else "all"
+        self.time_axis_display = mode if mode in TIME_AXIS_DISPLAY_MODES else "none"
         self.update_time_axis_visibility()
 
     def set_legends_shown(self, shown: bool) -> None:
@@ -2607,7 +2589,8 @@ class LODGaZillaWindow(QMainWindow):
                 break
             self.ai_panel.append_note(agent_missing_message(provider))
         else:
-            self.ai_panel.set_busy(False)
+            # A Create plugin question may still be running; its Stop must stay.
+            self.ai_panel.set_busy(self.plugin_chat_job is not None)
             return
         settings = load_ai_settings(self.settings_path)
         job = MagicDropJob(executable, files, data_folder, hints=hints, max_budget_usd=settings["max_budget_usd"],
@@ -3235,9 +3218,6 @@ class LODGaZillaWindow(QMainWindow):
     def available_import_slots(self) -> int:
         return self.import_coordinator.available_slots()
 
-    def has_active_scope_conflict(self, request: ImportRequest | PluginJobRequest) -> bool:
-        return self.import_coordinator.has_conflict(request)
-
     def estimate_source_file_count(self, folder: Path, *, recursive: bool) -> int:
         candidates = folder.rglob("*") if recursive else folder.iterdir()
         return sum(
@@ -3279,6 +3259,10 @@ class LODGaZillaWindow(QMainWindow):
                 active.process.join()
                 if active.process.exitcode not in {0, None}:
                     self.finish_reimport(import_id, 0, 0, f"{active.operation} process exited with code {active.process.exitcode}.")
+                elif active.process.exitcode == 0 and active.events.empty():
+                    # A worker that returns without its "finished" event (or whose start timed
+                    # out) would otherwise keep its worker slots and folder scope forever.
+                    self.finish_reimport(import_id, 0, 0, "")
 
     def start_process_progress(self, folder_text: str, process_id: str, source_name: str, total: int, *, operation: str = "H5 cache") -> None:
         folder = Path(folder_text).resolve()
@@ -3353,7 +3337,10 @@ class LODGaZillaWindow(QMainWindow):
         active = self.import_coordinator.finish(import_id)
         if active is not None:
             if active.process_tree is not None:
-                active.process_tree.close()
+                try:
+                    active.process_tree.close()
+                except (OSError, TimeoutError) as error:
+                    self.internal_logger.warning(f"Could not close the {active.operation} process tree: {error}")
             active.process.join(timeout=0)
             self.remove_progress_states_for_scope(active.folder, recursive=active.recursive)
             if active.operation in {"H5 cache", MediaJobRequest.operation}:
@@ -3679,7 +3666,7 @@ class LODGaZillaWindow(QMainWindow):
             self.plot_workspace.set_marker_info_display(mode)
 
     def set_time_axis_display(self, mode: str) -> None:
-        mode = mode if mode in TIME_AXIS_DISPLAY_MODES else "all"
+        mode = mode if mode in TIME_AXIS_DISPLAY_MODES else "none"
         if self._update_lodgazilla_settings(
             lambda settings: settings.__setitem__("time_axis_display", mode)
         ):

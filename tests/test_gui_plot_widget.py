@@ -27,6 +27,7 @@ from src.gui.plots.series import (  # noqa: E402
     load_timing_delta_series,
 )
 from src.gui.plots.xy import load_xy_data  # noqa: E402
+from tests.qt_wait import dispose_cards  # noqa: E402
 
 
 class PlotSeriesLoadingTests(unittest.TestCase):
@@ -37,11 +38,7 @@ class PlotSeriesLoadingTests(unittest.TestCase):
     def tearDown(self):
         # Pending view updates must not read a temporary cache after its test
         # removed it, when a later GUI test pumps the shared event loop.
-        for widget in self.app.topLevelWidgets():
-            if isinstance(widget, SeriesPlotWidget):
-                widget.dispose()
-                widget.close()
-                widget.deleteLater()
+        dispose_cards()
 
     def test_loads_raw_series_with_title_and_unit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -233,6 +230,8 @@ class PlotSeriesLoadingTests(unittest.TestCase):
             ranges = load_sample_loss_ranges(h5_path, "acc_x")
             clipping_ranges = load_clipping_ranges(h5_path, "acc_x")
             widget = SeriesPlotWidget()
+            # The areas are off by default; this test draws them.
+            widget.show_sample_loss_areas = widget.show_clipping_areas = True
             widget.show_series(h5_path, "acc_x")
 
         np.testing.assert_array_equal(ranges, np.asarray([[1.0, 10.0]]))

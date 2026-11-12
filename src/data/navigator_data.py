@@ -14,11 +14,9 @@ import h5py
 from src.data.folder_info import (
     FolderInfoData,
     ensure_info_file,
-    info_file_path,
     is_info_file,
     normalise_info_key,
     normalise_info_mapping,
-    read_info_file,
 )
 from src.data.media import AUDIO_KIND, MEDIA_KIND_ATTR
 
@@ -321,10 +319,6 @@ def format_series_metadata_value(value: object, display_format: str) -> str:
 
 def scan_folder_info_files(data_folder: Path) -> FolderInfoIndex:
     return build_folder_info_index(data_folder.rglob("*_info.json") if data_folder.is_dir() else [])
-
-
-def folder_info_index_for_folders(folders: Iterable[Path]) -> FolderInfoIndex:
-    return build_folder_info_index(info_file_path(folder) for folder in folders)
 
 
 def folder_info_values(info: FolderInfoData) -> tuple[dict[str, str], dict[str, str]]:

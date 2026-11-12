@@ -7,8 +7,7 @@ from html import escape
 import math
 
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication, QLabel, QTextBrowser
+from PySide6.QtWidgets import QLabel, QTextBrowser
 
 from src.gui.plots.theme import palette_popup_stylesheet
 
@@ -52,10 +51,6 @@ class MarkerInfoBox(QTextBrowser):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setStyleSheet(palette_popup_stylesheet())
-        self.hide()
-
-    def set_loading(self, text: str = "Loading…") -> None:
-        """Hide rather than expose incomplete values during asynchronous loads."""
         self.hide()
 
     def set_entries(self, entries: list[MarkerInfoEntry]) -> None:

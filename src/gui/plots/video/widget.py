@@ -759,10 +759,6 @@ class VideoPlotWidget(PlotBaseWidget):
         self.sync_button.setToolTip("Hide sync controls" if expanded else "Sync video with data")
         self._place_playback_bar()
 
-    def clear_sync_points(self) -> None:
-        self._sync_anchor_timestamp = self._sync_video_position = None
-        self._show_sync_state()
-
     def _show_sync_state(self) -> None:
         """Each sync button shows whether its point is set; the status says what is left."""
         data_set, video_set = self.has_sync_anchor, self.has_sync_video_position

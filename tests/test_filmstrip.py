@@ -91,8 +91,10 @@ class FilmstripTests(unittest.TestCase):
         self.assertIsNone(card.add_filmstrip(self.source))
         self.assertEqual(len(plot.filmstrips), 1)
         lane = plot.filmstrips[0]
-        # The lane takes the next free lane above the series.
-        self.assertAlmostEqual(lane.center, 0.15)
+        # The lane takes the next free lane above the series: one and a half lanes up.
+        from src.app.settings import DEFAULT_PLOT_SETTINGS
+        lane_height = DEFAULT_PLOT_SETTINGS["multi_series_lane_height_percent"] / 100
+        self.assertAlmostEqual(lane.center, 1.5 * lane_height)
         self.assertEqual(lane.start, LOG_START + 1.0)
         plot.plot_item.vb.setXRange(LOG_START, LOG_START + 4, padding=0)
         self.wait_for(lambda: any(image.isVisible() for image in lane.images))

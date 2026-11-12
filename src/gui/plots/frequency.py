@@ -7,7 +7,7 @@ from threading import Event
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QRectF, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QRectF, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QActionGroup, QColor
 from PySide6.QtWidgets import QColorDialog, QDialog, QInputDialog, QLabel, QMenu, QToolButton
 

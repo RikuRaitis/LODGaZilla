@@ -104,9 +104,6 @@ class DemoDataJob(QObject):
         self._thread = threading.Thread(target=self._run, name="demo-data", daemon=True)
         self._thread.start()
 
-    def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
-
     def cancel(self) -> None:
         self._cancelled.set()
         with self._lock:

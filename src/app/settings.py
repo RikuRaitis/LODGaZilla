@@ -294,10 +294,6 @@ def begin_app_settings_cache(
     return data
 
 
-def app_settings_cache_active(settings_path: str | Path = DEFAULT_APP_SETTINGS_PATH) -> bool:
-    return Path(settings_path).resolve() in _SETTINGS_CACHE
-
-
 def flush_app_settings_cache(settings_path: str | Path = DEFAULT_APP_SETTINGS_PATH) -> bool:
     """Write one active settings session to disk, if it has changed."""
     path = Path(settings_path).resolve()

@@ -13,9 +13,7 @@ from PySide6.QtWidgets import QApplication, QGraphicsRectItem
 from src.app.settings import DEFAULT_PLOT_SETTINGS, load_plot_settings
 from src.data.h5_series import TimeAxisMetadata, series_value_range
 from src.data.plot_policy import PlotSource
-from src.gui.plots.base import (
-    SERIES_COLORS, apply_view_range_state, first_unused_color, series_legend_name, state_entry,
-)
+from src.gui.plots.base import SERIES_COLORS, apply_view_range_state, first_unused_color, series_legend_name
 from src.gui.plots.legend import LegendEntry, PlotLegendWidget
 from src.gui.plots.marker_info import MarkerInfoEntry
 from src.gui.plots.value_boxes import ValueBoxItem

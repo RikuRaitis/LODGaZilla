@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,17 @@ def snapshot(host, plugin, destination, *, all_plugins=False):
     return None
 
 
+def remove_tree(folder):
+    """Delete a folder, including files copied read-only (as OneDrive marks them)."""
+    def make_writable_and_retry(function, path, _error):
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            function(path)
+        except OSError:
+            pass
+    shutil.rmtree(folder, onerror=make_writable_and_retry)
+
+
 def test_folder(root):
     """A checkout's tests: `tests/`, or `Tests/` in plugins not yet renamed."""
     for name in ("tests", "Tests"):
@@ -57,7 +69,8 @@ def main():
     parser.add_argument("--all-plugins", action="store_true", help="Keep every installed plugin for combined integration checks")
     parser.add_argument("--isolated", action="store_true", help="One process per test module")
     parser.add_argument("--jobs", type=int, default=2)
-    parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="Seconds per run; default 180 per module with --isolated, none for one whole-suite run")
     parser.add_argument("--pattern", default="test_*.py")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -80,6 +93,9 @@ def main():
     if not patterns:
         print("No test modules found", file=sys.stderr)
         return 1
+    # One whole-suite run takes many minutes, so only isolated modules get a default limit.
+    timeout = args.timeout if args.timeout is not None else (180 if args.isolated else None)
+
     def run(pattern):
         command = [sys.executable, str(staged_host / "tools/run_tests.py"), "--worker",
                    "--host", str(staged_host), "--pattern", pattern]
@@ -90,7 +106,7 @@ def main():
         with log_path.open("w", encoding="utf-8") as log:
             process = subprocess.Popen(command, cwd=staged_host, stdout=log, stderr=subprocess.STDOUT)
             try:
-                code = process.wait(timeout=args.timeout)
+                code = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True)
@@ -106,6 +122,8 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         results = list(pool.map(run, patterns))
     (directory / "summary.json").write_text(json.dumps(results, indent=2))
+    # The logs and summary stay; the host copy (tens of MB per run) goes.
+    remove_tree(staged_host)
     return int(any(result["exit"] != 0 for result in results))
 
 

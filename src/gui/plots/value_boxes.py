@@ -317,11 +317,15 @@ class ValueBoxLayer:
         """Place each box right of its own point, pushed down past boxes it would cover."""
         width, height = self.canvas.width(), self.canvas.height()
         wanted = []
-        for box in self.visible_boxes():
+        # Every box that has an item, so one hidden while its point was out of view returns.
+        assigned = [box for index in (FIRST_MARKER, SECOND_MARKER)
+                    for box in self.boxes[index][:len(self.items[index])]]
+        for box in assigned:
             point = self._point(box.item)
-            if point is None:
+            if point is None or not all(math.isfinite(value) for value in point):
                 box.hide()
                 continue
+            box.show()
             left = point[0] + MARKER_OFFSET
             if left + box.width() > width - EDGE_MARGIN:
                 left = point[0] - MARKER_OFFSET - box.width()
@@ -352,7 +356,8 @@ class ValueBoxLayer:
         height = self.canvas.height()
 
         def desired_top(box: ValueBox) -> float:
-            if box.y_value is None:
+            # A NaN sample at the marker has no height; it would break the sort and stacking.
+            if box.y_value is None or not math.isfinite(box.y_value):
                 return EDGE_MARGIN
             y = self.canvas.mapFromScene(self.view_box.mapViewToScene(pg.Point(0, box.y_value))).y()
             return y - box.height() / 2

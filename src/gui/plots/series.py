@@ -10,15 +10,19 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from src.data.h5_series import (  # noqa: F401 - re-exported for existing callers
-    SERIES_PATH_CACHE_LIMIT, TimeAxisMetadata, _SERIES_PATH_CACHE, _SERIES_PATH_CACHE_LOCK,
-    _SeriesPathIndex, _attribute_text, _build_series_path_index, _canonical_time_values,
-    _canonical_to_native_range, _canonical_to_native_value, _h5_searchsorted,
-    _navigator_series_names, _optional_float, _series_group_for_navigator_name,
-    _series_path_cache_key, _series_path_index, _time_axis_metadata_from_group, _time_unit_seconds,
+from src.data.h5_series import ( # noqa: F401 - re-exported for existing callers
+    TimeAxisMetadata,
+    _attribute_text,
+    _canonical_time_values,
+    _canonical_to_native_range,
+    _canonical_to_native_value,
+    _h5_searchsorted,
+    _series_group_for_navigator_name,
+    _time_axis_metadata_from_group,
+    _time_unit_seconds,
     _visible_sample_bounds,
 )
 from src.app.settings import DEFAULT_PLOT_SETTINGS, load_plot_settings

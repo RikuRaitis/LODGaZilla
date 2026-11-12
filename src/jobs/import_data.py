@@ -173,7 +173,12 @@ def select_importer(
             checked.append(f"{configuration.name}: missing parser instance")
             continue
 
-        if parser_instance.can_parse(input_path):
+        try:
+            accepted = parser_instance.can_parse(input_path)
+        except Exception as error:  # noqa: BLE001 - one plugin's error must not stop the others.
+            checked.append(f"{configuration.name}: can_parse() raised {type(error).__name__}: {error}")
+            continue
+        if accepted:
             return configuration, parser_instance
 
         extension_note = ""
