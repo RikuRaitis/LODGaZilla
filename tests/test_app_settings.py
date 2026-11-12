@@ -180,6 +180,15 @@ class AppSettingsTests(unittest.TestCase):
 
         self.assertEqual(controls.recent_folders, (full_path,))
 
+    def test_recent_folders_keep_real_paths_with_three_dots(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dotted = Path(temp_dir) / "run...2"
+            dotted.mkdir()
+            path = Path(temp_dir) / "app_settings.json"
+            save_navigator_control_settings(path, NavigatorControlSettings(recent_folders=(str(dotted),)))
+            controls = load_navigator_control_settings(path)
+        self.assertEqual(controls.recent_folders, (str(dotted),))
+
     def test_settings_editor_uses_typed_controls_and_saves(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "app_settings.json"

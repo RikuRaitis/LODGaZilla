@@ -75,7 +75,7 @@ def _aligned_values(times, values, metadata, queries, cancelled):
             chunk = np.concatenate(([previous_time], chunk))
             data = np.concatenate(([previous_value], data))
         if not np.all(np.isfinite(chunk)) or np.any(np.diff(chunk) < 0):
-            raise ValueError("3D plots require finite timestamps in ascending order")
+            raise ValueError("Aligning series requires finite timestamps in ascending order")
         left = np.searchsorted(queries, chunk[0], side="left")
         right = np.searchsorted(queries, chunk[-1], side="right")
         query = queries[left:right]
@@ -84,6 +84,45 @@ def _aligned_values(times, values, metadata, queries, cancelled):
         nearest = np.where(np.abs(query - chunk[lower]) <= np.abs(chunk[upper] - query), lower, upper)
         result[left:right] = data[nearest]
         previous_time, previous_value = chunk[-1], data[-1]
+    return result
+
+
+def interpolated_values(times, values, metadata, queries, cancelled=None):
+    """``np.interp`` of an ascending H5 series at ascending ``queries``, read in bounded chunks.
+
+    Non-finite samples are skipped; queries outside the series take its first or last
+    finite value, as ``np.interp`` does.
+    """
+    queries = np.asarray(queries, dtype=float)
+    result = np.full(len(queries), np.nan)
+    if not len(queries):
+        return result
+    start, stop = _visible_sample_bounds(times, _canonical_to_native_range(
+        (float(queries[0]), float(queries[-1])), metadata))
+    start, stop = max(0, start - 1), min(len(times), stop + 1)
+    first = previous = None
+    for offset in range(start, stop, 65_536):
+        _check_cancelled(cancelled)
+        end = min(stop, offset + 65_536)
+        chunk = _canonical_time_values(np.asarray(times[offset:end], dtype=float), metadata)
+        data = np.asarray(values[offset:end], dtype=float)
+        finite = np.isfinite(chunk) & np.isfinite(data)
+        chunk, data = chunk[finite], data[finite]
+        if previous is not None:
+            chunk, data = np.concatenate(([previous[0]], chunk)), np.concatenate(([previous[1]], data))
+        if not len(chunk):
+            continue
+        if np.any(np.diff(chunk) < 0):
+            raise ValueError("Aligning series requires timestamps in ascending order")
+        left = np.searchsorted(queries, chunk[0], side="left")
+        right = np.searchsorted(queries, chunk[-1], side="right")
+        result[left:right] = np.interp(queries[left:right], chunk, data)
+        first = first or (chunk[0], data[0])
+        previous = (chunk[-1], data[-1])
+    if first is None:
+        raise ValueError("The series has no finite samples")
+    result[queries < first[0]] = first[1]
+    result[queries > previous[0]] = previous[1]
     return result
 
 

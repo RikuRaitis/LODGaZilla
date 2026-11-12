@@ -28,6 +28,7 @@ from src.data.h5_series import ( # noqa: F401 - re-exported for existing callers
 from src.app.settings import DEFAULT_PLOT_SETTINGS, load_plot_settings
 from src.gui.plots.base import SERIES_COLORS, assign_series_colors
 from src.gui.plots.interactive import InteractivePlotWidget
+from src.gui.plots.diagnostic_areas import CLIPPING, SAMPLE_LOSS, DiagnosticAreas
 from src.gui.plots.selection_info import SelectionDurationInfo
 from src.gui.plots.theme import apply_plot_palette
 from src.gui.plots.marker_info import MarkerInfoEntry, marker_entries_from_samples
@@ -788,10 +789,8 @@ class SeriesPlotWidget(QWidget):
         self.draw_style = "auto"
         self._series_entries: list[tuple[Path, str]] = []
         self.additional_series: list[AdditionalSeries] = []
-        self.sample_loss_regions: list[pg.LinearRegionItem] = []
-        self.clipping_regions: list[pg.LinearRegionItem] = []
-        self._sample_loss_ranges = np.empty((0, 2), dtype=np.float64)
-        self._clipping_ranges = np.empty((0, 2), dtype=np.float64)
+        # Sample loss and Clipping areas of every series, by series index (`diagnostic_items`).
+        self._diagnostic_items: list[DiagnosticAreas] = []
         self.minimum_diagnostic_width_pixels = 5
         self.show_sample_loss_areas = True
         self.show_clipping_areas = True
@@ -846,7 +845,6 @@ class SeriesPlotWidget(QWidget):
         self._view_update_timer.setInterval(150)
         self._view_update_timer.timeout.connect(self._request_visible_data)
         self.plot_item.getViewBox().sigXRangeChanged.connect(self.schedule_visible_data_update)
-        self.plot_item.getViewBox().sigYRangeChanged.connect(lambda *_args: self._update_diagnostic_region_spans())
         self.plot_widget.marker_cleared.connect(lambda: self.hide_marker_values(FIRST_MARKER))
         self.plot_widget.second_marker_cleared.connect(lambda: self.hide_marker_values(SECOND_MARKER))
         self.plot_widget.selection_changed.connect(self.show_selection_statistics)
@@ -876,7 +874,7 @@ class SeriesPlotWidget(QWidget):
         self._apply_primary_color(colors[0])
         primary_path, primary_name = normalized_entries[0]
         # The visible window of every entry is loaded once, below.
-        self._set_primary_series(primary_path, primary_name, self.primary_plot_mode)
+        self._set_primary_series(primary_path, primary_name, self.primary_plot_mode, reload_diagnostics=False)
         for (h5_path, series_name), color in zip(normalized_entries[1:], colors[1:]):
             curve = pg.PlotCurveItem(pen=pg.mkPen(color, width=1))
             markers = pg.ScatterPlotItem(
@@ -888,6 +886,7 @@ class SeriesPlotWidget(QWidget):
             self.plot_item.addItem(markers)
             self.additional_series.append(AdditionalSeries(h5_path, series_name, color, curve, markers))
         self._series_entries = normalized_entries
+        self._reload_failure_regions()
         self.update_visible_data(auto_range=True)
         return self.all_current_data()
 
@@ -915,15 +914,13 @@ class SeriesPlotWidget(QWidget):
             self._entry_colors[self._series_entries[index]] = color
         if index == 0:
             self._apply_primary_color(color)
-            return
-        additional_index = index - 1
-        if not 0 <= additional_index < len(self.additional_series):
-            return
-        entry = self.additional_series[additional_index]
-        entry.color = color
-        entry.curve.setPen(pg.mkPen(color, width=1))
-        entry.markers.setPen(pg.mkPen(color))
-        entry.markers.setBrush(pg.mkBrush(color))
+        elif 0 <= index - 1 < len(self.additional_series):
+            entry = self.additional_series[index - 1]
+            entry.color = color
+            entry.curve.setPen(pg.mkPen(color, width=1))
+            entry.markers.setPen(pg.mkPen(color))
+            entry.markers.setBrush(pg.mkBrush(color))
+        self._apply_diagnostic_colors()
 
     def all_current_data(self) -> list[PlotSeriesData]:
         return [data for data in [self._current_data, *(entry.data for entry in self.additional_series)] if data is not None]
@@ -942,14 +939,7 @@ class SeriesPlotWidget(QWidget):
         self.curve.setData(np.empty(0, dtype=np.float64), np.empty(0, dtype=np.float64))
         self.markers.setData([], [])
         self._clear_additional_series()
-        self._set_failure_regions(
-            self.sample_loss_regions, np.empty((0, 2), dtype=np.float64), color=(220, 70, 70)
-        )
-        self._set_failure_regions(
-            self.clipping_regions, np.empty((0, 2), dtype=np.float64), color=(245, 170, 45)
-        )
-        self._sample_loss_ranges = np.empty((0, 2), dtype=np.float64)
-        self._clipping_ranges = np.empty((0, 2), dtype=np.float64)
+        self._remove_diagnostic_items()
         self._series_entries = []
         self.h5_path = None
         self.series_name = ""
@@ -1024,16 +1014,15 @@ class SeriesPlotWidget(QWidget):
         self.plot_widget.snap_marker_to_nearest_point = bool(enabled)
 
     def nearest_visible_x(self, x_value: float) -> float:
-        """Return the closest currently rendered sample without another HDF5 read."""
-        data = self._current_data
-        if data is None or not len(data.x):
-            return x_value
-        index = int(np.searchsorted(data.x, x_value, side="left"))
-        candidates = [candidate for candidate in (index - 1, index) if 0 <= candidate < len(data.x)]
-        if not candidates:
-            return x_value
-        nearest = min(candidates, key=lambda candidate: abs(float(data.x[candidate]) - x_value))
-        return float(data.x[nearest])
+        """The rendered sample closest in time among all the card's series, without an HDF5 read."""
+        candidates = []
+        for data in self.all_current_data():
+            if not len(data.x):
+                continue
+            index = int(np.searchsorted(data.x, x_value, side="left"))
+            candidates.extend(float(data.x[candidate]) for candidate in (index - 1, index)
+                              if 0 <= candidate < len(data.x) and np.isfinite(data.x[candidate]))
+        return min(candidates, key=lambda candidate: abs(candidate - x_value)) if candidates else x_value
 
     def show_marker_values(self, x_value: float, index: int = FIRST_MARKER) -> None:
         """Fetch each series' values at a marker in the background, then show its boxes."""
@@ -1106,14 +1095,16 @@ class SeriesPlotWidget(QWidget):
             else:
                 self.value_boxes.set_items(index, x_value, items)
 
-    def _set_primary_series(self, h5_path: str | Path, series_name: str, plot_mode: str) -> None:
+    def _set_primary_series(self, h5_path: str | Path, series_name: str, plot_mode: str, *,
+                            reload_diagnostics: bool = True) -> None:
         self._clear_additional_series()
         self._series_entries = [(Path(h5_path), series_name)]
         self.h5_path = Path(h5_path)
         self.series_name = series_name
         self.plot_mode = plot_mode
         self._configure_time_axis()
-        self._reload_failure_regions()
+        if reload_diagnostics:
+            self._reload_failure_regions()
 
     def show_series(self, h5_path: str | Path, series_name: str) -> PlotSeriesData | None:
         """Show one series; None while its data loads in the background."""
@@ -1125,7 +1116,6 @@ class SeriesPlotWidget(QWidget):
         return self.update_visible_data(auto_range=True)
 
     def schedule_visible_data_update(self, *_args) -> None:  # type: ignore[no-untyped-def]
-        self._update_diagnostic_region_widths()
         if self.h5_path is not None and not self._updating_plot:
             # The view was set by the user or a workspace; keep it when a load arrives.
             self._visible_request_auto_range = False
@@ -1149,22 +1139,49 @@ class SeriesPlotWidget(QWidget):
         self.show_clipping_areas = show_clipping
         if changed and getattr(self, "h5_path", None) is not None and self.series_name:
             self._reload_failure_regions()
-        self._update_diagnostic_region_widths()
+        for item in getattr(self, "_diagnostic_items", ()):
+            item.set_minimum_pixels(self.minimum_diagnostic_width_pixels)
 
     def _reload_failure_regions(self) -> None:
-        """Avoid opening diagnostic datasets at all when their display is disabled."""
-        if not self.show_sample_loss_areas:
-            self._sample_loss_ranges = np.empty((0, 2), dtype=np.float64)
-            self._set_failure_regions(self.sample_loss_regions, self._sample_loss_ranges, color=(220, 70, 70))
-        else:
-            self._sample_loss_ranges = load_sample_loss_ranges(self.h5_path, self.series_name)
-            self._set_failure_regions(self.sample_loss_regions, self._sample_loss_ranges, color=(220, 70, 70))
-        if not self.show_clipping_areas:
-            self._clipping_ranges = np.empty((0, 2), dtype=np.float64)
-            self._set_failure_regions(self.clipping_regions, self._clipping_ranges, color=(245, 170, 45))
-        else:
-            self._clipping_ranges = load_clipping_ranges(self.h5_path, self.series_name)
-            self._set_failure_regions(self.clipping_regions, self._clipping_ranges, color=(245, 170, 45))
+        """Every series' Sample loss and Clipping areas; datasets of a hidden kind are not opened."""
+        self._remove_diagnostic_items()
+        loaders = ((SAMPLE_LOSS, self.show_sample_loss_areas, load_sample_loss_ranges),
+                   (CLIPPING, self.show_clipping_areas, load_clipping_ranges))
+        for index, (h5_path, series_name) in enumerate(self._series_entries):
+            for kind, shown, load in loaders:
+                if not shown:
+                    continue
+                try:
+                    ranges = load(h5_path, series_name)
+                except (OSError, KeyError, ValueError):
+                    continue
+                if not len(ranges):
+                    continue
+                item = DiagnosticAreas(kind, lambda index=index: self.diagnostic_value_range(index))
+                item.series_index = index
+                item.set_ranges(ranges)
+                item.set_minimum_pixels(self.minimum_diagnostic_width_pixels)
+                # These are visual diagnostics, not data bounds: auto-range ignores them.
+                self.plot_item.addItem(item, ignoreBounds=True)
+                self._diagnostic_items.append(item)
+        self._apply_diagnostic_colors()
+
+    def diagnostic_items(self, kind: str | None = None) -> list[DiagnosticAreas]:
+        """The Sample loss (``SAMPLE_LOSS``) or Clipping (``CLIPPING``) areas, of every series."""
+        return [item for item in self._diagnostic_items if kind is None or item.kind == kind]
+
+    def _remove_diagnostic_items(self) -> None:
+        for item in self._diagnostic_items:
+            self.plot_item.removeItem(item)
+        self._diagnostic_items.clear()
+
+    def _apply_diagnostic_colors(self) -> None:
+        """With several series, each area has a band in its series' color."""
+        colors = self.series_colors()
+        several = len(self._series_entries) > 1
+        for item in self._diagnostic_items:
+            index = item.series_index
+            item.set_series_color(colors[index] if several and index < len(colors) else None)
 
     def _entry_loader(self, *, primary: bool):  # type: ignore[no-untyped-def]
         """Return a thread-safe reader; its result is accepted by `_accept_entry_payload`."""
@@ -1268,7 +1285,6 @@ class SeriesPlotWidget(QWidget):
                 self.plot_item.disableAutoRange()
             self._current_data = data
             self._update_multi_series_status(data)
-            self._update_diagnostic_region_widths()
             return data
         finally:
             self._updating_plot = False
@@ -1368,72 +1384,11 @@ class SeriesPlotWidget(QWidget):
             f"{point_count:,} plotted points ({len(all_data)} series: {lod_text}; {marker_text})"
         )
 
-    def _set_failure_regions(
-        self,
-        regions: list[pg.LinearRegionItem],
-        ranges: np.ndarray,
-        *,
-        color: tuple[int, int, int],
-    ) -> None:
-        for region in regions:
-            self.plot_item.removeItem(region)
-        regions.clear()
-        for start, stop in ranges:
-            region = pg.LinearRegionItem(
-                values=(float(start), float(stop)),
-                movable=False,
-                brush=pg.mkBrush(*color, 65),
-                pen=pg.mkPen(*color, 0),
-            )
-            # Keep the translucent span above the ViewBox background but
-            # below the curve and point markers.
-            region.setZValue(1)
-            # These are visual diagnostics, not data bounds.  Including a
-            # minimum-width overlay in auto-ranging feeds its widened bounds
-            # back into the view and can make it keep growing while zooming.
-            self.plot_item.addItem(region, ignoreBounds=True)
-            regions.append(region)
-        self._update_diagnostic_region_spans()
-
-    def diagnostic_value_range(self) -> tuple[float, float] | None:
-        """Y range the diagnostic areas cover, in view coordinates; None for the full height."""
+    def diagnostic_value_range(self, series_index: int = 0) -> tuple[float, float] | None:
+        """Y range a series' diagnostic areas cover, in view coordinates; None for the full height."""
         return None
 
     def _update_diagnostic_region_spans(self) -> None:
-        span = (0.0, 1.0)
-        value_range = self.diagnostic_value_range()
-        bottom, top = self.plot_item.getViewBox().viewRange()[1]
-        if value_range is not None and top > bottom:
-            low, high = sorted(value_range)
-            span = tuple(min(1.0, max(0.0, (value - bottom) / (top - bottom))) for value in (low, high))
-        for region in self.sample_loss_regions + self.clipping_regions:
-            if tuple(region.span) != span:
-                region.setSpan(*span)
-
-    def _update_diagnostic_region_widths(self) -> None:
-        try:
-            units_per_pixel = abs(float(self.plot_item.getViewBox().viewPixelSize()[0]))
-        except (TypeError, ValueError, IndexError):
-            return
-        if not np.isfinite(units_per_pixel) or units_per_pixel <= 0:
-            return
-        minimum_span = units_per_pixel * self.minimum_diagnostic_width_pixels
-        self._set_display_region_widths(self.sample_loss_regions, self._sample_loss_ranges, minimum_span)
-        self._set_display_region_widths(self.clipping_regions, self._clipping_ranges, minimum_span)
-
-    @staticmethod
-    def _set_display_region_widths(
-        regions: list[pg.LinearRegionItem],
-        ranges: np.ndarray,
-        minimum_span: float,
-    ) -> None:
-        for region, (start, stop) in zip(regions, ranges):
-            center = (float(start) + float(stop)) / 2
-            width = max(float(stop) - float(start), minimum_span)
-            display_range = (center - width / 2, center + width / 2)
-            current_range = tuple(float(value) for value in region.getRegion())
-            # Avoid emitting a region-change signal when the visible span has
-            # not actually changed.  Those signals otherwise schedule a new
-            # plot update during the same zoom operation.
-            if not np.allclose(current_range, display_range, rtol=0.0, atol=1e-12):
-                region.setRegion(display_range)
+        """Repaint the areas after the series' lanes moved (Multi-series)."""
+        for item in self._diagnostic_items:
+            item.update()

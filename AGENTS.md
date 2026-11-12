@@ -50,7 +50,7 @@ elements. Vocabulary alone does not request a code or UI rename.
 | Send/Stop button | The button right of the AI input: a green play icon sends; while the agent is thinking it becomes a red stop icon (`send_button`, `set_busy`; icons `ai-send`, `ai-stop`). |
 | Splash screen | Shown about a second after start, before the heavy modules are imported (`start_application` in `src/app/startup.py`, called from `src/app/lodgazilla.py`'s `__main__` block); it closes when the main window is shown. |
 | Settings dialog | The application preferences window, `SettingsDialog`, with General, Navigator, Plot navigator, Plot, Plugins and HDF5 Cache tabs (`SettingsEditorWidget.tabs`). The General tab's **AI** group holds the Claude Code and Codex CLI paths, each one's consent and web access (`claude_web_access`, `codex_web_access`: Claude's WebFetch and WebSearch tools, Codex's web search), and the cost (Claude only) and time limits (`ai` section). Colors are swatch buttons (`ColorButton`). The General tab's **Demo data** group has **Re-generate demo data**, which deletes and recreates `demodata/` (`DemoDataJob` in `src/app/demo_data.py`). Settings that have a main-window button (Hide irrelevant series, Sample loss, Clipping, Plot navigator buttons) are not repeated in it; saving keeps their values. |
-| Workspace / UMW file | A saved Navigator, Plot navigator and Plot workspace in a LODGaZilla workspace (`.umw`) JSON file, saved and opened from the File bar; format in `src/data/workspace_file.py`. **Open recent workspace** lists the last ten (`recent_workspaces` setting). |
+| Workspace / UMW file | A saved Navigator and Plot workspace in a LODGaZilla workspace (`.umw`) JSON file, saved and opened from the File bar; format in `src/data/workspace_file.py`. The Plot navigator buttons are user preferences, kept in the app settings and not in workspaces; an older file's `plot_navigator` section is ignored. **Open recent workspace** lists the last ten (`recent_workspaces` setting). While a card is open, Open workspace, Open recent workspace and closing the window ask whether to save first (`confirm_replacing_cards`). |
 | Demo data | Synthetic running workouts with videos in `demodata/` (ignored by Git), made by `tools/create_demo_dataset.py`; `demo.umw` is written last and marks a complete set. At startup the app offers to create missing demo data (`offer_demo_data`, `LODGaZillaWindow.offer_demo_data`) and shows a progress dialog while it runs. |
 | Plugin sources | GitHub account and Bitbucket workspace URLs under **Plugin sources** on the Settings dialog's Plugins tab. |
 | Plugin update check | Background discovery of compatible repositories and revisions. **Check now** runs manually; startup checks use the saved sources. Install/Update downloads a revision for activation on restart. |
@@ -233,7 +233,7 @@ An H5 file supplies data series; it is not a separate tree item type.
   card type saves and restores its state in `workspace_state()` and
   `restore_workspace_state()` (shared parts in `PlotBaseWidget`); `PlotWorkspace`
   creates cards from saved records in `_create_card`. When adding a card type, or
-  a card, Navigator or Plot navigator setting a user can change, extend these and
+  a card or Navigator setting a user can change, extend these and
   `tests/test_workspace_file.py` in the same change. Add fields compatibly; raise
   `UMW_VERSION` only when older files cannot be read.
 - **Verify proportionately.** Run checks relevant to the changed behavior. Add

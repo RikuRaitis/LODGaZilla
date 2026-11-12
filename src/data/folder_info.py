@@ -258,9 +258,23 @@ def _write_info_atomic(path: Path, data: FolderInfoData) -> None:
         with os.fdopen(descriptor, "w", encoding="utf-8") as file:
             json.dump(_info_payload(data), file, indent=2, ensure_ascii=True)
             file.write("\n")
-        temp_path.replace(path)
+        _replace_with_retry(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def _replace_with_retry(source: Path, target: Path, *, seconds: float = 2.0) -> None:
+    """Replace ``target``; on Windows a reader (such as the Navigator) holding it open makes
+    the replace fail with a sharing violation for a moment, so try again briefly."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            source.replace(target)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
 
 
 def is_info_file(path: str | Path) -> bool:

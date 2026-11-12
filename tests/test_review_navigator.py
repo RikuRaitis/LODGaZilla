@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit  # noqa: E402
 
 from src.data.folder_info import read_existing_info_file, read_info_file  # noqa: E402
 from src.data.navigator_data import (  # noqa: E402
+    folder_needs_h5_generation,
     FolderInfoIndex,
     add_default_info_keys,
     filter_folders_by_metadata,
@@ -515,6 +516,23 @@ class DefaultReadonlyKeyTests(NavigatorTestCase):
         item = first_item_of_type(navigator, ROW_TYPE_FOLDER)
         serial = navigator.logical_column_for_id(info_column_id("serial number"), COLUMN_CATEGORY_FOLDER)
         self.assertFalse(navigator.is_folder_info_column_editable(item, serial))
+
+
+class FolderGenerationRuleTests(unittest.TestCase):
+    def test_only_folders_with_their_own_data_files_need_h5_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            year = Path(directory) / "2024"
+            run = year / "run"
+            run.mkdir(parents=True)
+            (year / "2024_info.json").write_text("{}", encoding="utf-8")
+            (year / ".hidden").write_text("x", encoding="utf-8")
+            # A parent folder with only subfolders, its info and hidden files is not data.
+            self.assertFalse(folder_needs_h5_generation(year))
+            (run / "log.csv").write_text("t,v\n", encoding="utf-8")
+            self.assertTrue(folder_needs_h5_generation(run))
+            (run / "log.h5").write_bytes(b"")
+            self.assertFalse(folder_needs_h5_generation(run))
+            self.assertFalse(folder_needs_h5_generation(Path(directory) / "missing"))
 
 
 if __name__ == "__main__":

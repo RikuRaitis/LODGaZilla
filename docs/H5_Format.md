@@ -465,10 +465,16 @@ The host writes entries like this (stored as a JSON string on the root):
     "duration_seconds": 0.07,
     "navigator_metadata": [
       {"id": "unit", "title": "Unit", "format": "text", "value": "m/s^2"}
-    ]
+    ],
+    "diagnostic_warning": ""
   }
 ]
 ```
+
+`diagnostic_warning` is the Navigator's warning text for the series ("Sampleloss
+detected", "Clipping detected", "Sampleloss and Clipping detected", or empty), matching
+its `sample_loss_list` and `clipping_list`. When every entry has it, the Navigator does not
+walk the file for warnings; without it, the warnings are read from the groups.
 
 Include every series and keep index names, counts, units, visibility and bounds
 consistent with the actual groups. `navigator_metadata` entries provide logical

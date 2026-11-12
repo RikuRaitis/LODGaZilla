@@ -647,9 +647,9 @@ def sanitize_recent_folders(value: Any) -> list[str]:
     for item in value:
         folder = str(item).strip()
         key = folder.casefold()
-        # Display strings containing the middle-elision marker are not paths.
-        # Keep only the original full paths in persistent settings.
-        if not folder or "..." in folder or key in seen:
+        # A middle-elided display string ("C:/Us...run") is not a path; a real path that
+        # contains "..." exists. Only such rare entries are checked on disk.
+        if not folder or key in seen or ("..." in folder and not Path(folder).exists()):
             continue
         folders.append(folder)
         seen.add(key)

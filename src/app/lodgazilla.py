@@ -64,7 +64,7 @@ startup_mark("standard and scientific imports completed")
 # remain disabled for the application process.
 os.environ.pop("QT_FFMPEG_DEBUG", None)
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QtMsgType, QUrl, Signal, QTimer, qInstallMessageHandler
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QtMsgType, QUrl, Signal, QTimer, qInstallMessageHandler
 from PySide6.QtGui import QDesktopServices, QIcon, QImageReader, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -203,6 +203,10 @@ SETTINGS_FLUSH_DELAY_MS = 1_000
 SETTINGS_FLUSH_RETRY_MS = 10_000
 SERIES_TIME_RANGE_CACHE_LIMIT = 4_096
 _SERIES_TIME_RANGE_CACHE: dict[tuple[str, str, int, int], tuple[float, float] | None] = {}
+# An H5 file's (mtime, size), checked at most once a second: a Plot navigator bar drag
+# refreshes the overview on every mouse move.
+H5_STAT_MAX_AGE_SECONDS = 1.0
+_H5_STAT_CACHE: dict[str, tuple[float, int, int]] = {}
 
 
 
@@ -375,6 +379,28 @@ def _attached_video_offset(folder: Path, video_path: Path, fallback: float) -> f
         return float(video["offset_seconds"]) if video is not None else fallback
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return fallback
+
+
+
+
+def retry_audio_offset(owner: QObject, path: Path, offset: float, done: Callable[[bool], None], *,
+                       attempts: int = 5, delay_ms: int = 200) -> None:
+    """Move an audio H5 in time; while a reader has it open, try again later without blocking.
+
+    ``done(succeeded)`` is called once, after the first success or the last attempt.
+    """
+    if set_audio_offset(path, offset):
+        done(True)
+    elif attempts <= 1:
+        done(False)
+    else:
+        QTimer.singleShot(delay_ms, owner, lambda: retry_audio_offset(
+            owner, path, offset, done, attempts=attempts - 1, delay_ms=delay_ms))
+
+
+def _path_key(path) -> str:  # type: ignore[no-untyped-def]
+    """A path's identity for comparisons without disk access (no ``resolve()``)."""
+    return os.path.normcase(os.path.abspath(str(path)))
 
 
 class PlotWorkspace(QScrollArea):
@@ -901,8 +927,9 @@ class PlotWorkspace(QScrollArea):
                 if audio.get("video") and attachment_path(folder, {"path": audio["video"]}) == Path(video_path).resolve():
                     audio["offset_seconds"] = f"{offset:.6f}"
                     audio_path = attachment_path(folder, audio)
-                    if audio_path.is_file() and not set_audio_offset(audio_path, offset):
-                        self.plot_status_changed.emit("The video's audio could not be moved; it is open elsewhere.")
+                    if audio_path.is_file():
+                        retry_audio_offset(self, audio_path, offset, lambda moved: moved or self.plot_status_changed.emit(
+                            "The video's audio could not be moved; it is open elsewhere."))
             write_info_file(folder, info)
             self.video_offset_saved.emit(folder)
             self.plot_status_changed.emit(f"Video sync saved: {offset:+.3f} s")
@@ -986,11 +1013,19 @@ class PlotWorkspace(QScrollArea):
         the range is cached per (path, series, mtime, size) instead of being
         read again for every series of every card.
         """
-        try:
-            stat = Path(h5_path).stat()
-        except OSError:
-            return None
-        key = (str(h5_path), str(series_name), stat.st_mtime_ns, stat.st_size)
+        path_text = str(h5_path)
+        now = time.monotonic()
+        checked = _H5_STAT_CACHE.get(path_text)
+        if checked is None or now - checked[0] > H5_STAT_MAX_AGE_SECONDS:
+            try:
+                stat = Path(h5_path).stat()
+            except OSError:
+                _H5_STAT_CACHE.pop(path_text, None)
+                return None
+            if len(_H5_STAT_CACHE) >= SERIES_TIME_RANGE_CACHE_LIMIT:
+                _H5_STAT_CACHE.clear()
+            checked = _H5_STAT_CACHE[path_text] = (now, stat.st_mtime_ns, stat.st_size)
+        key = (path_text, str(series_name), checked[1], checked[2])
         if key not in _SERIES_TIME_RANGE_CACHE:
             if len(_SERIES_TIME_RANGE_CACHE) >= SERIES_TIME_RANGE_CACHE_LIMIT:
                 _SERIES_TIME_RANGE_CACHE.clear()
@@ -1683,14 +1718,21 @@ class PlotWorkspace(QScrollArea):
         created = []
         for row in state.get("rows", []):
             cards = []
+            if not isinstance(row, dict):
+                problems.append("A card row could not be read")
+                continue
             for record in row.get("cards", []):
-                title = CARD_TITLES.get(record.get("type"), "Card")
-                record = self._usable_card_record(record, problems)
-                if record is None:
+                if not isinstance(record, dict):
+                    problems.append("A card could not be read")
                     continue
+                title = CARD_TITLES.get(record.get("type"), "Card")
                 try:
+                    # A malformed record (missing or wrong keys) is reported, not raised.
+                    record = self._usable_card_record(record, problems)
+                    if record is None:
+                        continue
                     cards.append((self._create_card(record), record))
-                except (OSError, KeyError, IndexError, TypeError, ValueError) as error:
+                except (OSError, KeyError, IndexError, TypeError, ValueError, AttributeError) as error:
                     problems.append(f"{title} card could not be opened: {error}")
             if cards:
                 created.append((row, cards))
@@ -2231,42 +2273,46 @@ class LODGaZillaWindow(QMainWindow):
         return False
 
     def workspace_state(self) -> dict:
-        """The Navigator, Plot navigator and Plot workspace, as saved in a .umw file."""
-        workspace = self.plot_workspace
+        """The Navigator and Plot workspace, as saved in a .umw file.
+
+        The Plot navigator buttons (linking, legends, card controls, time axis, snapping)
+        are the user's preferences, saved in the app settings, not in workspaces.
+        """
         return {
             "navigator": self.navigator.workspace_state(),
-            "plot_navigator": {
-                "link_markers": workspace.link_markers,
-                "link_plot_x_axes": workspace.link_x_axes,
-                "time_axis_display": workspace.time_axis_display,
-                "marker_info_display": workspace.marker_info_display,
-                "snap_to_nearest": workspace.snap_vertical_marker_to_nearest_point,
-                "show_legends": workspace.legends_shown,
-                "show_card_controls": workspace.card_controls_shown,
-            },
-            "workspace": workspace.workspace_state(),
+            "workspace": self.plot_workspace.workspace_state(),
         }
 
     def apply_workspace_state(self, state: dict) -> list[str]:
-        """Reset the workspace to a saved one; return what could not be restored."""
-        controls = state.get("plot_navigator", {})
-        # Linking first: it decides how saved markers are placed.
-        for key, apply, show in (
-            ("link_markers", self.set_markers_linked, self.plot_navigator.set_markers_linked),
-            ("link_plot_x_axes", self.set_plot_views_linked, self.plot_navigator.set_plot_views_linked),
-            ("time_axis_display", self.set_time_axis_display, self.plot_navigator.set_time_axis_display),
-            ("marker_info_display", self.set_marker_info_display, self.plot_navigator.set_marker_info_display),
-            ("snap_to_nearest", self.set_snap_to_nearest, self.plot_navigator.set_snap_to_nearest),
-            ("show_legends", self.set_legends_shown, self.plot_navigator.set_legends_shown),
-            ("show_card_controls", self.set_card_controls_shown, self.plot_navigator.set_card_controls_shown),
-        ):
-            if key in controls:
-                apply(controls[key])
-                show(controls[key])
+        """Reset the workspace to a saved one; return what could not be restored.
+
+        A "plot_navigator" section in files saved by earlier versions is ignored: the
+        Plot navigator buttons keep the user's own preferences.
+        """
         self.navigator.restore_workspace_state(state.get("navigator", {}))
         return self.plot_workspace.restore_workspace_state(state.get("workspace", {}))
 
+    def confirm_replacing_cards(self) -> bool:
+        """Before cards are replaced or the window closes: offer to save them first.
+
+        Asked whenever a card is open; False when the user cancels.
+        """
+        if not self.plot_workspace.plots():
+            return True
+        name = self.workspace_path.name if self.workspace_path else "the current cards"
+        box = QMessageBox(QMessageBox.Icon.Question, "LODGaZilla", f"Save {name} as a workspace first?", parent=self)
+        box.setInformativeText("Otherwise the cards open now are closed without saving.")
+        box.setStandardButtons(QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+                               | QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Save)
+        answer = box.exec()
+        if answer == QMessageBox.StandardButton.Save:
+            return self.save_workspace()
+        return answer == QMessageBox.StandardButton.Discard
+
     def open_workspace(self) -> None:
+        if not self.confirm_replacing_cards():
+            return
         folder = self.workspace_path.parent if self.workspace_path else self.navigator.data_folder()
         selected, _filter = QFileDialog.getOpenFileName(
             self, "Open workspace", str(folder or ""), f"{UMW_FILE_FILTER};;All files (*)")
@@ -2293,19 +2339,18 @@ class LODGaZillaWindow(QMainWindow):
         self.internal_logger.info(message)
         return True
 
-    def save_workspace(self) -> None:
+    def save_workspace(self) -> bool:
+        """Save to the current workspace file, or ask for one; False when not saved."""
         if self.workspace_path is None:
-            self.save_workspace_as()
-        else:
-            self.write_workspace(self.workspace_path)
+            return self.save_workspace_as()
+        return self.write_workspace(self.workspace_path)
 
-    def save_workspace_as(self) -> None:
+    def save_workspace_as(self) -> bool:
         folder = self.workspace_path.parent if self.workspace_path else self.navigator.data_folder()
         name = self.workspace_path.name if self.workspace_path else f"workspace{UMW_SUFFIX}"
         selected, _filter = QFileDialog.getSaveFileName(
             self, "Save workspace", str(Path(folder or Path.home()) / name), UMW_FILE_FILTER)
-        if selected:
-            self.write_workspace(Path(selected))
+        return bool(selected) and self.write_workspace(Path(selected))
 
     def write_workspace(self, path: Path) -> bool:
         try:
@@ -2330,11 +2375,15 @@ class LODGaZillaWindow(QMainWindow):
         menu.clear()
         recent = list(self.lodgazilla_settings.get("recent_workspaces", []))
         for item in recent:
-            action = menu.addAction(Path(item).name, lambda path=Path(item): self.open_workspace_file(path))
+            action = menu.addAction(Path(item).name, lambda path=Path(item): self.open_recent_workspace(path))
             action.setToolTip(item)
             action.setStatusTip(item)
         if not recent:
             menu.addAction("No recent workspaces").setEnabled(False)
+
+    def open_recent_workspace(self, path: Path) -> None:
+        if self.confirm_replacing_cards():
+            self.open_workspace_file(path)
 
     def _log_version(self) -> None:
         """Log the running version; asking Git takes most of a second, so not on the GUI thread."""
@@ -2987,13 +3036,20 @@ class LODGaZillaWindow(QMainWindow):
             current, -1e7, 1e7, 3)
         if not accepted:
             return
-        if not set_audio_offset(h5_path, offset):
+        retry_audio_offset(self, h5_path, offset,
+                           lambda moved: self._audio_offset_set(folder, h5_path, offset, moved))
+
+    def _audio_offset_set(self, folder: Path, h5_path: Path, offset: float, moved: bool) -> None:
+        if not moved:
             self.internal_logger.error(f"Could not move {h5_path.name}: the file is open elsewhere.")
             return
-        link["offset_seconds"] = f"{offset:.6f}"
         try:
+            # Read again: the folder info may have changed while the file was busy.
+            info = read_info_file(folder)
+            link = next(audio for audio in info.audio if attachment_path(folder, audio) == h5_path.resolve())
+            link["offset_seconds"] = f"{offset:.6f}"
             write_info_file(folder, info)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, StopIteration, json.JSONDecodeError) as error:
             self.on_metadata_write_failed(folder, str(error))
         self.navigator.refresh_tree(rescan=True)
         self.internal_logger.info(f"Audio offset of {h5_path.name}: {offset:+.3f} s")
@@ -3320,14 +3376,15 @@ class LODGaZillaWindow(QMainWindow):
             self.internal_logger.error(f"Failed {state.operation} for {source_name}.")
 
     def update_folder_progress(self, folder: Path, *, exclude_process_id: str | None = None) -> None:
-        folder = folder.resolve()
+        # Runs for every progress event: compare normalized path strings, without disk access.
+        key = _path_key(folder)
         states = [
             (state.source_name, state.completed, state.total, state.eta_text)
             for process_id, state in self.process_progress_started_at.items()
-            if process_id != exclude_process_id and state.folder.resolve() == folder
+            if process_id != exclude_process_id and _path_key(state.folder) == key
         ]
         for item in self.navigator_tree_items():
-            if item.data(0, ITEM_TYPE_ROLE) == ROW_TYPE_FOLDER and Path(str(item.data(0, ITEM_PATH_ROLE))).resolve() == folder:
+            if item.data(0, ITEM_TYPE_ROLE) == ROW_TYPE_FOLDER and _path_key(item.data(0, ITEM_PATH_ROLE)) == key:
                 if states:
                     completed, total, eta = combined_process_progress(states)
                     self.navigator.set_item_progress(item, completed, total, folder.name, eta)
@@ -3487,6 +3544,7 @@ class LODGaZillaWindow(QMainWindow):
     def apply_settings(self) -> None:
         self.lodgazilla_settings = load_lodgazilla_settings(self.settings_path)
         self._apply_runtime_settings()
+        self.log_panel.set_maximum_lines(int(self.lodgazilla_settings["internal_log_maximum_lines"]))
 
     # Demo data
 
@@ -3587,7 +3645,7 @@ class LODGaZillaWindow(QMainWindow):
         self.internal_logger.info(f"Demo data ready in {DEMO_DATA_ROOT}")
         answer = QMessageBox.question(
             self, "Demo data", f"The demo data is ready in {DEMO_DATA_ROOT}.\n\nOpen the demo workspace now?")
-        if answer == QMessageBox.StandardButton.Yes:
+        if answer == QMessageBox.StandardButton.Yes and self.confirm_replacing_cards():
             self.open_workspace_file(demo_workspace(DEMO_DATA_ROOT))
 
     def _apply_runtime_settings(self) -> None:
@@ -3632,11 +3690,14 @@ class LODGaZillaWindow(QMainWindow):
         self.log_panel.set_expanded(bool(self.lodgazilla_settings["internal_log_expanded"]))
         if self.log_panel.is_expanded:
             QTimer.singleShot(0, self.restore_log_panel_size)
-        apply_theme(load_theme(self.settings_path))
-        self.plot_workspace.apply_theme()
         theme = load_theme(self.settings_path)
-        configure_application(QApplication.instance(), theme)
-        self.setWindowIcon(QIcon(str(lodgazilla_asset_path(theme, 'icon'))))
+        apply_theme(theme)
+        if theme != getattr(self, "_card_theme", None):
+            # Cards, the application icon and the window icon follow a changed theme only.
+            self._card_theme = theme
+            self.plot_workspace.apply_theme()
+            configure_application(QApplication.instance(), theme)
+            self.setWindowIcon(QIcon(str(lodgazilla_asset_path(theme, 'icon'))))
         self.navigator.reload_navigator_control_settings()
         self.reload_plugin_settings()
         self.refresh_plugin_launchers()
@@ -3706,6 +3767,11 @@ class LODGaZillaWindow(QMainWindow):
             self.plot_workspace.set_x_axes_linked(bool(enabled))
 
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        # Closing by the user (the window's close button, Alt+F4) offers to save the cards;
+        # a close from code, such as tests or shutdown, does not ask.
+        if event.spontaneous() and not self.confirm_replacing_cards():
+            event.ignore()
+            return
         # Persist settings before any teardown step that could raise.
         self._settings_flush_timer.stop()
         if not flush_app_settings_cache(self.settings_path):
@@ -3723,6 +3789,9 @@ class LODGaZillaWindow(QMainWindow):
                 # An unfinished set has no demo.umw, so the next start offers it again.
                 self.demo_data_job.cancel()
                 self.demo_data_job.wait(5.0)
+                self.demo_data_job.detach()
+            for check in self._sign_in_checks.values():
+                check.detach()
             self.plugin_updates.shutdown()
             self.plugin_manager.shutdown()
             self.navigator.cancel_background_refresh()

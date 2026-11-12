@@ -264,6 +264,64 @@ class Gnss3DAltitudeTests(_TempCase):
         self.assertEqual(widget.map_view.runJavaScript("tracks.length"), 1)
 
 
+
+class BoundedLoadTests(_TempCase):
+    """X/Y, Map and 3D Map read long series in bounded pieces, never a whole dataset."""
+
+    COUNT = 300_000
+    LARGEST_READ = 70_000
+
+    def setUp(self):
+        super().setUp()
+        self.path = self.folder / "long.h5"
+        times = 1_700_000_000.0 + np.arange(self.COUNT) * 0.01
+        with h5py.File(self.path, "w") as handle:
+            add_series(handle, "GNSS/latitude", times, 60.0 + np.arange(self.COUNT) * 1e-7)
+            add_series(handle, "GNSS/longitude", times, 24.0 + np.arange(self.COUNT) * 1e-7)
+            add_series(handle, "GNSS/altitude", times, np.arange(self.COUNT) * 0.001, unit="m")
+        self.times = times
+        self.reads = []
+        original = h5py.Dataset.__getitem__
+
+        def recording(dataset, key):
+            result = original(dataset, key)
+            self.reads.append(np.size(result))
+            return result
+
+        def whole(dataset, *args, **kwargs):
+            # np.asarray(dataset) reads all of it.
+            self.reads.append(dataset.size)
+            return original(dataset, ())
+
+        for name, replacement in (("__getitem__", recording), ("__array__", whole)):
+            patcher = mock.patch.object(h5py.Dataset, name, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_xy_reads_every_nth_sample_and_aligns_y(self):
+        window = (self.times[100_000], self.times[200_000])
+        time, x_values, y_values, *_ = load_xy_data(self.path, "GNSS/latitude", self.path, "GNSS/longitude",
+                                                    time_range=window, maximum_points=1_000)
+        self.assertLessEqual(max(self.reads), self.LARGEST_READ)
+        self.assertLessEqual(len(time), 1_000)
+        self.assertGreater(len(time), 900)
+        self.assertTrue(window[0] <= time[0] and time[-1] <= window[1])
+        np.testing.assert_allclose(y_values - 24.0, x_values - 60.0, atol=1e-9)
+
+    def test_map_and_3d_map_read_bounded_pieces(self):
+        track = load_gnss_track(self.path, "GNSS/latitude", self.path, "GNSS/longitude", maximum_points=1_000)
+        self.assertEqual(track["available_points"], self.COUNT)
+        self.assertLessEqual(len(track["lat"]), 1_000)
+        np.testing.assert_allclose(np.asarray(track["lon"]) - 24.0, np.asarray(track["lat"]) - 60.0, atol=1e-9)
+        self.reads.clear()
+        axes = (AxisSource(self.path, "GNSS/latitude"), AxisSource(self.path, "GNSS/longitude"),
+                AxisSource(self.path, "GNSS/altitude"))
+        result = load_3d_gnss_group(axes, maximum_points=1_000)
+        self.assertLessEqual(max(self.reads), self.LARGEST_READ)
+        heights = [point[2] for point in result["coordinates"]]
+        expected = (np.asarray(result["time"]) - self.times[0]) / 0.01 * 0.001
+        np.testing.assert_allclose(heights, expected, atol=1e-6)
+
 class XYTests(_TempCase):
     def test_r5_coverage_has_no_half_sample_extrapolation(self):
         path = self.make_file([-.4, 0., 1., 2., 2.4], [0., 1., 2.])

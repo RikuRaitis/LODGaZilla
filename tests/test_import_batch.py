@@ -25,7 +25,10 @@ class ImportBatchTests(unittest.TestCase):
     def test_cache_write_files_never_reach_importer_selection(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
+            # Caches, and LODGaZilla's own working files: an audio H5 being written, a folder
+            # info lock and a folder info write.
             names = ('data.h5', 'data.hdf5', '.data.h5.abcd.tmp', '.data.HDF5.123.tmp',
+                     '.talk.wav.audio.h5.x1y2.partial', 'run_info.json.lock', 'run_info.json.ab12.tmp',
                      'data.bin', 'ordinary.tmp')
             for name in names:
                 (folder / name).touch()

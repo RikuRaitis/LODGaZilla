@@ -96,6 +96,13 @@ class PointMarkerTests(unittest.TestCase):
         self.assertEqual(card.marker_values(), (2.0, None))
         self.assertEqual(len(card._selection_items[0].getData()[0] or []), 0)
         self.assertNotIn("Selection", box.details_text())
+        # A reload (here a new Sample limit) brings the values box back on the new points.
+        card.sample_limit_combo.setCurrentIndex((card.sample_limit_combo.currentIndex() + 1)
+                                                % card.sample_limit_combo.count())
+        # The graph stays drawn while it reloads.
+        self.assertGreater(len(card._graph_items[0][0].getData()[0]), 0)
+        self.wait_for(lambda: card.value_boxes.visible_boxes(0))
+        self.assertEqual(card.value_boxes.visible_boxes(0)[0].item.x_value, 2.0)
 
     def test_xy_markers_link_with_time_cards(self):
         line = self.workspace.add_line_plot(self.path, "x")
@@ -115,8 +122,14 @@ class PointMarkerTests(unittest.TestCase):
         card.view.clicked.emit(Qt.MouseButton.LeftButton, QPointF(*pixels[3]))
         card.view.clicked.emit(Qt.MouseButton.RightButton, QPointF(*pixels[7]))
         self.assertEqual(card.marker_values(), (3.0, 7.0))
-        marker_points = [item for item in card._marker_items if type(item).__name__ == "GLScatterPlotItem"]
+        marker_points = [item for item in card._marker_items
+                         if type(item).__name__ == "GLScatterPlotItem" and item.visible()]
         self.assertEqual(len(marker_points), 2)
+        # Moving a marker updates the items in place.
+        items = list(card._marker_items)
+        card.set_vertical_marker(4.0, 0)
+        card.set_vertical_marker(3.0, 0)
+        self.assertEqual(card._marker_items, items)
         card.show_marker_data(3.0, 0)
         box = card.value_boxes.visible_boxes(0)[0]
         self.assertEqual(box.item.anchor(), tuple(float(value) for value in pixels[3]))

@@ -59,10 +59,12 @@ from src.data.navigator_data import (
     folder_info_index_from_data,
     filter_folders_by_metadata,
     format_log_length,
+    folder_needs_h5_generation,
     folder_has_h5_files,
     folder_info_group_path,
     metadata_values_for_key,
     read_h5_navigator_data,
+    resolved_path,
     update_folder_info_index,
 )
 from src.gui.navigator.controls import FILTER_KEY_PLACEHOLDER, NavigatorControlsWidget
@@ -1031,11 +1033,16 @@ class DataNavigatorWidget(QWidget):
         if self.settings_path is None:
             return
         settings = load_navigator_control_settings(self.settings_path)
+        default_keys = set(load_default_info_metadata_settings(self.settings_path)["keys"])
+        # The tree is rebuilt only when a setting it is built from changed.
+        tree_changed = (
+            default_keys != self.default_info_metadata_keys
+            or replace(settings, recent_folders=())
+            != replace(self.navigator_control_settings, recent_folders=())
+        )
         self.navigator_control_settings = settings
         self.diagnostic_row_settings = load_navigator_diagnostics_settings(self.settings_path)
-        self.default_info_metadata_keys = set(
-            load_default_info_metadata_settings(self.settings_path)["keys"]
-        )
+        self.default_info_metadata_keys = default_keys
         self.controls.blockSignals(True)
         try:
             self.controls.hide_irrelevant_button.setChecked(settings.hide_irrelevant_series)
@@ -1048,7 +1055,8 @@ class DataNavigatorWidget(QWidget):
         self.logical_header.update()
         self.tree.viewport().update()
         self.set_recent_folders(settings.recent_folders)
-        self.refresh_tree()
+        if tree_changed:
+            self.refresh_tree()
 
     def data_folder(self) -> Path | None:
         text = self.folder_edit.text().strip()
@@ -1103,13 +1111,13 @@ class DataNavigatorWidget(QWidget):
         snapshot = self._source_snapshot
         if snapshot is None:
             return None
-        return snapshot.folder_infos.get(folder.resolve())
+        return snapshot.folder_infos.get(resolved_path(folder))
 
     def _h5_data_from_snapshot(self, h5_path: Path) -> H5NavigatorData:
         snapshot = self._source_snapshot
         if snapshot is None:
             return read_h5_navigator_data(h5_path)
-        cached = snapshot.h5_data.get(h5_path.resolve())
+        cached = snapshot.h5_data.get(resolved_path(h5_path))
         return cached if cached is not None else read_h5_navigator_data(h5_path)
 
     def snapshot_refresh_in_progress(self) -> bool:
@@ -1192,6 +1200,8 @@ class DataNavigatorWidget(QWidget):
 
     def _apply_snapshot_result(self, result: NavigatorSnapshotResult) -> bool:
         self._source_snapshot = result.snapshot
+        # Folders may have been renamed or linked differently since the last scan.
+        resolved_path.cache_clear()
         for folder, error in result.read_errors.items():
             self._report_metadata_read_failure(folder, error)
         for folder in result.read_ok:
@@ -2569,7 +2579,14 @@ class DataNavigatorWidget(QWidget):
         mode: str,
         info_index: FolderInfoIndex,
     ) -> tuple[str, ...]:
-        source_folder = source_path if source_path.is_dir() else source_path.parent
+        # Scanned folders and H5 files are known without asking the disk.
+        snapshot = self._source_snapshot
+        if snapshot is not None and source_path in snapshot.folder_infos:
+            source_folder = source_path
+        elif snapshot is not None and source_path in snapshot.h5_data:
+            source_folder = source_path.parent
+        else:
+            source_folder = source_path if source_path.is_dir() else source_path.parent
         if mode == GROUPING_NONE:
             relative_parent = source_folder.relative_to(data_folder)
             return relative_parent.parts if relative_parent.parts else ("(root)",)
@@ -2663,7 +2680,7 @@ class DataNavigatorWidget(QWidget):
                 )
             item = self.make_item({COLUMN_DATA: video_path.name})
             item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_VIDEO)
-            item.setData(0, ITEM_PATH_ROLE, str(folder.resolve()))
+            item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
             item.setData(0, ITEM_VIDEO_PATH_ROLE, str(video_path))
             item.setData(0, ITEM_VIDEO_OFFSET_ROLE, offset)
             item.setToolTip(0, str(video_path))
@@ -2684,7 +2701,7 @@ class DataNavigatorWidget(QWidget):
             image_path = attachment_path(folder, image)
             item = self.make_item({COLUMN_DATA: image_path.name})
             item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_IMAGE)
-            item.setData(0, ITEM_PATH_ROLE, str(folder.resolve()))
+            item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
             item.setData(0, ITEM_IMAGE_PATH_ROLE, str(image_path))
             item.setToolTip(0, str(image_path))
             self.reapply_item_values(item)
@@ -2695,7 +2712,7 @@ class DataNavigatorWidget(QWidget):
             COLUMN_DATA: "Info",
         })
         item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_INFO)
-        item.setData(0, ITEM_PATH_ROLE, str(folder.resolve()))
+        item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
         self.reapply_item_values(item)
         return item
 
@@ -2713,7 +2730,7 @@ class DataNavigatorWidget(QWidget):
             COLUMN_INFO_PAIR_VALUE: "[ADD NEW VALUE]" if is_empty else value,
         })
         item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_DETAILED_INFO)
-        item.setData(0, ITEM_PATH_ROLE, str(folder.resolve()))
+        item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
         item.setData(0, ITEM_INFO_KEY_ROLE, key)
         item.setData(0, ITEM_INFO_EDITABLE_ROLE, editable)
         item.setData(0, ITEM_INFO_EMPTY_ROLE, is_empty)
@@ -2790,7 +2807,7 @@ class DataNavigatorWidget(QWidget):
         info_index: FolderInfoIndex,
         log_lengths_by_folder: dict[Path, str],
     ) -> QTreeWidgetItem:
-        folder = folder.resolve()
+        folder = resolved_path(folder)
         values = {
             COLUMN_DATA: display_name,
             COLUMN_LOG_LENGTH: log_lengths_by_folder.get(folder, ""),
@@ -2978,13 +2995,14 @@ class DataNavigatorWidget(QWidget):
         item_type = item.data(0, ITEM_TYPE_ROLE)
         if item_type == ROW_TYPE_FOLDER:
             folder = Path(str(item.data(0, ITEM_PATH_ROLE)))
-            if folder_has_h5_files(folder):
+            if folder_needs_h5_generation(folder):
+                self.folder_import_requested.emit(folder)
+            elif folder_has_h5_files(folder):
                 # QTreeWidget toggles expansion after emitting itemDoubleClicked.
                 # Queue this so activation consistently leaves cached folders
                 # expanded instead of also starting a destructive rebuild.
                 QTimer.singleShot(0, lambda: item.setExpanded(True))
-            else:
-                self.folder_import_requested.emit(folder)
+            # Otherwise, such as a parent folder, the double-click only expands or collapses it.
             return
         if item_type == ROW_TYPE_GROUP:
             # QTreeWidget handles expansion; group activation never opens plots.

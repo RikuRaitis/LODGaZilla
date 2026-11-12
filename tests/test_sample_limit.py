@@ -225,6 +225,18 @@ class SampleLimitSelectorTests(unittest.TestCase):
         press(card.help_button)
         card.help_button.click()
         self.assertIsNone(card._help_popup)
+        # A press that closed it but was released off the button does not swallow the next click.
+        card.help_button.click()
+        press(card.help_button)
+        card.help_button.released.emit()
+        self.app.processEvents()
+        card.help_button.click()
+        self.assertIsNotNone(card._help_popup)
+        card._help_popup.close()
+        # A saved Sample limit the choices lack is shown as itself, not as the first choice.
+        card.restore_workspace_state({"groups": [], "sample_limit": 123_456})
+        self.assertEqual(card.sample_limit_combo.currentData(), 123_456)
+        self.assertEqual(card.sample_limit, 123_456)
         # Every card type has its own help topic.
         from src.data.plot_policy import CARD_TITLES
         self.assertEqual(set(MOUSE_HELP), set(CARD_TITLES))

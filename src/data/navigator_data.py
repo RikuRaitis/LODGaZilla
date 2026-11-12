@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import h5py
+
+from src.data.time_units import seconds_per_time_unit
 
 from src.data.folder_info import (
     FolderInfoData,
@@ -104,10 +107,37 @@ def scan_navigator_folder(data_folder: Path) -> NavigatorFolderScan:
     return NavigatorFolderScan(folders, h5_files)
 
 
+@functools.lru_cache(maxsize=16_384)
+def resolved_path(path: Path) -> Path:
+    """``path.resolve()``, remembered: on Windows each resolve reads the disk, and the
+    Navigator rebuilds its tree on every filter keystroke. Cleared on each folder rescan
+    (``resolved_path.cache_clear()``)."""
+    return path.resolve()
+
+
 def folder_has_h5_files(folder: Path) -> bool:
     if not folder.is_dir():
         return False
     return any(path.is_file() and path.suffix.lower() in {".h5", ".hdf5"} for path in folder.iterdir())
+
+
+def folder_needs_h5_generation(folder: Path) -> bool:
+    """Whether a folder holds data files of its own but no H5 files yet.
+
+    Subfolders, hidden files and the folder's own ``_info.json`` do not count, so a
+    parent folder such as a year folder is never treated as unimported data.
+    """
+    if not folder.is_dir():
+        return False
+    info_name = f"{folder.name}_info.json"
+    has_data = False
+    for path in folder.iterdir():
+        if not path.is_file() or path.name.startswith(".") or path.name == info_name:
+            continue
+        if path.suffix.lower() in {".h5", ".hdf5"}:
+            return False
+        has_data = True
+    return has_data
 
 
 def ensure_folder_info_files(
@@ -186,7 +216,10 @@ def read_h5_series_index(h5_file: h5py.File) -> list[H5Series] | None:
     if not isinstance(payload, list):
         return None
 
-    warnings_by_series = diagnostic_warnings_by_series(h5_file)
+    # Newer files store each series' warning in the index; older ones are walked once for it.
+    items = [item for item in payload if isinstance(item, dict)]
+    indexed_warnings = all("diagnostic_warning" in item for item in items)
+    warnings_by_series = {} if indexed_warnings else diagnostic_warnings_by_series(h5_file)
     series: list[H5Series] = []
     for item in payload:
         if not isinstance(item, dict):
@@ -194,10 +227,9 @@ def read_h5_series_index(h5_file: h5py.File) -> list[H5Series] | None:
         navigator_name = attribute_text(item.get("navigator_name", item.get("display_name", item.get("name", ""))))
         display_name = attribute_text(item.get("display_name", navigator_name))
         navigator_group = attribute_text(item.get("navigator_group", "Ungrouped"))
-        metadata = merge_warning_metadata(
-            parse_series_metadata(item.get("navigator_metadata", [])),
-            warnings_by_series.get((navigator_group, navigator_name), ""),
-        )
+        warning = (attribute_text(item.get("diagnostic_warning", "")) if indexed_warnings
+                   else warnings_by_series.get((navigator_group, navigator_name), ""))
+        metadata = merge_warning_metadata(parse_series_metadata(item.get("navigator_metadata", [])), warning)
         series.append(H5Series(
             attribute_text(item.get("name", navigator_name)),
             display_name,
@@ -397,7 +429,7 @@ def filter_folders_by_metadata(
     exact = any(value.strip().casefold() == needle for value in metadata_values_for_key(info_index, key))
     matches: list[Path] = []
     for folder in folders:
-        values = info_index.values_by_folder.get(folder.resolve(), {})
+        values = info_index.values_by_folder.get(resolved_path(folder), {})
         if key not in values:
             continue
         value = values[key]
@@ -504,7 +536,7 @@ def format_log_length(seconds: float) -> str:
 
 
 def folder_info_group_path(folder: Path, key: str, values_by_folder: dict[Path, dict[str, str]]) -> tuple[str, ...]:
-    values = values_by_folder.get(folder.resolve(), {})
+    values = values_by_folder.get(resolved_path(folder), {})
     canonical_key = normalise_info_key(key)
     value = next(
         (candidate_value for candidate_key, candidate_value in values.items()
@@ -545,16 +577,7 @@ def calculate_sample_rate_hz(group: h5py.Group, sample_count: int) -> float | No
 
 
 def time_unit_seconds_multiplier(time_unit: str, _time_dataset_name: str) -> float:
-    normalized = time_unit.strip().lower()
-    if normalized in {"s", "sec", "secs", "second", "seconds"}:
-        return 1.0
-    if normalized in {"ms", "millisecond", "milliseconds"}:
-        return 0.001
-    if normalized in {"us", "microsecond", "microseconds"}:
-        return 0.000001
-    if normalized in {"ns", "nanosecond", "nanoseconds"}:
-        return 0.000000001
-    return 1.0
+    return seconds_per_time_unit(time_unit)
 
 
 def format_sample_rate(sample_rate_hz: float | None) -> str:

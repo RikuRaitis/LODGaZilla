@@ -65,6 +65,8 @@ class AudioConversionTests(unittest.TestCase):
     def test_wav_converts_to_counts_with_lod_and_offset(self):
         samples = write_wav(self.folder / "talk.wav")
         output = self.folder / "talk.wav.audio.h5"
+        # Left by a conversion whose process was stopped; the next conversion removes it.
+        (self.folder / ".talk.wav.audio.h5.stale1.partial").write_bytes(b"x")
         events = convert(self.folder / "talk.wav", output, offset=5.0)
         self.assertEqual(events[-1][:3], ("finished", 1, 0))
         with h5py.File(output, "r") as h5_file:
@@ -101,6 +103,25 @@ class AudioConversionTests(unittest.TestCase):
         with h5py.File(output, "r") as h5_file:
             self.assertEqual(h5_file.attrs["log_start_unix_seconds"], LOG_START - 1.5)
             self.assertEqual(h5_file[f"series/Media/{_safe_hdf5_name('Audio left')}/time_s"][0], 0.0)
+
+    def test_busy_audio_is_retried_later_without_blocking(self):
+        from PySide6.QtCore import QObject
+        from src.app import lodgazilla
+        from tests.qt_wait import qt_wait_until
+
+        owner, results = QObject(), []
+        answers = iter([False, False, True])
+        with mock.patch.object(lodgazilla, "set_audio_offset", side_effect=lambda *_: next(answers)) as attempt:
+            lodgazilla.retry_audio_offset(owner, Path("a.audio.h5"), 1.0, results.append, delay_ms=1)
+            # The first attempt failed and returned at once; later ones run from the event loop.
+            self.assertEqual((attempt.call_count, results), (1, []))
+            self.assertTrue(qt_wait_until(lambda: results, 2000))
+        self.assertEqual((attempt.call_count, results), (3, [True]))
+        with mock.patch.object(lodgazilla, "set_audio_offset", return_value=False):
+            results.clear()
+            lodgazilla.retry_audio_offset(owner, Path("a.audio.h5"), 1.0, results.append, attempts=2, delay_ms=1)
+            self.assertTrue(qt_wait_until(lambda: results, 2000))
+        self.assertEqual(results, [False])
 
     def test_folder_log_start_ignores_audio_files(self):
         write_wav(self.folder / "a.wav", seconds=0.2)

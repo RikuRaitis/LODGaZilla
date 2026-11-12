@@ -19,7 +19,7 @@ from src.gui.plots.base import PlotBaseWidget, series_from_mime
 from src.gui.plots.legend import PlotLegendWidget
 from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup
 from src.data.sampling import decimation_step
-from src.data.xyz import AxisSource, nearest_sample_indices
+from src.data.xyz import AxisSource, _aligned_values
 from src.jobs.plot_groups import GroupedPlotLoadCoordinator
 from src.gui.plots.theme import apply_map_background, canvas_background, palette_overlay_stylesheet
 from src.gui.plots.marker_info import MarkerInfoEntry
@@ -27,7 +27,12 @@ from src.gui.plots.markers import (
     FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
-from src.data.h5_series import _navigator_series_names
+from src.data.h5_series import (
+    _canonical_to_native_range,
+    _navigator_series_names,
+    _visible_sample_bounds,
+    series_value_range,
+)
 from src.gui.plots.series import (
     _attribute_text,
     _series_group_for_navigator_name,
@@ -613,51 +618,51 @@ def gnss_pair_for_series(h5_path: Path, series_name: str) -> tuple[Path, str, Pa
 
 def load_gnss_group(axes, *, time_range=None, cancelled=None, maximum_points=MAP_MAXIMUM_POINTS):
     return load_gnss_track(axes[0].path, axes[0].name, axes[1].path, axes[1].name, time_range=time_range,
-                           maximum_points=maximum_points)
+                           maximum_points=maximum_points, cancelled=cancelled)
 
 
 def load_gnss_track(h5_path: Path, lat_name: str, lon_path: Path, lon_name: str, *, time_range=None,
-                    maximum_points: int = MAP_MAXIMUM_POINTS) -> dict[str, list[float]]:
+                    maximum_points: int = MAP_MAXIMUM_POINTS, cancelled=None) -> dict[str, list[float]]:
+    """Every Nth latitude sample in the time range, with the nearest longitude.
+
+    Memory stays bounded whatever the track length: latitude is read every Nth sample
+    within the range, longitude is searched in chunks, and each coordinate scale comes
+    from the series' LOD minimum and maximum (or a chunked scan).
+    """
     with h5py.File(h5_path, "r") as h5_file, h5py.File(lon_path, "r") as lon_file:
         lat_group = _series_group_for_navigator_name(h5_file, lat_name)
         lon_group = _series_group_for_navigator_name(lon_file, lon_name)
         time_dataset_name = _attribute_text(lat_group.attrs.get("time_dataset", "time_unix"))
         time_unit = _attribute_text(lat_group.attrs.get("time_unit", time_dataset_name.removeprefix("time_")))
         time_reference = _attribute_text(lat_group.attrs.get("time_reference", ""))
-        device_times = np.asarray(lat_group[time_dataset_name], dtype=float)
+        lat_times = lat_group[time_dataset_name]
         lat_metadata = _time_axis_metadata_from_group(h5_file, lat_group)
         raw_time_origin = lat_metadata.raw_origin
         seconds_per_unit = _time_unit_seconds(time_unit)
         is_unix_time = time_reference.casefold() == "unix" or time_dataset_name == "time_unix"
         log_start = h5_file.attrs.get("log_start_unix_seconds")
-        latitudes = np.asarray(lat_group["value"], dtype=float)
-        all_longitudes = np.asarray(lon_group["value"], dtype=float)
         # Choose one fixed-point scale per series from all samples, so a time
         # range selection cannot change how the same coordinates are read.
-        lat_scale = _coordinate_scale(latitudes, 90.0, unit=_attribute_text(lat_group.attrs.get("unit", "")),
-                                      name=lat_name, source=_attribute_text(lat_group.attrs.get("source", "")))
-        lon_scale = _coordinate_scale(all_longitudes, 180.0, unit=_attribute_text(lon_group.attrs.get("unit", "")),
-                                      name=lon_name, source=_attribute_text(lon_group.attrs.get("source", "")))
+        lat_scale = _series_coordinate_scale(h5_file, lat_group, lat_name, 90.0)
+        lon_scale = _series_coordinate_scale(lon_file, lon_group, lon_name, 180.0)
+        lon_times = lon_group[_attribute_text(lon_group.attrs.get("time_dataset", "time_unix"))]
+        if not len(lon_times):
+            raise ValueError("Longitude series has no samples")
+        start, stop = _visible_sample_bounds(lat_times, _canonical_to_native_range(time_range, lat_metadata))
+        available = max(0, stop - start)
+        step = decimation_step(available, maximum_points)
+        device_times = np.asarray(lat_times[start:stop:step], dtype=float)
         # Use the file's time origin, as every other card does, rather than
         # the first GNSS fix; the map then shares the linked marker time.
         universal_times = _canonical_time_values(device_times, lat_metadata)
-        lon_times = _canonical_time_values(
-            np.asarray(lon_group[_attribute_text(lon_group.attrs.get("time_dataset", "time_unix"))], dtype=float),
-            _time_axis_metadata_from_group(lon_file, lon_group))
-        if not len(lon_times):
-            raise ValueError("Longitude series has no samples")
+        latitudes = np.asarray(lat_group["value"][start:stop:step], dtype=float)
         if time_range is not None:
             lower, upper = sorted(time_range)
-            mask = (universal_times >= lower) & (universal_times <= upper)
-            device_times, universal_times, latitudes = (
-                device_times[mask], universal_times[mask], latitudes[mask]
-            )
-        available = len(device_times)
-        step = decimation_step(available, maximum_points)
-        device_times, universal_times, latitudes = (
-            device_times[::step], universal_times[::step], latitudes[::step]
-        )
-        longitudes = all_longitudes[nearest_sample_indices(lon_times, universal_times)]
+            inside = (universal_times >= lower) & (universal_times <= upper)
+            device_times, universal_times, latitudes = device_times[inside], universal_times[inside], latitudes[inside]
+        lon_metadata = _time_axis_metadata_from_group(lon_file, lon_group)
+        longitudes = (_aligned_values(lon_times, lon_group["value"], lon_metadata, universal_times, cancelled)
+                      if len(universal_times) else np.empty(0))
     latitudes = latitudes / lat_scale
     longitudes = longitudes / lon_scale
     valid = (
@@ -682,14 +687,20 @@ def load_gnss_track(h5_path: Path, lat_name: str, lon_path: Path, lon_name: str,
     }
 
 
-def _coordinate_scale(values: np.ndarray, maximum_degrees: float, *, unit="", name="", source="") -> float:
-    """Return the one divisor that converts a whole coordinate series to degrees.
+def _series_coordinate_scale(h5_file, group, name: str, maximum_degrees: float) -> float:  # type: ignore[no-untyped-def]
+    """The coordinate scale of a whole series, without reading all its samples at once."""
+    unit = _attribute_text(group.attrs.get("unit", ""))
+    source = _attribute_text(group.attrs.get("source", ""))
+    declared = _declared_coordinate_scale(unit=unit, name=name, source=source)
+    if declared is not None:
+        return declared
+    # Only an unlabelled series needs its magnitude: LOD bounds, or a chunked scan.
+    bounds = series_value_range(h5_file, name, scan_raw=True)
+    return _coordinate_scale(np.asarray(bounds if bounds is not None else [], dtype=float), maximum_degrees)
 
-    Explicit units take precedence over all magnitude heuristics. Legacy
-    legacy 'raw' coordinates are E7, including samples arbitrarily close to
-    zero. Partly scaled caches can declare 'deg*10'. Only unlabelled legacy
-    series fall back to a single scale chosen from the complete series.
-    """
+
+def _declared_coordinate_scale(*, unit="", name="", source="") -> float | None:
+    """The scale a series' unit, name or source states; None when only its values can tell."""
     unit = unit.strip().casefold()
     leaf = name.rsplit("/", 1)[-1].casefold()
     if unit in {"deg", "degree", "degrees", "°"}:
@@ -702,6 +713,20 @@ def _coordinate_scale(values: np.ndarray, maximum_degrees: float, *, unit="", na
         return 10.0
     if not unit and leaf.endswith("_deg"):
         return 1.0
+    return None
+
+
+def _coordinate_scale(values: np.ndarray, maximum_degrees: float, *, unit="", name="", source="") -> float:
+    """Return the one divisor that converts a whole coordinate series to degrees.
+
+    Explicit units take precedence over all magnitude heuristics. Legacy
+    legacy 'raw' coordinates are E7, including samples arbitrarily close to
+    zero. Partly scaled caches can declare 'deg*10'. Only unlabelled legacy
+    series fall back to a single scale chosen from the complete series.
+    """
+    declared = _declared_coordinate_scale(unit=unit, name=name, source=source)
+    if declared is not None:
+        return declared
     finite = np.abs(np.asarray(values, dtype=float))
     finite = finite[np.isfinite(finite)]
     if not len(finite):

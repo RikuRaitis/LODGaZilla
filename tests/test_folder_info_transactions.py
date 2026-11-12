@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from src.data.folder_info import FolderInfoData, read_info_file, write_info_file
+from src.data.folder_info import FolderInfoData, _replace_with_retry, read_info_file, write_info_file
 
 
 def _edit_in_process(folder, key, ready, release):
@@ -93,11 +93,27 @@ class FolderInfoTransactionTests(unittest.TestCase):
     def test_failed_replace_keeps_original_and_cleans_unique_temp(self):
         info = read_info_file(self.folder)
         info.editable["comment"] = "changed"
-        with mock.patch("pathlib.Path.replace", side_effect=PermissionError("locked")):
+        with mock.patch("pathlib.Path.replace", side_effect=PermissionError("locked")),                 mock.patch.dict(_replace_with_retry.__kwdefaults__, {"seconds": 0.05}):
             with self.assertRaises(PermissionError):
                 write_info_file(self.folder, info)
         self.assertEqual(read_info_file(self.folder).editable["comment"], "before")
         self.assertEqual(list(self.folder.glob("*.tmp")), [])
+
+    def test_a_moment_of_sharing_violation_is_retried(self):
+        info = read_info_file(self.folder)
+        info.editable["comment"] = "changed"
+        original = Path.replace
+        failures = iter([PermissionError("in use"), PermissionError("in use")])
+
+        def replace(source, target):
+            error = next(failures, None)
+            if error is not None:
+                raise error
+            return original(source, target)
+
+        with mock.patch("pathlib.Path.replace", replace):
+            write_info_file(self.folder, info)
+        self.assertEqual(read_info_file(self.folder).editable["comment"], "changed")
 
     def test_reusing_a_saved_object_and_copying_to_another_folder(self):
         user = read_info_file(self.folder)

@@ -126,6 +126,11 @@ class GnssCoordinateTests(unittest.TestCase):
             self.assertGreater(len(plot._items), 1)
             self.assertTrue(plot._contains_time(1_700_000_000.15))
             self.assertFalse(plot._contains_time(1_700_000_001.0))
+            # Outside the Plot navigator trim the card shows no values.
+            plot.data_time_range = (1_700_000_000.2, 1_700_000_000.4)
+            self.assertFalse(plot._contains_time(1_700_000_000.15))
+            self.assertTrue(plot._contains_time(1_700_000_000.25))
+            plot.data_time_range = None
             self.assertAlmostEqual(float(plot._timeline_data[0]["h5_start"]), 1_700_000_000.0)
             self.assertAlmostEqual(float(plot._timeline_data[0]["h5_end"]), 1_700_000_000.45)
             self.assertTrue(is_event_state_series(h5_path, "is_wet"))
@@ -156,6 +161,13 @@ class GnssCoordinateTests(unittest.TestCase):
 
             self.assertEqual(len(plot._timeline_data), 2)
             self.assertEqual(len(plot.legend.rows), 2)
+            # A pan or zoom reload with the same series leaves the legend and lane names alone.
+            loaded = list(plot._timeline_data)
+            names = list(plot._lane_axis_labels)
+            with mock.patch.object(plot.legend, "set_entries") as set_entries:
+                plot._render_timeline(loaded)
+            set_entries.assert_not_called()
+            self.assertEqual(plot._lane_axis_labels, names)
             self.assertTrue(plot.legend.isVisible())
             self.assertGreater(plot.legend.width(), 0)
             self.assertLess(plot.legend.x(), plot.plot_widget.width())

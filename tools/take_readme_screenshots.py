@@ -166,7 +166,6 @@ class Screenshots:
         # Picture names (without .png) to take; empty takes them all.
         self.only = set(only)
         state = read_workspace_file(workspace)
-        self.plot_navigator_state = state.get("plot_navigator", {})
         # Grouped by date and filtered to the demo sessions, so a user's own folders in demodata stay hidden.
         self.navigator_state = {"folder": str(workspace.parent), "group_by": "Year/Month/Day",
                                 "filter_key": "dataset", "filter_value": DEMO_DATASET}
@@ -187,11 +186,10 @@ class Screenshots:
         workspace_rows = [{"height": height, "widths": None,
                            "cards": [copy.deepcopy(self.records[kind]) for kind in kinds if kind in self.records]}
                           for height, kinds in rows]
-        state = {"navigator": self.navigator_state, "plot_navigator": self.plot_navigator_state,
+        state = {"navigator": self.navigator_state,
                  "workspace": {"rows": [row for row in workspace_rows if row["cards"]], "active": 0, "scroll": 0}}
         for problem in self.window.apply_workspace_state(state):
             print("Not restored:", problem)
-        # After the workspace, whose Plot navigator settings would switch them back on.
         self.set_toggles(legends=legends, card_controls=card_controls, plot_navigator=plot_navigator)
         wait(self.app, 12)
         # Both markers and the selection between them, a third of the way into the run.
@@ -392,6 +390,8 @@ def main() -> int:
     settings = json.loads((ROOT / "app_settings.json").read_text(encoding="utf-8"))
     settings.setdefault("appearance", {})["theme"] = arguments.theme
     settings.setdefault("lodgazilla", {})["offer_demo_data"] = False
+    # Linked markers and views, with the time axis on the bottom card (Plot navigator preferences).
+    settings["lodgazilla"].update(link_markers=True, link_plot_x_axes=True, time_axis_display="bottom")
     settings_path.write_text(json.dumps(settings), encoding="utf-8")
 
     configure_graphics()

@@ -10,6 +10,8 @@ from threading import RLock
 import h5py
 import numpy as np
 
+from src.data.time_units import seconds_per_time_unit
+
 
 SERIES_PATH_CACHE_LIMIT = 64
 
@@ -231,14 +233,8 @@ def _optional_float(value: object) -> float | None:
 
 
 def _time_unit_seconds(unit: str) -> float:
-    # The same names the H5 writer accepts (time_unit_seconds_multiplier), so a time
-    # stored in "milliseconds" is not plotted 1000 times too large.
-    return {
-        "ns": 1e-9, "nanosecond": 1e-9, "nanoseconds": 1e-9,
-        "us": 1e-6, "µs": 1e-6, "microsecond": 1e-6, "microseconds": 1e-6,
-        "ms": 1e-3, "millisecond": 1e-3, "milliseconds": 1e-3,
-        "s": 1.0, "sec": 1.0, "secs": 1.0, "second": 1.0, "seconds": 1.0,
-    }.get(unit.strip().casefold(), 1.0)
+    # The writer's and the Navigator's table too, so all read "milliseconds" alike.
+    return seconds_per_time_unit(unit)
 
 
 def series_value_range(h5_file: h5py.File, series_name: str, *, scan_raw: bool = False) -> tuple[float, float] | None:

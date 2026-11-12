@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QPainter, QPalette
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel,
                                QToolButton, QVBoxLayout, QWidget)
@@ -232,6 +232,10 @@ class PlotBaseWidget(QFrame):
         self.help_button.setIconSize(QSize(18, 18))
         self.help_button.setIcon(plot_control_icon(self, "help"))
         self.help_button.clicked.connect(self.show_mouse_help)
+        # The flag set when a press on this button closed the help applies to that press's
+        # click only; clear it after the release (clicked comes first), even without a click.
+        self.help_button.released.connect(
+            lambda: QTimer.singleShot(0, self, lambda: setattr(self, "_help_closed_by_button", False)))
         self.header_controls.append(self.help_button)
         self._help_popup: MouseHelpPopup | None = None
         self._help_closed_by_button = False
@@ -509,6 +513,10 @@ class PlotBaseWidget(QFrame):
         combo.blockSignals(True)
         try:
             combo.clear()
+            if self.sample_limit not in [limit for limit, _text in items]:
+                # A limit saved in a workspace that the choices lack is still shown as itself.
+                items = sorted([*items, (self.sample_limit, _limit_text(self.sample_limit))],
+                               key=lambda item: (item[0] <= SAMPLE_LIMIT_ALL, item[0]))
             for limit, text in items:
                 combo.addItem(text, limit)
             combo.setCurrentIndex(max(0, combo.findData(self.sample_limit)))
@@ -594,21 +602,27 @@ class PlotBaseWidget(QFrame):
             state["draw_style"] = self.draw_style
         if abs(self.time_offset) >= 0.0005:
             state["time_offset"] = self.time_offset
+        representation = getattr(self, "time_axis_representation", None)
+        if callable(representation):
+            # Real date/time or time from log start, on cards with a time axis.
+            state["time_axis_representation"] = representation()
         return state
 
     def restore_workspace_state(self, state: dict) -> None:
         """Show the saved sources, replacing those the card was created with."""
         if self.supports_time_offset and isinstance(state.get("time_offset"), (int, float)):
             self.set_time_offset(float(state["time_offset"]))
+        set_representation = getattr(self, "set_time_axis_representation", None)
+        if callable(set_representation) and isinstance(state.get("time_axis_representation"), str):
+            set_representation(state["time_axis_representation"])
         if self.supports_draw_style:
             style = state.get("draw_style", DRAW_AUTO)
             self.set_draw_style(style if style in DRAW_STYLES else DRAW_AUTO)
         if self.default_sample_limit is not None and isinstance(state.get("sample_limit"), int):
             self.sample_limit = state["sample_limit"]
-            combo = self.sample_limit_combo
-            combo.blockSignals(True)
-            combo.setCurrentIndex(max(0, combo.findData(self.sample_limit)))
-            combo.blockSignals(False)
+            self._set_sample_limit_items([(combo_limit, self.sample_limit_combo.itemText(index))
+                                          for index in range(self.sample_limit_combo.count())
+                                          if (combo_limit := self.sample_limit_combo.itemData(index)) is not None])
         if "groups" in state and hasattr(self, "grouped_series"):
             from dataclasses import replace
             from src.data.xyz import AxisSource

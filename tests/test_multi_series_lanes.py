@@ -15,6 +15,7 @@ from src.app.settings import PLOT_SECTION, load_plot_settings, sanitize_plot_set
 from src.gui.plots.multi import MultiPlotWidget, next_lane_center
 from src.gui.settings_widget import SettingsEditorWidget
 from src.data.h5_series import series_value_range
+from src.gui.plots.diagnostic_areas import SAMPLE_LOSS  # noqa: E402
 from unittest.mock import patch
 
 
@@ -149,22 +150,55 @@ class MultiSeriesLaneTests(unittest.TestCase):
         starts, ends, _texts = render("")
         np.testing.assert_allclose(ends[:-1], starts[1:])
 
-    def test_sample_loss_area_covers_only_the_first_series_lane(self):
+
+    def test_dense_lanes_draw_a_bounded_number_of_bars(self):
+        import pyqtgraph as pg
+        from src.gui.plots.event_state import render_event_state_lane
+        widget = pg.PlotWidget()
+        self.addCleanup(widget.deleteLater)
+        widget.resize(500, 120)
+        widget.show()
+        self.app.processEvents()
+        plot = widget.getPlotItem()
+
+        def bars(times, values, kind):
+            items = render_event_state_lane(plot, 0, {"time": times, "value": values, "labels": {},
+                                                       "kind": kind, "unit": ""}, "#888888")
+            for item in items:
+                plot.removeItem(item)
+            boxes = [item for item in items if isinstance(item, pg.BarGraphItem)]
+            return (np.concatenate([np.asarray(box.opts["x0"]) for box in boxes]),
+                    np.concatenate([np.asarray(box.opts["x1"]) for box in boxes]))
+
+        # Repeated samples of a state are one bar, lasting until the state changes.
+        starts, ends = bars(np.arange(6.0), np.asarray([0., 0., 1., 1., 1., 0.]), "state")
+        np.testing.assert_allclose(sorted(zip(starts, ends)), [(0., 2.), (2., 5.), (5., 5.)])
+        # 200,000 events in a lane a few hundred pixels wide: at most two bars per pixel.
+        times = np.arange(200_000) * 0.001
+        starts, ends = bars(times, np.arange(200_000) % 7, "event")
+        self.assertLessEqual(len(starts), 2 * plot.vb.width())
+        self.assertAlmostEqual(starts.min(), 0.0)
+        self.assertAlmostEqual(ends.max(), times[-1])
+
+    def test_sample_loss_areas_cover_each_series_lane(self):
         with h5py.File(self.path, 'a') as h5:
-            losses = h5['series/voltage'].create_group('sample_loss_list')
-            losses.create_dataset('sample_loss_start_s', data=[1.0])
-            losses.create_dataset('sample_loss_stop_s', data=[2.0])
+            for name in ('voltage', 'pressure'):
+                losses = h5[f'series/{name}'].create_group('sample_loss_list')
+                losses.create_dataset('sample_loss_start_s', data=[1.0])
+                losses.create_dataset('sample_loss_stop_s', data=[2.0])
         card = self.card()
         card.add_series(self.path, 'pressure')
         plot = card.series_plot
         plot.plot_item.getViewBox().setYRange(0, 1, padding=0)
         self.app.processEvents()
-        self.assertEqual(len(plot.sample_loss_regions), 1)
-        np.testing.assert_allclose(plot.sample_loss_regions[0].span, (0.0, 0.1), atol=1e-6)
+        voltage, pressure = sorted(plot.diagnostic_items(SAMPLE_LOSS), key=lambda item: item.series_index)
+        np.testing.assert_allclose(voltage.value_range(), (0.0, 0.1), atol=1e-6)
+        lane = pressure.value_range()
+        self.assertGreater(min(lane), 0.1 - 1e-6)
         # Moving the series moves its diagnostic area with it.
         plot.select_series((self.path, 'voltage'))
         plot.move_selected(0.5)
-        np.testing.assert_allclose(plot.sample_loss_regions[0].span, (0.5, 0.6), atol=1e-6)
+        np.testing.assert_allclose(voltage.value_range(), (0.5, 0.6), atol=1e-6)
 
     def test_lane_height_setting_applies_to_new_series(self):
         save_settings_section(self.settings, PLOT_SECTION, {'multi_series_lane_height_percent': 20})

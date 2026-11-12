@@ -1,10 +1,13 @@
-"""UMW (LODGaZilla workspace) files: a saved Navigator, Plot navigator and Plot workspace.
+"""UMW (LODGaZilla workspace) files: a saved Navigator and Plot workspace.
 
 A ``.umw`` file is UTF-8 JSON::
 
     {"format": "UMW", "version": 1, "application": "LODGaZilla", "application_version": "1.0.0",
      "saved": "...",
-     "navigator": {...}, "plot_navigator": {...}, "workspace": {"rows": [...], ...}}
+     "navigator": {...}, "workspace": {"rows": [...], ...}}
+
+Files from 1.0.0-beta.2 and earlier also have a "plot_navigator" section with the Plot
+navigator buttons; it is ignored, because those buttons are the user's preferences.
 
 Values under a ``path`` or ``folder`` key are file locations. They are stored
 relative to the workspace file when possible, so a workspace saved beside its

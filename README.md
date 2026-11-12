@@ -113,8 +113,9 @@ data series there to plot it. It needs the Claude Code or Codex tool, as describ
 
 **Open a data folder.** Once you have files and plugins for them, choose the folder in
 the **Data folder** field at the top left (its dropdown starts with **[Browse…]**).
-Double-click a folder that has no H5 files yet to convert it, then double-click a data
-series to plot it, or drag it into the plot area on the right.
+Double-click a folder whose data files have no H5 files yet to convert it (a folder
+that holds only subfolders just expands), then double-click a data series to plot it,
+or drag it into the plot area on the right.
 
 ## Using LODGaZilla
 
@@ -314,6 +315,9 @@ with no lines between them.
 **Save workspace** (Ctrl+S) saves everything you see into a `.umw` file: the cards,
 their layout, series, zoom and settings, both markers, and the Navigator's folder,
 grouping and filter. **Open workspace** (Ctrl+O) brings it all back exactly as it was.
+The Plot navigator buttons (linking, legends, card controls, time axis) are your own
+preferences and are not saved in workspaces. While cards are open, opening a workspace
+or closing LODGaZilla first asks whether to save them.
 **Open recent workspace** lists the last ten. Paths are stored relative to the
 workspace file, so a workspace saved next to its data still opens after you move the
 folder.
@@ -346,7 +350,9 @@ any time card.
 ![Line card](docs/images/card_line.png)
 
 Numeric series against time. **Ctrl+wheel** zooms and dragging pans. Shaded areas mark
-sample loss and clipping.
+sample loss and clipping, for every series; with several series, a band along the bottom
+of an area shows the series' color. A snapping marker snaps to the nearest sample of any
+series in the card.
 
 ### Multi-series
 

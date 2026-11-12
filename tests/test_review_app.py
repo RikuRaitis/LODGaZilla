@@ -279,12 +279,17 @@ class SeriesTimeRangeCacheTests(unittest.TestCase):
             path = Path(directory) / "data.h5"
             path.write_bytes(b"x")
             lodgazilla._SERIES_TIME_RANGE_CACHE.clear()
+            lodgazilla._H5_STAT_CACHE.clear()
             with mock.patch.object(PlotWorkspace, "_read_series_time_range", return_value=(1.0, 2.0)) as read:
                 self.assertEqual(PlotWorkspace._series_time_range(path, "a"), (1.0, 2.0))
                 self.assertEqual(PlotWorkspace._series_time_range(path, "a"), (1.0, 2.0))
                 self.assertEqual(read.call_count, 1)
                 path.write_bytes(b"changed")
+                # Within a second (a bar drag), the file is not checked again.
                 PlotWorkspace._series_time_range(path, "a")
+                self.assertEqual(read.call_count, 1)
+                with mock.patch.object(lodgazilla, "H5_STAT_MAX_AGE_SECONDS", -1.0):
+                    PlotWorkspace._series_time_range(path, "a")
                 self.assertEqual(read.call_count, 2)
             self.assertIsNone(PlotWorkspace._series_time_range(Path(directory) / "missing.h5", "a"))
 

@@ -469,11 +469,15 @@ class MultiSeriesPlot(SeriesPlotWidget):
             pending.setCosmetic(True)
             failed = str(lane.path) in self._frames.failed_paths
             missing = []
-            for image, placeholder, (slot_left, step, seconds) in zip(lane.images, lane.placeholders, slots):
+            # An image keeps the frame it shows: panning moves it to that frame's new slot
+            # instead of uploading every frame again (`shown_frame`).
+            showing = {id(image.shown_frame): image for image in lane.images
+                       if getattr(image, "shown_frame", None) is not None}
+            placed = []
+            for placeholder, (slot_left, step, seconds) in zip(lane.placeholders, slots):
                 rect = QRectF(slot_left, lane.center - height / 2, step, height)
                 frame = self._frames.frame(lane.path, seconds, self.filmstrip_height)
                 if frame is None:
-                    image.hide()
                     known = self._frames.known(lane.path, seconds, self.filmstrip_height)
                     if not known:
                         missing.append(seconds)
@@ -483,11 +487,20 @@ class MultiSeriesPlot(SeriesPlotWidget):
                     placeholder.setVisible(not known and not failed)
                     continue
                 placeholder.hide()
-                # Image rows run top down; the view's Y axis runs bottom up.
-                image.setImage(frame[::-1], autoLevels=False, levels=(0, 255))
+                placed.append((rect, frame, showing.pop(id(frame), None)))
+            in_use = {id(image) for _rect, _frame, image in placed if image is not None}
+            free = [image for image in lane.images if id(image) not in in_use]
+            for rect, frame, image in placed:
+                if image is None:
+                    image = free.pop(0)
+                    # Image rows run top down; the view's Y axis runs bottom up.
+                    image.setImage(frame[::-1], autoLevels=False, levels=(0, 255))
+                    image.shown_frame = frame
                 image.setRect(rect)
                 image.show()
-            for item in lane.images[len(slots):] + lane.placeholders[len(slots):]:
+            for image in free:
+                image.hide()
+            for item in lane.placeholders[len(slots):]:
                 item.hide()
             self._update_filmstrip_outline(lane, left, right, height)
             if request and (missing or str(lane.path) not in self._frames.info):
@@ -561,9 +574,9 @@ class MultiSeriesPlot(SeriesPlotWidget):
                 self.timeline_items[key] = render_event_state_lane(
                     self.plot_item, 0, self.timeline_data[key], self.series_colors()[index])
 
-    def diagnostic_value_range(self):
-        """The first series' lane: its whole-series minimum to maximum as drawn."""
-        key = self._series_entries[0] if self._series_entries else None
+    def diagnostic_value_range(self, series_index=0):
+        """A series' lane: its whole-series minimum to maximum as drawn."""
+        key = self._series_entries[series_index] if series_index < len(self._series_entries) else None
         if key is None or key not in self.transforms or self.event_kinds.get(key):
             return None
         value_range = self.value_ranges.get(key)

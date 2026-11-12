@@ -99,6 +99,7 @@ class DemoDataJob(QObject):
         self._lock = threading.Lock()
         self._process: subprocess.Popen | None = None  # type: ignore[type-arg]
         self._thread: threading.Thread | None = None
+        self._detached = threading.Event()
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="demo-data", daemon=True)
@@ -116,14 +117,27 @@ class DemoDataJob(QObject):
         if self._thread is not None:
             self._thread.join(timeout)
 
+    def detach(self) -> None:
+        """The window is closing: the thread, if still running, reports nothing more."""
+        self._detached.set()
+
+    def _emit(self, name: str, *args) -> None:  # type: ignore[no-untyped-def]
+        if self._detached.is_set():
+            return
+        try:
+            getattr(self, name).emit(*args)
+        except RuntimeError:
+            # The job was deleted with its window while this thread still ran.
+            pass
+
     def _run(self) -> None:
         output: deque[str] = deque(maxlen=20)
         try:
             if self.replace and self.root.exists():
-                self.message.emit(f"Deleting {self.root.name}…")
+                self._emit("message", f"Deleting {self.root.name}…")
                 remove_demo_data(self.root)
             if self._cancelled.is_set():
-                self.finished.emit(False, "")
+                self._emit("finished", False, "")
                 return
             command = [sys.executable, "-u", str(GENERATOR), "--output-dir", str(self.root), "--progress",
                        *self.arguments]
@@ -143,17 +157,17 @@ class DemoDataJob(QObject):
                     line = raw_line.rstrip()
                     fraction = parse_progress(line)
                     if fraction is not None:
-                        self.progress.emit(fraction)
+                        self._emit("progress", fraction)
                     elif line:
                         output.append(line)
-                        self.message.emit(line)
+                        self._emit("message", line)
             code = process.wait()
         except OSError as error:
-            self.finished.emit(False, str(error))
+            self._emit("finished", False, str(error))
             return
         if self._cancelled.is_set():
-            self.finished.emit(False, "")
+            self._emit("finished", False, "")
         elif code != 0 or not demo_data_exists(self.root):
-            self.finished.emit(False, "\n".join(output) or f"The generator stopped with exit code {code}.")
+            self._emit("finished", False, "\n".join(output) or f"The generator stopped with exit code {code}.")
         else:
-            self.finished.emit(True, "")
+            self._emit("finished", True, "")

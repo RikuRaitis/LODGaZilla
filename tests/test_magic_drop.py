@@ -371,3 +371,17 @@ class MagicDropQueueTests(unittest.TestCase):
         qt_wait_until(lambda: answers, timeout_ms=5000)
         self.assertEqual(answers, [True])
         self.assertIsNot(threads[0], threading.main_thread())
+
+    def test_a_detached_sign_in_check_reports_nothing(self):
+        import threading
+        release, answers = threading.Event(), []
+        provider = dataclasses.replace(CLAUDE, find=lambda configured: Path("claude"),
+                                       is_signed_in=lambda executable: release.wait(5))
+        check = SignInCheck(provider)
+        check.checked.connect(answers.append)
+        check.start("")
+        check.detach()
+        release.set()
+        qt_wait_until(lambda: not check._running, timeout_ms=5000)
+        QApplication.processEvents()
+        self.assertEqual(answers, [])

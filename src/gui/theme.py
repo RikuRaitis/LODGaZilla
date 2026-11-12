@@ -15,6 +15,8 @@ THEME_OPTIONS = ("os", "light", "dark")
 _system_palette: QPalette | None = None
 _system_stylesheet: str | None = None
 _system_style_name: str | None = None
+# The theme last applied; applying it again would repaint every widget for nothing.
+_applied_theme: str | None = None
 
 
 def load_theme(settings_path=DEFAULT_APP_SETTINGS_PATH) -> str:  # type: ignore[no-untyped-def]
@@ -22,11 +24,18 @@ def load_theme(settings_path=DEFAULT_APP_SETTINGS_PATH) -> str:  # type: ignore[
     return theme if theme in THEME_OPTIONS else "os"
 
 
-def apply_theme(theme: str) -> None:
-    global _system_palette, _system_stylesheet, _system_style_name
+def apply_theme(theme: str, *, force: bool = False) -> bool:
+    """Apply a theme to the application; return whether anything changed.
+
+    The same theme again is skipped unless ``force``.
+    """
+    global _system_palette, _system_stylesheet, _system_style_name, _applied_theme
     app = QApplication.instance()
     if app is None:
-        return
+        return False
+    if theme.lower() == _applied_theme and not force:
+        return False
+    _applied_theme = theme.lower()
     if _system_palette is None:
         _system_palette = QPalette(app.palette())
     if _system_stylesheet is None:
@@ -45,6 +54,7 @@ def apply_theme(theme: str) -> None:
         if _system_style_name:
             app.setStyle(QStyleFactory.create(_system_style_name))
         _apply_palette_to_application(app, _system_palette)
+    return True
 
 
 def _apply_palette_to_application(app: QApplication, palette: QPalette) -> None:

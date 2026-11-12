@@ -103,6 +103,18 @@ class FilmstripTests(unittest.TestCase):
             self.assertGreaterEqual(rect.center().x(), lane.start - 0.01)
             self.assertLessEqual(rect.center().x(), lane.start + 2.2)
             self.assertAlmostEqual(rect.center().y(), lane.center, delta=0.01)
+        # Panning by one frame slot uploads only the frames that are new in view.
+        self.wait_for(lambda: not any(placeholder.isVisible() for placeholder in lane.placeholders))
+        slot_width = plot._filmstrip_slots(lane)[0][1]
+        uploads = []
+        for image in lane.images:
+            original = image.setImage
+            image.setImage = lambda *args, original=original, **kwargs: (uploads.append(1), original(*args, **kwargs))
+        plot.plot_item.vb.setXRange(LOG_START + slot_width, LOG_START + 4 + slot_width, padding=0)
+        plot._refresh_filmstrips(request=False)
+        shown = sum(image.isVisible() for image in lane.images)
+        self.assertLessEqual(len(uploads), 2)
+        self.assertGreater(shown, len(uploads))
         # Values boxes show the video time; the legend has a fixed row for the lane.
         boxes = plot.extra_marker_box_items(LOG_START + 1.5)
         self.assertEqual(boxes[0].entry.value, "0.500 s")

@@ -27,6 +27,7 @@ from src.gui.plots.series import (  # noqa: E402
     load_timing_delta_series,
 )
 from src.gui.plots.xy import load_xy_data  # noqa: E402
+from src.gui.plots.diagnostic_areas import CLIPPING, SAMPLE_LOSS, visible_spans  # noqa: E402
 from tests.qt_wait import dispose_cards  # noqa: E402
 
 
@@ -236,10 +237,51 @@ class PlotSeriesLoadingTests(unittest.TestCase):
 
         np.testing.assert_array_equal(ranges, np.asarray([[1.0, 10.0]]))
         np.testing.assert_array_equal(clipping_ranges, np.asarray([[0.0, 1.0]]))
-        self.assertEqual(len(widget.sample_loss_regions), 1)
-        self.assertEqual(len(widget.clipping_regions), 1)
-        self.assertGreater(widget.sample_loss_regions[0].zValue(), 0)
-        self.assertGreater(widget.clipping_regions[0].zValue(), 0)
+        (loss,), (clipping,) = widget.diagnostic_items(SAMPLE_LOSS), widget.diagnostic_items(CLIPPING)
+        np.testing.assert_array_equal(loss.ranges, ranges)
+        np.testing.assert_array_equal(clipping.ranges, clipping_ranges)
+        self.assertGreater(loss.zValue(), 0)
+        # One series: no band telling series apart.
+        self.assertIsNone(loss.series_color)
+
+    def test_every_series_of_a_line_card_gets_its_areas(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            h5_path = Path(temp_dir) / "data.h5"
+            with h5py.File(h5_path, "w") as h5_file:
+                for name, loss in (("first", None), ("second", [4.0, 6.0])):
+                    group = h5_file.create_group(f"series/{name}")
+                    group.attrs["time_dataset"] = "time_ms"
+                    group.create_dataset("time_ms", data=np.asarray([0.0, 10.0]))
+                    group.create_dataset("value", data=np.asarray([1.0, 2.0]))
+                    if loss is not None:
+                        failures = group.create_group("sample_loss_list")
+                        failures.create_dataset("sample_loss_start_ms", data=np.asarray([loss[0]]))
+                        failures.create_dataset("sample_loss_stop_ms", data=np.asarray([loss[1]]))
+            widget = SeriesPlotWidget()
+            widget.show_sample_loss_areas = True
+            widget.show_series_entries([(h5_path, "first"), (h5_path, "second")])
+        (item,) = widget.diagnostic_items(SAMPLE_LOSS)
+        self.assertEqual(item.series_index, 1)
+        # With several series, the band shows whose area it is.
+        self.assertEqual(item.series_color, widget.series_colors()[1])
+        widget.set_series_color(1, "#123456")
+        self.assertEqual(item.series_color, "#123456")
+
+    def test_marker_snaps_to_the_nearest_sample_of_any_series(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            h5_path = Path(temp_dir) / "data.h5"
+            with h5py.File(h5_path, "w") as h5_file:
+                for name, times in (("slow", [0.0, 10.0]), ("fast", [4.0, 5.0, 6.0])):
+                    group = h5_file.create_group(f"series/{name}")
+                    group.attrs["time_dataset"] = "time_s"
+                    group.create_dataset("time_s", data=np.asarray(times))
+                    group.create_dataset("value", data=np.arange(len(times), dtype=float))
+            widget = SeriesPlotWidget()
+            widget.show_series_entries([(h5_path, "slow"), (h5_path, "fast")])
+        slow, fast = widget.all_current_data()
+        # The first series' nearest sample is far away; the second series has one close by.
+        self.assertEqual(widget.nearest_visible_x(fast.x[1] + 0.2), float(fast.x[1]))
+        self.assertEqual(widget.nearest_visible_x(slow.x[-1] - 0.1), float(slow.x[-1]))
 
     def test_loads_legacy_sample_loss_list_for_existing_caches(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -257,17 +299,17 @@ class PlotSeriesLoadingTests(unittest.TestCase):
 
         np.testing.assert_array_equal(ranges, np.asarray([[1.0, 5.0]]))
 
-    def test_diagnostic_regions_expand_to_the_minimum_display_span(self):
-        region = mock.Mock()
-        region.getRegion.return_value = (10.0, 10.0)
-
-        SeriesPlotWidget._set_display_region_widths(
-            [region],
-            np.asarray([[10.0, 10.0]]),
-            minimum_span=4.0,
-        )
-
-        region.setRegion.assert_called_once_with((8.0, 12.0))
+    def test_diagnostic_areas_expand_to_the_minimum_span_and_merge_per_pixel(self):
+        spans = visible_spans(np.asarray([[10.0, 10.0], [50.0, 60.0], [500.0, 501.0]]), 0.0, 100.0,
+                              minimum_span=4.0, pixel_width=0.1)
+        # Widened about the center; the range outside the view is left out.
+        np.testing.assert_allclose(spans, [[8.0, 12.0], [50.0, 60.0]])
+        # Thousands of ranges in a 100-pixel view: one span per pixel column.
+        many = np.column_stack((np.arange(10_000) * 0.01, np.arange(10_000) * 0.01 + 0.001))
+        merged = visible_spans(many, 0.0, 100.0, minimum_span=0.0, pixel_width=1.0)
+        self.assertLessEqual(len(merged), 101)
+        self.assertAlmostEqual(merged[0][0], 0.0)
+        self.assertAlmostEqual(merged[-1][1], 99.991)
 
     def test_switches_from_lod_to_raw_samples_for_a_small_visible_range(self):
         with tempfile.TemporaryDirectory() as temp_dir:

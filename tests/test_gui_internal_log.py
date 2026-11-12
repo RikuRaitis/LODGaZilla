@@ -31,6 +31,10 @@ class InternalLogPanelTests(unittest.TestCase):
             self.assertLessEqual(panel.entries.document().blockCount(), 3)
             self.assertNotIn("message 0", panel.entries.toPlainText())
             self.assertIn("message 4", panel.entries.toPlainText())
+            # A new length from Settings applies at once.
+            panel.set_maximum_lines(2)
+            self.assertLessEqual(panel.entries.document().blockCount(), 2)
+            self.assertIn("message 4", panel.entries.toPlainText())
             logger.close()
 
 

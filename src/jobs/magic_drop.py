@@ -130,6 +130,11 @@ class SignInCheck(QObject):
         super().__init__(parent)
         self.provider = provider
         self._running = False
+        self._detached = False
+
+    def detach(self) -> None:
+        """The window is closing: a check still running reports nothing."""
+        self._detached = True
 
     def start(self, configured: str | Path | None = None) -> None:
         """Find the CLI (the configured path, PATH, VS Code extensions) and ask it, off the GUI thread."""
@@ -144,6 +149,11 @@ class SignInCheck(QObject):
             except OSError:
                 signed_in = False
             self._running = False
-            self.checked.emit(signed_in)
+            if self._detached:
+                return
+            try:
+                self.checked.emit(signed_in)
+            except RuntimeError:
+                pass  # Deleted with its window while the CLI answered.
 
         threading.Thread(target=run, name=f"{self.provider.name.lower()}-sign-in-check", daemon=True).start()

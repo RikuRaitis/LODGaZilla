@@ -9,7 +9,6 @@ offset, so changing the offset rewrites only that attribute.
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
 import h5py
@@ -55,18 +54,17 @@ def has_audio_track(path: Path) -> bool:
         return False
 
 
-def set_audio_offset(path: Path, offset_seconds: float, *, attempts: int = 5) -> bool:
-    """Move an audio H5 in time by rewriting its log start; retries while a reader has it open."""
-    for attempt in range(attempts):
-        try:
-            with h5py.File(path, "r+") as h5_file:
-                folder_start = h5_file.attrs.get(FOLDER_LOG_START_ATTR)
-                h5_file.attrs[OFFSET_ATTR] = float(offset_seconds)
-                if folder_start is not None:
-                    h5_file.attrs["log_start_unix_seconds"] = float(folder_start) + float(offset_seconds)
-            return True
-        except OSError:
-            if attempt + 1 == attempts:
-                return False
-            time.sleep(0.2)
-    return False
+def set_audio_offset(path: Path, offset_seconds: float) -> bool:
+    """Move an audio H5 in time by rewriting its log start; False while a reader has it open.
+
+    It never waits: the GUI retries later (``retry_audio_offset`` in ``src/app/lodgazilla.py``).
+    """
+    try:
+        with h5py.File(path, "r+") as h5_file:
+            folder_start = h5_file.attrs.get(FOLDER_LOG_START_ATTR)
+            h5_file.attrs[OFFSET_ATTR] = float(offset_seconds)
+            if folder_start is not None:
+                h5_file.attrs["log_start_unix_seconds"] = float(folder_start) + float(offset_seconds)
+        return True
+    except OSError:
+        return False

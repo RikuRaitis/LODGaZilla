@@ -21,6 +21,8 @@ from typing import Any, Callable, Iterable
 
 import numpy as np
 
+from src.data.time_units import seconds_per_time_unit
+
 from src.app.settings import PLUGINS_SECTION, load_hdf5_settings, load_settings_section
 from src.data.parser_base import DataParser, read_json_file
 from src.plugins.catalog import PLUGIN_ROOT
@@ -457,7 +459,7 @@ def _write_hdf5_cache_file(
             group = series_root
             for path_part in (part for part in navigator_group.split("/") if part.strip()):
                 group = group.require_group(_safe_hdf5_name(path_part))
-            group = group.create_group(_safe_hdf5_name(navigator_name))
+            group = group.create_group(unique_hdf5_name(group, navigator_name))
             group.attrs["display_name"] = navigator_name
             group.attrs["unit"] = str(series_data.get("unit", ""))
             group.attrs["original_unit"] = str(series_data.get("original_unit", series_data.get("unit", "")))
@@ -506,6 +508,8 @@ def _write_hdf5_cache_file(
                 "time_end_seconds": series_time_end_seconds,
                 "duration_seconds": duration_seconds,
                 "navigator_metadata": navigator_metadata,
+                # The Navigator's warning column, so it need not walk the file for it.
+                "diagnostic_warning": warning,
             })
 
             create_dataset(
@@ -525,14 +529,19 @@ def _write_hdf5_cache_file(
                 compression=compression,
                 compression_level=compression_level,
             )
-            create_dataset(
-                group,
-                "value_raw",
-                raw_values,
-                chunk_rows=chunk_rows,
-                compression=compression,
-                compression_level=compression_level,
-            )
+            if values is raw_values:
+                # No transform: the original values are the plotted ones. A hard link
+                # (see H5_Format.md) saves a second copy and its compression time.
+                group["value_raw"] = group["value"]
+            else:
+                create_dataset(
+                    group,
+                    "value_raw",
+                    raw_values,
+                    chunk_rows=chunk_rows,
+                    compression=compression,
+                    compression_level=compression_level,
+                )
             write_sample_loss_list(
                 group,
                 sample_loss_ranges,
@@ -711,16 +720,7 @@ def finite_series_extreme(values: np.ndarray, operation: Callable[[np.ndarray], 
 
 
 def time_unit_seconds_multiplier(time_unit: str) -> float:
-    normalized = time_unit.strip().lower()
-    if normalized in {"s", "sec", "secs", "second", "seconds"}:
-        return 1.0
-    if normalized in {"ms", "millisecond", "milliseconds"}:
-        return 0.001
-    if normalized in {"us", "microsecond", "microseconds"}:
-        return 0.000001
-    if normalized in {"ns", "nanosecond", "nanoseconds"}:
-        return 0.000000001
-    return 1.0
+    return seconds_per_time_unit(time_unit)
 
 
 def optional_positive_float(value: Any) -> float | None:
@@ -927,6 +927,7 @@ def create_lod_levels(
     )
     level = 0
     bucket_size = 1
+    lod_arrays: dict[str, np.ndarray] | None = None
     while True:
         bucket_size *= bucket_growth
         bucket_count = math.ceil(sample_count / bucket_size)
@@ -939,11 +940,12 @@ def create_lod_levels(
         level_group.attrs["bucket_size_samples"] = bucket_size
         level_group.attrs["bucket_count"] = bucket_count
 
-        lod_arrays = build_lod_arrays(
-            time_values,
-            values,
-            bucket_size,
-            time_dataset_name=time_dataset_name,
+        # Only the first level reads the raw samples (in blocks); each higher level
+        # combines `bucket_growth` buckets of the level below, with the same result.
+        lod_arrays = (
+            build_lod_arrays_in_blocks(time_values, values, bucket_size, time_dataset_name=time_dataset_name)
+            if lod_arrays is None
+            else combine_lod_arrays(lod_arrays, bucket_growth, time_dataset_name=time_dataset_name)
         )
         if progress_callback is not None:
             progress_callback((level - 0.5) / total_levels)
@@ -1041,6 +1043,96 @@ def build_lod_arrays(
     }
 
 
+# Raw samples per block when building the first LOD level, so its temporaries stay bounded.
+LOD_BLOCK_SAMPLES = 4_194_304
+
+
+def build_lod_arrays_in_blocks(
+    time_values: np.ndarray,
+    values: np.ndarray,
+    bucket_size: int,
+    *,
+    time_dataset_name: str = "time_unix",
+    block_samples: int = LOD_BLOCK_SAMPLES,
+) -> dict[str, np.ndarray]:
+    """``build_lod_arrays`` over blocks of whole buckets, joined; the same arrays, less memory."""
+    block = max(1, block_samples // bucket_size) * bucket_size
+    if len(values) <= block:
+        return build_lod_arrays(time_values, values, bucket_size, time_dataset_name=time_dataset_name)
+    parts = []
+    for offset in range(0, len(values), block):
+        part = build_lod_arrays(time_values[offset:offset + block], values[offset:offset + block], bucket_size,
+                                time_dataset_name=time_dataset_name)
+        for name in ("sample_index_min", "sample_index_max"):
+            indices = part[name]
+            part[name] = np.where(indices >= 0, indices + offset, indices)
+        parts.append(part)
+    return {name: np.concatenate([part[name] for part in parts]) for name in parts[0]}
+
+
+def combine_lod_arrays(
+    lower: dict[str, np.ndarray],
+    growth: int,
+    *,
+    time_dataset_name: str = "time_unix",
+) -> dict[str, np.ndarray]:
+    """The next LOD level: each bucket combines ``growth`` consecutive buckets of ``lower``.
+
+    Identical to ``build_lod_arrays`` from the raw samples at ``growth`` times the bucket
+    size, since buckets of every level start at multiples of their size; empty buckets
+    (no finite values) are NaN with index -1, as there.
+    """
+    names = {kind: lod_time_dataset_name(kind, time_dataset_name) for kind in ("start", "end", "min", "max")}
+    lower_count = len(lower["count"])
+    starts = np.arange(0, lower_count, growth, dtype=np.int64)
+    lasts = np.minimum(starts + growth, lower_count) - 1
+    finite_count = np.add.reduceat(lower["finite_count"], starts)
+    value_min, value_max = lower["value_min"], lower["value_max"]
+    floating = value_min.dtype.kind == "f"
+    bucket_count = len(starts)
+    pad = bucket_count * growth - lower_count
+
+    def pick(source: np.ndarray, fill, choose) -> np.ndarray:  # type: ignore[no-untyped-def]
+        """Each new bucket's index into ``lower`` of its extreme (first one on ties)."""
+        if floating:
+            source = np.where(np.isnan(source), fill, source)
+        matrix = np.pad(source, (0, pad), constant_values=fill).reshape(bucket_count, growth)
+        return starts + choose(matrix, axis=1)
+
+    if floating:
+        min_fill, max_fill = np.inf, -np.inf
+    elif value_min.dtype.kind == "b":
+        min_fill, max_fill = True, False
+    else:
+        info = np.iinfo(value_min.dtype)
+        min_fill, max_fill = info.max, info.min
+    min_from = np.minimum(pick(value_min, min_fill, np.argmin), lower_count - 1)
+    max_from = np.minimum(pick(value_max, max_fill, np.argmax), lower_count - 1)
+    combined = {
+        names["start"]: lower[names["start"]][starts],
+        names["end"]: lower[names["end"]][lasts],
+        names["min"]: lower[names["min"]][min_from],
+        names["max"]: lower[names["max"]][max_from],
+        "value_min": value_min[min_from],
+        "value_max": value_max[max_from],
+        "value_first": lower["value_first"][starts],
+        "value_last": lower["value_last"][lasts],
+        "sample_index_min": lower["sample_index_min"][min_from],
+        "sample_index_max": lower["sample_index_max"][max_from],
+        "count": np.add.reduceat(lower["count"], starts).astype(np.int64),
+        "finite_count": finite_count.astype(np.int64),
+    }
+    empty = finite_count == 0
+    if floating and np.any(empty):
+        for name in ("value_min", "value_max", names["min"], names["max"]):
+            combined[name] = combined[name].copy()
+            combined[name][empty] = np.nan
+        for name in ("sample_index_min", "sample_index_max"):
+            combined[name] = combined[name].copy()
+            combined[name][empty] = -1
+    return combined
+
+
 def time_dataset_name_for_series(series_data: dict[str, Any]) -> str:
     """Choose an explicit HDF5 time-axis name from configured time metadata."""
 
@@ -1125,7 +1217,9 @@ def _normalise_series(series_data: dict[str, Any]) -> tuple[np.ndarray, np.ndarr
 
     time_values = time_values[finite]
     values = values[finite]
-    if series_data.get("time_sorted", False):
+    # Checked even when the parser says "time_sorted": a clock reset would otherwise give
+    # wrong time ranges and lookups without notice. The check is one pass; sorting only if needed.
+    if len(time_values) < 2 or not np.any(time_values[1:] < time_values[:-1]):
         return time_values, values
 
     order = np.argsort(time_values, kind="stable")
@@ -1155,6 +1249,17 @@ def _optional_int(value: str) -> int | None:
 def _safe_hdf5_name(name: str) -> str:
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name.strip())
     return safe_name.strip("._") or "series"
+
+
+def unique_hdf5_name(parent: Any, name: str) -> str:
+    """A safe H5 name not yet used in ``parent``: names such as "Speed (km/h)" and
+    "Speed [km/h]" both become ``Speed_km_h``, so the second gets ``Speed_km_h_2``.
+    The Navigator shows a series by its ``navigator_name``, not this H5 name."""
+    base = _safe_hdf5_name(name)
+    candidate, number = base, 2
+    while candidate in parent:
+        candidate, number = f"{base}_{number}", number + 1
+    return candidate
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

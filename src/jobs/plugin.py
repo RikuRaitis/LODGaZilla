@@ -12,11 +12,15 @@ def run_plugin_process(request, events, cancel_event=None, start_event=None) -> 
     try:
         path = Path(request.entry_point).resolve()
         # A real importable package name lets nested spawned pool workers import
-        # plugin functions. Child processes inherit this search path.
-        sys.path.insert(0, str(path.parent.parent))
+        # plugin functions. Child processes inherit this search path. Appended, not
+        # first: a plugin folder must not take the place of an installed package.
+        root = str(path.parent.parent)
+        if root not in sys.path:
+            sys.path.append(root)
         module = importlib.import_module(f"{path.parent.name}.{path.stem}")
         if Path(module.__file__).resolve() != path:
-            raise ImportError("Plugin worker module resolves to a different installation")
+            raise ImportError(f"Plugin worker module {path.parent.name} resolves to another installed package; "
+                              "rename the plugin folder")
         getattr(module, request.function)(request, events, cancel_event)
     except Exception as error:
         events.put(("finished", 0, 0, str(error)))

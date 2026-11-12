@@ -143,6 +143,25 @@ def _event_state_label(value, labels) -> str:  # type: ignore[no-untyped-def]
     return str(labels.get(value_key, value_key))
 
 
+def _merge_below_pixel(starts, ends, values, plot_item):  # type: ignore[no-untyped-def]
+    """Bars narrower than a pixel, more than the lane has pixels: one bar per pixel column.
+
+    A merged bar spans its column's bars and keeps the first one's value, so a dense lane
+    draws a bounded number of bars at any zoom level.
+    """
+    width_pixels = max(1.0, float(plot_item.vb.width()))
+    if len(starts) <= 2 * width_pixels:
+        return starts, ends, values
+    left, right = float(starts[0]), float(ends[-1])
+    pixel = (right - left) / width_pixels
+    if not np.isfinite(pixel) or pixel <= 0:
+        return starts, ends, values
+    columns = np.floor((starts - left) / pixel)
+    _, first = np.unique(columns, return_index=True)
+    merged_ends = np.maximum.reduceat(ends, first)
+    return starts[first], merged_ends, values[first]
+
+
 def render_event_state_lane(plot_item, lane, data, color):
     """Draw the shared timeline bars and labels; return their graphics items."""
     items = []
@@ -177,6 +196,14 @@ def render_event_state_lane(plot_item, lane, data, color):
                 event_width = max(1e-6, min(event_width, 0.6 * float(np.median(gaps))))
         starts = np.maximum(times - event_width / 2, times[0])
         ends = np.minimum(times + event_width / 2, times[-1])
+    if is_state and len(times) > 1:
+        # A state lasts until it changes: repeated samples of one state are one bar.
+        changes = np.concatenate(([True], values[1:] != values[:-1]))
+        if not np.all(changes):
+            kept = np.flatnonzero(changes)
+            ends = np.concatenate((starts[kept][1:], ends[-1:]))
+            starts, values = starts[kept], values[kept]
+    starts, ends, values = _merge_below_pixel(starts, ends, values, plot_item)
     if is_boolean:
         for state in ("0", "1"):
             mask = values == float(state)
@@ -195,8 +222,8 @@ def render_event_state_lane(plot_item, lane, data, color):
         brush = QColor(color)
         brush.setAlpha(170)
         boxes = pg.BarGraphItem(
-            x0=starts, x1=ends, y0=np.full(len(times), lane - EVENT_STATE_HALF_HEIGHT),
-            y1=np.full(len(times), lane + EVENT_STATE_HALF_HEIGHT), brush=brush, pen=pg.mkPen(color, width=1),
+            x0=starts, x1=ends, y0=np.full(len(starts), lane - EVENT_STATE_HALF_HEIGHT),
+            y1=np.full(len(starts), lane + EVENT_STATE_HALF_HEIGHT), brush=brush, pen=pg.mkPen(color, width=1),
         )
         plot_item.addItem(boxes)
         items.append(boxes)
@@ -205,13 +232,15 @@ def render_event_state_lane(plot_item, lane, data, color):
     # at a pixel-informed density and become more detailed as users zoom.
     # Each label gets room for the widest one, so thinned labels do not overlap.
     font = plot_item.vb.getViewWidget().font()
-    texts = [_event_state_label(value, labels) for value in values]
-    label_width = max(42.0, max(QFontMetricsF(font).horizontalAdvance(text) for text in set(texts)) + 12.0)
+    # Texts only for the distinct values (for the width) and the labels drawn, not every sample.
+    metrics = QFontMetricsF(font)
+    label_width = max(42.0, max(metrics.horizontalAdvance(_event_state_label(value, labels))
+                                for value in np.unique(values)) + 12.0)
     label_budget = max(1, int(max(1.0, plot_item.vb.width()) / label_width))
-    label_stride = max(1, int(np.ceil(len(times) / label_budget)))
-    for sample_index, (start, end, text) in enumerate(zip(starts, ends, texts)):
-        if sample_index % label_stride and sample_index != len(times) - 1:
-            continue
+    label_stride = max(1, int(np.ceil(len(starts) / label_budget)))
+    shown = np.unique(np.concatenate((np.arange(0, len(starts), label_stride), [len(starts) - 1])))
+    for start, end, value in zip(starts[shown], ends[shown], values[shown]):
+        text = _event_state_label(value, labels)
         label = pg.TextItem(text, color="#ffffff", anchor=(0.5, 0.5))
         label.setFont(font)
         label.textItem.document().setDocumentMargin(0)
@@ -256,6 +285,8 @@ class EventStatePlotWidget(PlotBaseWidget):
         self.plot_item.getAxis("left").setStyle(showValues=True)
         self._items: list[object] = []
         self._lane_axis_labels: list[QGraphicsSimpleTextItem] = []
+        # The legend entries shown; a reload with the same ones leaves the legend alone.
+        self._shown_legend_entries: list | None = None
         self._timeline_data: list[dict[str, object]] = []
         self.data_time_range: tuple[float, float] | None = None
         # `_timeline_data` contains only H5 series that loaded successfully.
@@ -425,6 +456,9 @@ class EventStatePlotWidget(PlotBaseWidget):
         self._series_colors = dict(zip(self.series, self._colors))
 
     def _contains_time(self, x_value: float) -> bool:
+        # Outside the Plot navigator trim the card shows no data, so no values either (as Line).
+        if self.data_time_range is not None and not self.data_time_range[0] <= x_value <= self.data_time_range[1]:
+            return False
         times = [np.asarray(item["time"], dtype=float) for item in self._timeline_data]
         times = [item for item in times if len(item)]
         if not times:
@@ -467,7 +501,9 @@ class EventStatePlotWidget(PlotBaseWidget):
     def _render_timeline(self, loaded: list[object]) -> None:
         """Draw one lane per successfully loaded series; `loaded` follows `series`."""
         self._clear_items()
-        self._clear_lane_axis_labels()
+        names = [str(data["name"]) for data in loaded if isinstance(data, dict)]
+        if names != [label.text() for label in self._lane_axis_labels]:
+            self._clear_lane_axis_labels()
         self._timeline_data = []
         self._timeline_entries = []
         self._sync_colors()
@@ -478,6 +514,7 @@ class EventStatePlotWidget(PlotBaseWidget):
         if not self._timeline_data:
             self.plot_item.getAxis("left").setTicks([])
             self.legend.hide()
+            self._shown_legend_entries = None
             return
         metadata = self._timeline_data[0]["metadata"]
         if isinstance(metadata, TimeAxisMetadata):
@@ -500,7 +537,12 @@ class EventStatePlotWidget(PlotBaseWidget):
         QTimer.singleShot(0, self._update_lane_vertical_scale)
         QTimer.singleShot(0, self._update_lane_axis_labels)
         self.plot_item.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
-        self.legend.set_entries(self._legend_entries())
+        entries = self._legend_entries()
+        if entries != self._shown_legend_entries or not self.legend.isVisible():
+            # A pan or zoom reload has the same entries: the legend, and a drag's drop
+            # hint in it, stay as they are.
+            self._shown_legend_entries = entries
+            self.legend.set_entries(entries)
 
     def _effective_load_range(
         self, visible_range: tuple[float, float] | None = None
@@ -622,6 +664,10 @@ class EventStatePlotWidget(PlotBaseWidget):
         self._lane_axis_labels.clear()
 
     def _create_lane_axis_labels(self) -> None:
+        if self._lane_axis_labels:
+            # The same lanes as before (a pan or zoom reload): only place them again.
+            self._update_lane_axis_labels()
+            return
         axis = self.plot_item.getAxis("left")
         text_color = self.plot_widget.palette().color(QPalette.ColorRole.Text)
         for data in self._timeline_data:

@@ -104,6 +104,8 @@ class XYZPlotWidget(PlotBaseWidget):
         # Scene positions of each trace as drawn, for picking and marker points.
         self._scene_positions: list[np.ndarray | None] = []
         self._marker_items = []
+        # Each trace's selection stretch, sync point and two marker points, reused.
+        self._trace_marker_items: dict[int, dict] = {}
         self._marker_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
         self._sync_time = None
         self._value_box_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
@@ -246,6 +248,8 @@ class XYZPlotWidget(PlotBaseWidget):
                 label = f"{axis_name} {value:.{digits}g}"
                 self._add_item(gl.GLTextItem(pos=pos, text=label, color=text_color, font=font))
         self._update_legend()
+        # New scene positions: the marker items are made again for them.
+        self._clear_marker_items()
         self._draw_markers()
         for index in (FIRST_MARKER, SECOND_MARKER):
             if self._value_box_times[index] is not None:
@@ -261,40 +265,74 @@ class XYZPlotWidget(PlotBaseWidget):
             return None
         if not result.time[0] <= time_value <= result.time[-1]:
             return None
-        point = int(np.argmin(np.abs(result.time - time_value)))
+        # Times ascend: a binary search, not a pass over every point (video playback
+        # moves the marker every frame).
+        upper = min(int(np.searchsorted(result.time, time_value)), len(result.time) - 1)
+        lower = max(0, upper - 1)
+        point = lower if abs(time_value - result.time[lower]) <= abs(result.time[upper] - time_value) else upper
         return point if np.all(np.isfinite(result.positions[point])) else None
 
-    def _draw_markers(self):
-        """Marker points in their colors, and each trace's stretch between the markers."""
+    def _selected_slice(self, trace_index, selection):
+        """The trace's points between the markers, as a slice of its ascending times."""
+        times = self.results[trace_index].time
+        return slice(int(np.searchsorted(times, selection[0], side="left")),
+                     int(np.searchsorted(times, selection[1], side="right")))
+
+    def _clear_marker_items(self):
         for item in self._marker_items:
             self.view.removeItem(item)
         self._marker_items.clear()
+        self._trace_marker_items.clear()
+
+    def _draw_markers(self):
+        """Marker points in their colors, and each trace's stretch between the markers.
+
+        Each trace keeps its marker items and only updates them, so moving a marker
+        costs no new GL items; the stretch between markers is a slice, not a mask.
+        """
         selection = self.selection_range()
+        selection_color = tuple(value / 255 for value in selection_rgba(2.0))
         for trace_index, positions in enumerate(self._scene_positions):
             if positions is None:
                 continue
+            items = self._trace_marker_items.get(trace_index)
+            if items is None:
+                items = self._trace_marker_items[trace_index] = {
+                    "selection": self._add_marker_item(gl.GLLinePlotItem(
+                        pos=np.zeros((2, 3), dtype=np.float32), width=6, mode="line_strip", antialias=True)),
+                    "sync": self._add_marker_item(gl.GLScatterPlotItem(
+                        pos=np.zeros((1, 3), dtype=np.float32), pxMode=True, glOptions="translucent")),
+                    FIRST_MARKER: self._add_marker_item(gl.GLScatterPlotItem(
+                        pos=np.zeros((1, 3), dtype=np.float32), pxMode=True, glOptions="translucent")),
+                    SECOND_MARKER: self._add_marker_item(gl.GLScatterPlotItem(
+                        pos=np.zeros((1, 3), dtype=np.float32), pxMode=True, glOptions="translucent")),
+                }
+            stretch = None
             if selection is not None:
-                times = self.results[trace_index].time
-                inside = (times >= selection[0]) & (times <= selection[1]) & np.all(np.isfinite(positions), axis=1)
-                if np.count_nonzero(inside) > 1:
-                    color = tuple(value / 255 for value in selection_rgba(2.0))
-                    self._add_marker_item(gl.GLLinePlotItem(pos=positions[inside].astype(np.float32), color=color,
-                                                            width=6, mode="line_strip", antialias=True))
-            point = self._marker_point(trace_index, self._sync_time)
-            if point is not None:
-                self._add_marker_item(gl.GLScatterPlotItem(
-                    pos=positions[point:point + 1].astype(np.float32), color=pg.glColor(sync_marker_color()),
-                    size=16, pxMode=True, glOptions="translucent"))
-            for index in (FIRST_MARKER, SECOND_MARKER):
-                point = self._marker_point(trace_index, self._marker_times[index])
-                if point is not None:
-                    self._add_marker_item(gl.GLScatterPlotItem(
-                        pos=positions[point:point + 1].astype(np.float32), color=pg.glColor(marker_color(index)),
-                        size=10 + 2 * marker_width(), pxMode=True, glOptions="translucent"))
+                stretch = positions[self._selected_slice(trace_index, selection)]
+                stretch = stretch[np.all(np.isfinite(stretch), axis=1)]
+            if stretch is not None and len(stretch) > 1:
+                items["selection"].setData(pos=stretch.astype(np.float32), color=selection_color)
+                items["selection"].setVisible(True)
+            else:
+                items["selection"].setVisible(False)
+            for key, time_value, color, size in (
+                    ("sync", self._sync_time, sync_marker_color(), 16),
+                    (FIRST_MARKER, self._marker_times[FIRST_MARKER], marker_color(FIRST_MARKER), 10 + 2 * marker_width()),
+                    (SECOND_MARKER, self._marker_times[SECOND_MARKER], marker_color(SECOND_MARKER),
+                     10 + 2 * marker_width())):
+                point = self._marker_point(trace_index, time_value)
+                if point is None:
+                    items[key].setVisible(False)
+                    continue
+                items[key].setData(pos=positions[point:point + 1].astype(np.float32), color=pg.glColor(color),
+                                   size=size)
+                items[key].setVisible(True)
 
     def _add_marker_item(self, item):
         self.view.addItem(item)
         self._marker_items.append(item)
+        return item
 
     def _on_view_clicked(self, button, position):
         index = {Qt.MouseButton.LeftButton: FIRST_MARKER, Qt.MouseButton.RightButton: SECOND_MARKER}.get(button)
@@ -386,11 +424,10 @@ class XYZPlotWidget(PlotBaseWidget):
             return
         self.value_boxes.set_selection_duration(selection[1] - selection[0])
         statistics = {}
-        for trace, result in zip(self.traces, self.results):
+        for trace_index, (trace, result) in enumerate(zip(self.traces, self.results)):
             if not isinstance(result, XYZData):
                 continue
-            inside = (result.time >= selection[0]) & (result.time <= selection[1])
-            positions = result.positions[inside]
+            positions = result.positions[self._selected_slice(trace_index, selection)]
             lines = [f"Points: {len(positions):,} (drawn)"]
             if len(positions):
                 for axis, label, column in zip("XYZ", result.labels, positions.T):

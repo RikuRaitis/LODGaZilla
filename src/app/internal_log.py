@@ -227,7 +227,7 @@ class InternalLogPanel(QWidget):
         self.entries.setReadOnly(True)
         self.entries.setUndoRedoEnabled(False)
         self.entries.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        self.entries.document().setMaximumBlockCount(max(1, int(maximum_lines)))
+        self.set_maximum_lines(maximum_lines)
         self.expanded_button = QToolButton(self.entries)
         self.expanded_button.setAutoRaise(True)
         self.expanded_button.setToolTip("Minimize internal log")
@@ -252,6 +252,10 @@ class InternalLogPanel(QWidget):
         layout.addWidget(self.entries)
         logger.message_logged.connect(self.append_message)
         self._apply_expanded_state()
+
+    def set_maximum_lines(self, maximum_lines: int) -> None:
+        """Keep at most this many log lines; applies at once, dropping the oldest."""
+        self.entries.document().setMaximumBlockCount(max(1, int(maximum_lines)))
 
     def set_expanded(self, expanded: bool) -> None:
         expanded = bool(expanded)

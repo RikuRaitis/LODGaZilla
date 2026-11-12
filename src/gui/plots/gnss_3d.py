@@ -33,12 +33,11 @@ from src.gui.plots.theme import apply_map_background, canvas_background, palette
 from src.gui.plots.base import PlotBaseWidget, series_legend_name
 from src.gui.plots.legend import PlotLegendWidget
 from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup
-from src.data.xyz import AxisSource
+from src.data.xyz import AxisSource, interpolated_values
 from src.jobs.plot_groups import GroupedPlotLoadCoordinator
 from src.data.h5_series import _navigator_series_names
 from src.gui.plots.series import (
     _attribute_text,
-    _canonical_time_values,
     _series_group_for_navigator_name,
     _time_axis_metadata_from_group,
 )
@@ -569,17 +568,15 @@ def load_track_heights(height_series, gnss_times):
         return [0.0] * len(gnss_times), "m"
     with h5py.File(height_series[0], "r") as h5_file:
         group = _series_group_for_navigator_name(h5_file, height_series[1])
-        values = np.asarray(group["value"], dtype=float)
         time_name = _attribute_text(group.attrs.get("time_dataset", "time_unix"))
-        raw_times = np.asarray(group[time_name], dtype=float)
-        times = _canonical_time_values(raw_times, _time_axis_metadata_from_group(h5_file, group))
         unit = _attribute_text(group.attrs.get("unit", "")) or "value"
-    valid = np.isfinite(times) & np.isfinite(values)
-    if not np.any(valid):
-        raise ValueError("Altitude series has no finite samples")
-    times, values = times[valid], values[valid]
-    order = np.argsort(times)
-    return np.interp(np.asarray(gnss_times), times[order], values[order]).astype(float).tolist(), unit
+        # Only the altitude around the track's (sampled) times is read, in bounded chunks.
+        try:
+            heights = interpolated_values(group[time_name], group["value"],
+                                          _time_axis_metadata_from_group(h5_file, group), np.asarray(gnss_times))
+        except ValueError as error:
+            raise ValueError(f"Altitude series: {error}") from error
+    return heights.astype(float).tolist(), unit
 
 
 def load_3d_gnss_group(axes, *, time_range=None, cancelled=None, maximum_points=MAP_MAXIMUM_POINTS):

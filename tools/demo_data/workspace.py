@@ -60,8 +60,6 @@ def write_demo_workspace(path: Path, root: Path, folder: Path, watch: Path, foot
     ]
     state = {
         "navigator": {"folder": str(root), "group_by": "Year/Month/Day", "filter_key": FILTER_NONE, "filter_value": ""},
-        "plot_navigator": {"link_markers": True, "link_plot_x_axes": True, "time_axis_display": "bottom",
-                           "show_legends": True, "show_card_controls": True},
         "workspace": {"rows": rows, "active": 2, "scroll": 0},
     }
     return write_workspace_file(path, state)

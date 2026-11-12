@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import glob
 import json
 import logging
 import math
@@ -23,7 +24,7 @@ import numpy as np
 
 from src.data.media import AUDIO_KIND, FOLDER_LOG_START_ATTR, MEDIA_GROUP, MEDIA_KIND_ATTR, OFFSET_ATTR
 from src.jobs.import_data import (
-    SCHEMA_VERSION, SERIES_INDEX_ATTR, _safe_hdf5_name, build_lod_arrays,
+    SCHEMA_VERSION, SERIES_INDEX_ATTR, build_lod_arrays, unique_hdf5_name,
 )
 from src.jobs.policy import PROGRESS_TOTAL
 from src.version import APP_VERSION
@@ -162,6 +163,12 @@ def convert_audio(
 
     source, output = Path(item.source), Path(item.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    # A conversion of this output that was stopped (its process ended) left its partial file.
+    for stale in output.parent.glob(f".{glob.escape(output.name)}.*.partial"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass  # Still open elsewhere; a later conversion removes it.
     # Not ".tmp": an H5 cache job in the same folder may run meanwhile and removes its stale temp files.
     descriptor, temporary = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".partial", dir=output.parent)
     os.close(descriptor)
@@ -245,7 +252,7 @@ def _write_file_header(h5_file, item, names, rate, bucket_sizes, options):  # ty
     media_group = h5_file.create_group("series").create_group(MEDIA_GROUP)
     writers = []
     for name in names:
-        group = media_group.create_group(_safe_hdf5_name(name))
+        group = media_group.create_group(unique_hdf5_name(media_group, name))
         group.attrs.update({
             "display_name": name, "navigator_name": name, "navigator_group": MEDIA_GROUP,
             "unit": "counts", "original_unit": "counts", "description": "16-bit PCM audio",
@@ -269,6 +276,7 @@ def _write_file_footer(h5_file, writers, names, rate, target) -> None:  # type: 
             "navigator_group": MEDIA_GROUP, "unit": "counts", "sample_count": writer.count,
             "sample_rate_hz": float(rate), "visible": True, "time_start_seconds": 0.0,
             "time_end_seconds": duration, "duration_seconds": duration, "navigator_metadata": [],
+            "diagnostic_warning": "",
         })
     h5_file.attrs["series_count"] = len(writers)
     h5_file.attrs[SERIES_INDEX_ATTR] = json.dumps(index, sort_keys=True)

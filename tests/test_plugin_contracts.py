@@ -136,6 +136,27 @@ class CatalogTests(unittest.TestCase):
 
 
 class PluginJobTests(unittest.TestCase):
+    def test_a_plugin_folder_cannot_take_the_place_of_an_installed_package(self):
+        import queue
+        import sys
+        import xml
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "xml"
+            folder.mkdir()
+            (folder / "__init__.py").write_text("")
+            worker = folder / "worker.py"
+            worker.write_text("def run(request, events, cancel): events.put(('finished', 1, 0, ''))\n")
+            events = queue.Queue()
+            self.addCleanup(lambda: directory in sys.path and sys.path.remove(directory))
+            run_plugin_process(PluginJobRequest(folder, False, 1, "xml", "Run", str(worker)), events)
+            finished = events.get(timeout=5)
+        # The plugin does not run as the standard library's "xml", which stays itself.
+        self.assertEqual(finished[:3], ("finished", 0, 0))
+        self.assertTrue(finished[3])
+        import xml as again
+        self.assertIs(again, xml)
+        self.assertNotEqual(sys.path[0], directory)
+
     def test_real_spawned_worker_can_start_a_nested_pool(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory) / "example_job"

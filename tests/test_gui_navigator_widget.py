@@ -284,7 +284,12 @@ class NavigatorSettingsIntegrationTests(unittest.TestCase):
                     align_columns_of_different_type=True,
                 ),
             )
-            navigator.reload_navigator_control_settings()
+            with mock.patch.object(navigator, "refresh_tree") as refresh:
+                navigator.reload_navigator_control_settings()
+                self.assertEqual(refresh.call_count, 1)
+                # Applying unchanged settings (or only new recent folders) leaves the tree alone.
+                navigator.reload_navigator_control_settings()
+                self.assertEqual(refresh.call_count, 1)
 
         self.assertEqual(
             navigator.navigator_control_settings,

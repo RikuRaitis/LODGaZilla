@@ -15,7 +15,7 @@ import h5py
 import numpy as np
 from PySide6.QtCore import QThreadPool
 from PySide6.QtGui import QColor, QImage, QVector3D
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.app.lodgazilla import LODGaZillaWindow, PlotWorkspace
 from src.app.settings import load_lodgazilla_settings
@@ -137,6 +137,7 @@ class WorkspaceRestoreTests(unittest.TestCase):
         wait(self.app, 400)
         xy.plot_item.vb.setRange(xRange=(-0.5, 0.5), yRange=(-0.2, 0.3), padding=0)
         line.plot_view_box().setRange(xRange=(10, 40), yRange=(-2, 2), padding=0)
+        line.set_time_axis_representation("log_elapsed")
         line.set_vertical_marker(20.0, 0)
         source.on_marker_placed(line, 20.0)
         line.set_vertical_marker(30.0, 1)
@@ -161,6 +162,8 @@ class WorkspaceRestoreTests(unittest.TestCase):
             self.assertEqual(card, saved_card, saved_card["type"])
         # Linked markers show the saved selection everywhere.
         self.assertEqual(restored.plots()[1].marker_values(), (20.0, 30.0))
+        self.assertEqual(cards(expected)[0]["time_axis_representation"], "log_elapsed")
+        self.assertEqual(restored.plots()[0].time_axis_representation(), "log_elapsed")
 
     def test_missing_files_are_reported_and_other_cards_open(self):
         source = self.workspace()
@@ -175,6 +178,18 @@ class WorkspaceRestoreTests(unittest.TestCase):
         self.assertEqual(len(problems), 2)
         self.assertIn("gone.h5", problems[0])
         self.assertEqual([card.series for card in restored.plots()], [[(self.cache, "y")]])
+
+    def test_malformed_cards_are_reported_and_other_cards_open(self):
+        source = self.workspace()
+        source.add_line_plot(self.cache, "x")
+        state = source.workspace_state()
+        good = cards(state)[0]
+        state["rows"] = [{"cards": [{"type": "line", "series": [{"name": "no path"}]}]},
+                         {"cards": [{"type": "video"}, "not a card"]}, "not a row", {"cards": [good]}]
+        restored = self.workspace()
+        problems = restored.restore_workspace_state(state)
+        self.assertEqual(len(problems), 4)
+        self.assertEqual([card.series for card in restored.plots()], [[(self.cache, "x")]])
 
     def test_opening_replaces_existing_cards(self):
         source = self.workspace()
@@ -333,14 +348,20 @@ class WorkspaceMenuTests(unittest.TestCase):
         window.populate_recent_workspaces_menu()
         recent = [action for action in window.recent_workspaces_menu.actions() if action.isEnabled()]
         self.assertEqual([action.text() for action in recent], ["saved.umw"])
-        recent[0].trigger()
+        # A card is open, so opening asks first; Cancel keeps the cards.
+        with mock.patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.Cancel) as asked:
+            recent[0].trigger()
+        self.assertEqual(asked.call_count, 1)
+        self.assertEqual([card.series for card in window.plot_workspace.plots()], [[(cache, "z")]])
+        with mock.patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.Discard):
+            recent[0].trigger()
         self.assertEqual([card.series for card in window.plot_workspace.plots()], [[(cache, "x")]])
         self.assertEqual(window.navigator.group_by_combo.currentText(), "Year")
-        self.assertFalse(window.plot_workspace.link_markers)
-        self.assertFalse(window.plot_workspace.legends_shown)
-        self.assertFalse(window.plot_navigator.card_controls_button.isChecked())
-        self.assertFalse(window.plot_workspace.plots()[0].offset_button.isVisible())
-        window.set_legends_shown(True)
+        # The Plot navigator buttons are preferences, not part of the workspace.
+        self.assertNotIn("plot_navigator", json.loads(workspace_file.read_text(encoding="utf-8")))
+        self.assertTrue(window.plot_workspace.link_markers)
+        self.assertTrue(window.plot_workspace.legends_shown)
+        self.assertTrue(window.plot_navigator.card_controls_button.isChecked())
         self.assertEqual(load_lodgazilla_settings(settings)["recent_workspaces"],
                          [str(workspace_file.resolve())])
         # Saving the Settings dialog keeps the list.
@@ -348,6 +369,20 @@ class WorkspaceMenuTests(unittest.TestCase):
         dialog.save_settings()
         self.assertEqual(load_lodgazilla_settings(settings)["recent_workspaces"],
                          [str(workspace_file.resolve())])
+
+        # Closing the window yourself asks too; Cancel keeps it open, Save saves first.
+        event = mock.Mock(spontaneous=mock.Mock(return_value=True))
+        with mock.patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.Cancel):
+            window.closeEvent(event)
+        event.ignore.assert_called_once()
+        window.plot_workspace.add_line_plot(cache, "z")
+        with mock.patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.Save):
+            self.assertTrue(window.confirm_replacing_cards())
+        self.assertEqual(len(cards(json.loads(workspace_file.read_text(encoding="utf-8"))["workspace"])), 2)
+        window.plot_workspace.close_all_plots()
+        with mock.patch.object(QMessageBox, "exec") as asked:
+            self.assertTrue(window.confirm_replacing_cards())
+        asked.assert_not_called()
 
 
 if __name__ == "__main__":

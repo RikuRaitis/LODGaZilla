@@ -153,6 +153,18 @@ class DemoDataJobTests(unittest.TestCase):
             self.assertFalse(demo_data_exists(root))
 
 
+    def test_a_detached_job_reports_nothing_more(self):
+        with tempfile.TemporaryDirectory() as temp:
+            job = DemoDataJob(Path(temp) / "demodata")
+            self.addCleanup(job.deleteLater)
+            messages = []
+            job.message.connect(messages.append)
+            job._emit("message", "before")
+            job.detach()
+            job._emit("message", "after")
+            self.app.processEvents()
+            self.assertEqual(messages, ["before"])
+
 class DemoDataWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

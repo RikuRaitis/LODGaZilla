@@ -6,8 +6,49 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Workspaces no longer save the Plot navigator buttons (linking, legends, card controls,
+  time axis, snapping); they keep your own preferences. Older workspaces still open.
+- While cards are open, Open workspace, Open recent workspace and closing the window ask
+  whether to save the cards first.
+- Double-clicking a folder generates H5 files only when the folder holds data files of
+  its own; a parent folder only expands or collapses.
+
 ### Fixed
 
+- H5 generation builds each LOD level from the level below, so long series need far less
+  memory; without a conversion, `value_raw` is no longer a second copy of the values.
+- Series whose names become the same H5 name (such as "Speed (km/h)" and "Speed [km/h]")
+  are both written instead of failing the whole file.
+- Time that a parser reports as sorted is checked, so a clock reset no longer gives wrong
+  ranges.
+- The Navigator reads each series' Sample loss and Clipping warning from the file's series
+  index instead of walking the file.
+- Editing folder metadata no longer fails while the Navigator is reading the file.
+- Interrupted audio conversions no longer leave files behind, and LODGaZilla's own working
+  files are no longer offered to the importers.
+- A plugin folder can no longer take the place of an installed Python package in plugin jobs.
+- X/Y, Map and 3D Map cards read long series in bounded pieces, so very long logs no longer
+  run out of memory when plotted.
+- Cards save their time axis choice (real date/time or time from log start) in workspaces.
+- Sample loss and Clipping areas are shown for every series of a Line or Multi-series card,
+  not only the first, and no longer slow down panning.
+- A snapping marker on a Line card snaps to the nearest sample of any of its series.
+- Event/state lanes stay fast with dense data, and keep their legend while panning.
+- X/Y cards keep their values boxes and their graphs while reloading; 3D plot markers and
+  Multi-series filmstrips no longer redo all their work on each marker move or pan step.
+- A saved Sample limit the selector does not list is shown as itself; the Help button no
+  longer misses a click after its popup closed.
+- Event/state cards show no values outside the Plot navigator trim.
+- A malformed workspace file reports the cards it cannot read instead of failing to open.
+- The internal log length setting applies at once, not after a restart.
+- Recent folders and workspaces whose path contains "..." are kept.
+- Saving Settings repaints the cards and refreshes the Navigator only when their settings
+  changed.
+- The Navigator filter, the Plot navigator bar drag and progress updates no longer read the
+  disk on every keystroke, mouse move or event; moving a busy audio file is retried in the
+  background instead of pausing the window.
 - Stop and the time limit end everything an AI agent started, not only the agent itself.
 - In the AI panel, Enter outside Create plugin keeps the typed text as Magic drop hints
   instead of discarding it.

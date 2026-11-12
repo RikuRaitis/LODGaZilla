@@ -78,3 +78,15 @@ class PlotThemeTests(TestCase):
         for background in ("#000000", "#ffffff"):
             for build in (map_html, _three_d_map_html):
                 self.assertIn(f"background:{background}", build(background=background))
+
+
+class ThemeApplicationTests(TestCase):
+    def test_applying_the_current_theme_again_does_nothing(self):
+        from PySide6.QtWidgets import QApplication
+        from src.gui.theme import apply_theme
+
+        QApplication.instance() or QApplication([])
+        apply_theme("dark")
+        self.assertFalse(apply_theme("dark"))
+        self.assertTrue(apply_theme("dark", force=True))
+        self.assertTrue(apply_theme("os"))

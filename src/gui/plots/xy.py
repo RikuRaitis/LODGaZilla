@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import h5py
@@ -12,7 +13,8 @@ from src.gui.plots.base import PlotBaseWidget, apply_view_range_state, view_rang
 from src.gui.plots.interactive import use_full_viewport_updates
 from src.gui.plots.legend import PlotLegendWidget
 from src.data.sampling import SampledResult, decimation_step
-from src.data.xyz import AxisSource, nearest_sample_indices
+from src.data.h5_series import _canonical_to_native_range, _visible_sample_bounds
+from src.data.xyz import AxisSource, _aligned_values
 from src.jobs.plot_groups import GroupedPlotLoadCoordinator
 from src.gui.plots.theme import apply_plot_palette
 from src.gui.plots.marker_info import MarkerInfoEntry, marker_entries_from_samples
@@ -106,6 +108,8 @@ class XYPlotWidget(PlotBaseWidget):
         self._sync_time: float | None = None
         self._selection_items: list[pg.PlotDataItem] = []
         self._marker_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
+        # Marker times whose values boxes are shown; a reload shows them again.
+        self._value_box_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
         self._graph_items = [(self.curve, self.points)]
         self._time = np.empty(0)
         self._x = np.empty(0)
@@ -146,13 +150,18 @@ class XYPlotWidget(PlotBaseWidget):
     def add_series(self, h5_path: Path, series_name: str) -> None:
         self.add_legend_group((AxisSource(h5_path, series_name),))
 
-    def on_series_changed(self) -> None:
-        self.hide_marker_data()
-        for highlight in self.highlights:
-            highlight.setData([], [])
+    def on_series_changed(self, *, keep_graphs: bool = False) -> None:
+        """Load the graphs again; ``keep_graphs`` shows the current ones until the new arrive.
+
+        A legend change clears them at once, since they no longer match the groups; a new
+        Sample limit or time range keeps them, so the card does not go blank.
+        """
+        self.hide_marker_data(forget=False)
         self._auto_range_load = True
-        self._loading = True
-        self._loaded([], auto_range=False)
+        if not keep_graphs:
+            for highlight in self.highlights:
+                highlight.setData([], [])
+            self._loaded([], auto_range=False)
         self._loading = True
         self.loader.request([group.axes for group in self.grouped_series.groups], self.time_range,
                             self.sample_limit)
@@ -205,6 +214,11 @@ class XYPlotWidget(PlotBaseWidget):
             self._draw_marker(index)
         self._update_selection()
         self.set_sync_marker(self._sync_time)
+        if complete:
+            # Values boxes follow the reloaded points (Sample limit, trim, legend change).
+            for index, time_value in self._value_box_times.items():
+                if time_value is not None:
+                    self.show_marker_data(time_value, index)
 
     def set_vertical_marker(self, time_value: float, index: int = FIRST_MARKER) -> None:
         self._marker_times[index] = float(time_value)
@@ -236,7 +250,11 @@ class XYPlotWidget(PlotBaseWidget):
         """The graph's point nearest a marker time, or None outside the graph."""
         if time_value is None or not _result_contains_time(result, time_value):
             return None
-        index = int(np.argmin(np.abs(result[0] - time_value)))
+        # Times ascend: a binary search instead of a pass over every point.
+        times = result[0]
+        upper = min(int(np.searchsorted(times, time_value)), len(times) - 1)
+        lower = max(0, upper - 1)
+        index = lower if abs(time_value - times[lower]) <= abs(times[upper] - time_value) else upper
         return float(result[1][index]), float(result[2][index])
 
     def selection_range(self) -> tuple[float, float] | None:
@@ -290,15 +308,19 @@ class XYPlotWidget(PlotBaseWidget):
         # An X/Y plot made from a line-plot selection represents only that
         # selected time window.  Do not show values from the full source H5
         # series when a linked marker is outside this plot's own data.
+        self._value_box_times[index] = float(time_value)
         if not self._contains_time(time_value):
-            self.hide_marker_data(index)
+            self.hide_marker_data(index, forget=False)
             return
         self._marker_request_ids[index] = self._marker_loads[index].request(time_value, list(self.series))
 
-    def hide_marker_data(self, index: int | None = None) -> None:
+    def hide_marker_data(self, index: int | None = None, *, forget: bool = True) -> None:
+        """Hide values boxes; ``forget=False`` shows them again after the next reload."""
         for marker in (FIRST_MARKER, SECOND_MARKER) if index is None else (index,):
             self._marker_request_ids[marker] = self._marker_loads[marker].invalidate()
             self.value_boxes.clear(marker)
+            if forget:
+                self._value_box_times[marker] = None
 
     def dispose(self) -> None:
         self.loader.shutdown()
@@ -316,7 +338,7 @@ class XYPlotWidget(PlotBaseWidget):
 
     def _reload_keeping_view(self) -> None:
         view_range = self.plot_item.vb.viewRange()
-        self.on_series_changed()
+        self.on_series_changed(keep_graphs=True)
         self._auto_range_load = False
         self.plot_item.vb.setRange(xRange=view_range[0], yRange=view_range[1], padding=0)
 
@@ -377,11 +399,14 @@ def load_xy_data(
     *,
     time_range: tuple[float, float] | None = None,
     maximum_points: int = XY_MAXIMUM_POINTS,
+    cancelled=None,  # type: ignore[no-untyped-def]
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, str, str]:
     """Align Y samples to the closest X timestamp, preserving the shared time marker.
 
     Only X samples inside the Y time coverage are paired, so Y is never
     extrapolated as a flat run, and absolute and relative times are not mixed.
+    Memory stays bounded whatever the series length: X is read every Nth sample
+    within the range, and Y is searched in chunks (as the 3D plot loader does).
     """
     with h5py.File(x_path, "r") as x_file, h5py.File(y_path, "r") as y_file:
         x_group = _series_group_for_navigator_name(x_file, x_name)
@@ -392,40 +417,37 @@ def load_xy_data(
         y_absolute = y_metadata.is_unix_time or y_metadata.log_start_unix_seconds is not None
         if x_absolute != y_absolute:
             raise ValueError("Cannot align absolute timestamps with series lacking a log start time")
-        x_time_dataset = x_group[_attribute_text(x_group.attrs.get("time_dataset", "time_unix"))]
-        x_time = _canonical_time_values(np.asarray(x_time_dataset, dtype=float), x_metadata)
-        x_values = np.asarray(x_group["value"], dtype=float)
-        y_times = _canonical_time_values(
-            np.asarray(y_group[_attribute_text(y_group.attrs.get("time_dataset", "time_unix"))], dtype=float),
-            y_metadata,
-        )
-        if not len(x_time) or not len(y_times):
+        x_times = x_group[_attribute_text(x_group.attrs.get("time_dataset", "time_unix"))]
+        y_times = y_group[_attribute_text(y_group.attrs.get("time_dataset", "time_unix"))]
+        if not len(x_times) or not len(y_times):
             raise ValueError("Series has no samples")
-        if not x_absolute and y_metadata.seconds_per_unit > 0 and x_metadata.seconds_per_unit > 0:
-            # Relative times stay in X's native unit; match Y in that unit.
-            y_times = y_times * (y_metadata.seconds_per_unit / x_metadata.seconds_per_unit)
-        finite_y = y_times[np.isfinite(y_times)]
-        if not len(finite_y):
+        if not x_absolute:
+            # Relative times stay in X's native unit; Y is read in that unit.
+            ratio = (y_metadata.seconds_per_unit / x_metadata.seconds_per_unit
+                     if y_metadata.seconds_per_unit > 0 and x_metadata.seconds_per_unit > 0 else 1.0)
+            y_metadata = replace(y_metadata, is_unix_time=True, seconds_per_unit=ratio)
+        # Y times ascend, so its first and last samples bound its coverage.
+        y_bounds = _canonical_time_values(np.asarray([y_times[0], y_times[-1]], dtype=float), y_metadata)
+        if not np.all(np.isfinite(y_bounds)):
             raise ValueError("Y series has no valid timestamps")
         # Endpoint clamping outside measured coverage invents constant tails,
         # even when the gap is less than half a sample interval.
-        lower, upper = float(finite_y.min()), float(finite_y.max())
+        lower, upper = float(y_bounds.min()), float(y_bounds.max())
         if time_range is not None:
             lower, upper = max(lower, min(time_range)), min(upper, max(time_range))
+        start, stop = (0, 0) if lower > upper else _visible_sample_bounds(
+            x_times, _canonical_to_native_range((lower, upper), x_metadata))
+        # Keep interaction responsive for very large raw series.
+        available = max(0, stop - start)
+        step = decimation_step(available, maximum_points)
+        x_time = _canonical_time_values(np.asarray(x_times[start:stop:step], dtype=float), x_metadata)
+        x_values = np.asarray(x_group["value"][start:stop:step], dtype=float)
         selected = (x_time >= lower) & (x_time <= upper)
         x_time, x_values = x_time[selected], x_values[selected]
         if not len(x_time):
             raise ValueError("Selected area has no samples" if time_range is not None
                              else "X and Y series have no overlapping time range")
-        # Keep interaction responsive for very large raw series.
-        available = len(x_time)
-        step = decimation_step(available, maximum_points)
-        x_time, x_values = x_time[::step], x_values[::step]
-        indices = nearest_sample_indices(y_times, x_time)
-        # Several X samples may use the same Y sample after an axis replacement.
-        # h5py fancy indexing requires strictly increasing, unique indices.
-        unique, inverse = np.unique(indices, return_inverse=True)
-        y_values = np.asarray(y_group["value"][unique], dtype=float)[inverse]
+        y_values = _aligned_values(y_times, y_group["value"], y_metadata, x_time, cancelled)
         x_label = f"{_attribute_text(x_group.attrs.get('navigator_name', x_name))} {_attribute_text(x_group.attrs.get('unit', ''))}".strip()
         y_label = f"{_attribute_text(y_group.attrs.get('navigator_name', y_name))} {_attribute_text(y_group.attrs.get('unit', ''))}".strip()
         result = SampledResult((x_time, x_values, y_values, x_label, y_label),
@@ -448,4 +470,4 @@ def _result_contains_time(result, time_value: float) -> bool:
 
 def load_xy_group(axes, *, time_range=None, cancelled=None, maximum_points=XY_MAXIMUM_POINTS):
     return load_xy_data(axes[0].path, axes[0].name, axes[1].path, axes[1].name, time_range=time_range,
-                        maximum_points=maximum_points)
+                        maximum_points=maximum_points, cancelled=cancelled)

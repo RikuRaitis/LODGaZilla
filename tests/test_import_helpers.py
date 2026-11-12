@@ -30,6 +30,25 @@ from src.data.parser_base import SeriesDefinition, parse_series_definitions  # n
 
 
 class LodTests(unittest.TestCase):
+    def test_levels_built_from_the_level_below_equal_levels_built_from_raw_samples(self):
+        from src.jobs.import_data import build_lod_arrays, build_lod_arrays_in_blocks, combine_lod_arrays
+        rng = np.random.default_rng(1)
+        count = 20_011
+        floats = rng.normal(size=count)
+        floats[rng.random(count) < 0.2] = np.nan
+        floats[3000:5000] = np.nan  # whole buckets without a finite value
+        times = np.cumsum(rng.random(count))
+        for values in (floats, floats.astype(np.float32), rng.integers(0, 9, count).astype(np.int16),
+                       rng.random(count) > 0.5):
+            lower = build_lod_arrays_in_blocks(times, values, 5, block_samples=700)
+            size = 5
+            for _level in range(4):
+                expected = build_lod_arrays(times, values, size)
+                for name, array in expected.items():
+                    np.testing.assert_array_equal(lower[name], array, err_msg=f"{values.dtype} {size} {name}")
+                size *= 5
+                lower = combine_lod_arrays(lower, 5)
+
     def test_lod_buckets_preserve_min_and_max_values(self):
         time_values = np.asarray([1, 2, 3, 4, 5], dtype=np.float64)
         values = np.asarray([0, 5, -10, 2, 7], dtype=np.float64)
@@ -375,9 +394,65 @@ class Hdf5TimeDatasetTests(unittest.TestCase):
                 )
                 self.assertIn("time_ms", group)
                 self.assertNotIn("time_unix", group)
+                # Without a transform, value_raw is the same dataset as value (a hard link).
+                self.assertEqual(group["value_raw"], group["value"])
                 level = group["lod"]["level_001"]
                 self.assertIn("time_start_ms", level)
                 self.assertIn("time_end_ms", level)
+
+    def test_series_names_with_the_same_h5_name_are_both_written(self):
+        import h5py
+        from src.data.h5_series import _series_group_for_navigator_name
+        configuration = ImportConfiguration(Path("test.json"), {}, hdf5_config={})
+        series = {
+            name: {"time": np.asarray([0.0, 1.0]), "values": np.asarray(values), "time_unit": "s",
+                   "time_reference": "device_relative", "navigator_group": "Car", "navigator_name": name,
+                   "time_sorted": True}
+            for name, values in (("Speed (km/h)", [1.0, 2.0]), ("Speed [km/h]", [3.0, 4.0]))
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "car.h5"
+            input_path = Path(temp_dir) / "car.csv"
+            input_path.write_bytes(b"x")
+            write_hdf5_cache(output_path=output_path, input_path=input_path, selected_config=configuration,
+                             import_result={"series": series})
+            with h5py.File(output_path, "r") as h5_file:
+                self.assertEqual(sorted(h5_file["series/Car"]), ["Speed_km_h", "Speed_km_h_2"])
+                for name, values in (("Car/Speed (km/h)", [1.0, 2.0]), ("Car/Speed [km/h]", [3.0, 4.0])):
+                    np.testing.assert_array_equal(_series_group_for_navigator_name(h5_file, name)["value"], values)
+
+    def test_time_said_to_be_sorted_is_checked(self):
+        from src.jobs.import_data import _normalise_series
+        # A clock reset in a series the parser called sorted.
+        times, values = _normalise_series({"time": [0.0, 1.0, 2.0, 0.5], "values": [1, 2, 3, 4],
+                                           "time_sorted": True})
+        np.testing.assert_array_equal(times, [0.0, 0.5, 1.0, 2.0])
+        np.testing.assert_array_equal(values, [1, 4, 2, 3])
+
+    def test_navigator_reads_warnings_from_the_series_index(self):
+        import h5py
+        from src.data.navigator_data import read_h5_navigator_data
+        configuration = ImportConfiguration(Path("test.json"), {}, hdf5_config={})
+        series = {"Gappy": {"time": np.asarray([0.0, 0.01, 5.0]), "values": np.asarray([1.0, 2.0, 3.0]),
+                            "time_unit": "s", "time_reference": "device_relative", "navigator_group": "G",
+                            "navigator_name": "Gappy", "max_sample_interval_ms": 100, "time_sorted": True}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "gaps.h5"
+            input_path = Path(temp_dir) / "gaps.csv"
+            input_path.write_bytes(b"x")
+            write_hdf5_cache(output_path=output_path, input_path=input_path, selected_config=configuration,
+                             import_result={"series": series})
+            with mock.patch.object(h5py.Group, "visititems", side_effect=AssertionError("walked")):
+                data = read_h5_navigator_data(output_path)
+            # A file without the indexed warning (an older one) is walked for it instead.
+            with h5py.File(output_path, "a") as h5_file:
+                index = json.loads(h5_file.attrs["series_index_json"])
+                del index[0]["diagnostic_warning"]
+                h5_file.attrs["series_index_json"] = json.dumps(index)
+            older = read_h5_navigator_data(output_path)
+        for result in (data, older):
+            warning = {entry.column_id: entry.value for entry in result.series[0].metadata}.get("warning")
+            self.assertEqual(warning, "Sampleloss detected")
 
     def test_hdf5_writer_reports_monotonic_progress(self):
         parser_config = {}
