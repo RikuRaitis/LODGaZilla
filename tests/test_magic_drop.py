@@ -17,7 +17,7 @@ from src.ai import claude_cli, codex_cli, magic_drop  # noqa: E402
 from src.ai.providers import CLAUDE, CODEX, provider_named  # noqa: E402
 from src.app.settings import DEFAULT_AI_SETTINGS, sanitize_ai_settings  # noqa: E402
 from src.data.folder_info import read_info_file  # noqa: E402
-from src.jobs.magic_drop import MagicDropJob  # noqa: E402
+from src.jobs.magic_drop import MagicDropJob, SignInCheck  # noqa: E402
 from tests.qt_wait import qt_wait_until  # noqa: E402
 
 # What Claude would write: a parser for "time_s,temperature_C,pressure_hPa" CSV files.
@@ -336,3 +336,38 @@ class MagicDropTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MagicDropQueueTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_queued_drops_keep_the_data_folder_they_were_dropped_into(self):
+        from types import SimpleNamespace
+        from src.app.lodgazilla import LODGaZillaWindow
+
+        started = []
+        window = SimpleNamespace(
+            _magic_drop_queue=[([Path("a.csv")], "", CLAUDE, Path("first")),
+                               ([Path("b.csv")], "", CLAUDE, Path("second"))],
+            agent_executable=lambda provider: Path("claude"), settings_path=None,
+            ai_panel=mock.Mock(), internal_logger=mock.Mock(), magic_drop_job=None)
+        with mock.patch("src.app.lodgazilla.MagicDropJob") as job_class,                 mock.patch("src.app.lodgazilla.load_ai_settings", return_value=dict(DEFAULT_AI_SETTINGS)):
+            job_class.side_effect = lambda executable, files, folder, **options: started.append(folder) or mock.Mock()
+            LODGaZillaWindow._start_next_magic_drop(window)
+            LODGaZillaWindow._start_next_magic_drop(window)
+        self.assertEqual(started, [Path("first"), Path("second")])
+
+    def test_sign_in_check_finds_the_cli_in_the_background(self):
+        import threading
+        threads, answers = [], []
+        provider = dataclasses.replace(
+            CLAUDE, find=lambda configured: threads.append(threading.current_thread()) or Path("claude"),
+            is_signed_in=lambda executable: True)
+        check = SignInCheck(provider)
+        check.checked.connect(answers.append)
+        check.start("")
+        qt_wait_until(lambda: answers, timeout_ms=5000)
+        self.assertEqual(answers, [True])
+        self.assertIsNot(threads[0], threading.main_thread())

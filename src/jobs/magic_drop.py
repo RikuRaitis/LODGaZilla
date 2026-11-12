@@ -131,16 +131,18 @@ class SignInCheck(QObject):
         self.provider = provider
         self._running = False
 
-    def start(self, executable: Path | None) -> None:
+    def start(self, configured: str | Path | None = None) -> None:
+        """Find the CLI (the configured path, PATH, VS Code extensions) and ask it, off the GUI thread."""
         if self._running:
-            return
-        if executable is None:
-            self.checked.emit(False)
             return
         self._running = True
 
         def run() -> None:
-            signed_in = self.provider.is_signed_in(executable)
+            try:
+                executable = self.provider.find(configured or None)
+                signed_in = executable is not None and self.provider.is_signed_in(executable)
+            except OSError:
+                signed_in = False
             self._running = False
             self.checked.emit(signed_in)
 

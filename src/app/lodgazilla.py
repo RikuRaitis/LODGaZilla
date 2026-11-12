@@ -2104,7 +2104,8 @@ class LODGaZillaWindow(QMainWindow):
         self.plugin_chat_job: PluginChatJob | None = None
         self.plugin_chat_id: str | None = None
         self._plugin_chat_sessions: dict[str, str] = {}
-        self._magic_drop_queue: list[tuple[list[Path], str, AgentProvider]] = []
+        # Each queued drop keeps the data folder it was dropped into.
+        self._magic_drop_queue: list[tuple[list[Path], str, AgentProvider, Path]] = []
         self._sign_in_checks: dict[str, SignInCheck] = {}
         for provider in PROVIDERS.values():
             check = SignInCheck(provider, self)
@@ -2502,10 +2503,14 @@ class LODGaZillaWindow(QMainWindow):
         """The provider's CLI: its path in Settings, or found automatically."""
         return provider.find(load_ai_settings(self.settings_path)[provider.path_setting] or None)
 
-    def check_ai_sign_in(self) -> None:
-        """Show in the AI panel whether the chosen provider's CLI is signed in; checked in the background."""
-        provider = provider_named(self.ai_panel.provider)
-        self._sign_in_checks[provider.name].start(self.agent_executable(provider))
+    def check_ai_sign_in(self, name: str = "") -> None:
+        """Show in the AI panel whether a provider's CLI (default: the chosen one) is signed in.
+
+        Finding the CLI and asking it both run in the background.
+        """
+        provider = provider_named(name or self.ai_panel.provider)
+        configured = load_ai_settings(self.settings_path)[provider.path_setting]
+        self._sign_in_checks[provider.name].start(configured)
 
     def sign_in_to_ai(self, name: str) -> None:
         provider = provider_named(name)
@@ -2521,7 +2526,7 @@ class LODGaZillaWindow(QMainWindow):
         self.ai_panel.append_note(f"Sign in to {provider.name} in the window that opened, then drop your files again.")
         # The CLI's sign-in has no completion signal here; check again after a while.
         for delay in (15_000, 45_000, 90_000):
-            QTimer.singleShot(delay, self.check_ai_sign_in)
+            QTimer.singleShot(delay, lambda name=provider.name: self.check_ai_sign_in(name))
 
     def start_magic_drop(self, files: list[Path], hints: str) -> None:
         """Turn files dropped on Magic drop into H5 files in a new folder of the data folder,
@@ -2546,9 +2551,9 @@ class LODGaZillaWindow(QMainWindow):
                 panel.append_note("Magic drop cancelled: nothing was sent.")
                 return
             groups = [[path] for path in files] if choice == "each" else groups
-        self._magic_drop_queue.extend((group, hints, provider) for group in groups)
+        self._magic_drop_queue.extend((group, hints, provider, Path(data_folder)) for group in groups)
         if self.magic_drop_job is None:
-            self._start_next_magic_drop(Path(data_folder))
+            self._start_next_magic_drop()
         else:
             panel.append_note("Queued; it starts when the current Magic drop finishes.")
 
@@ -2581,9 +2586,9 @@ class LODGaZillaWindow(QMainWindow):
         box.exec()
         return {one: "one", each: "each"}.get(box.clickedButton())
 
-    def _start_next_magic_drop(self, data_folder: Path) -> None:
+    def _start_next_magic_drop(self) -> None:
         while self._magic_drop_queue:
-            files, hints, provider = self._magic_drop_queue.pop(0)
+            files, hints, provider, data_folder = self._magic_drop_queue.pop(0)
             executable = self.agent_executable(provider)
             if executable is not None:
                 break
@@ -2622,7 +2627,7 @@ class LODGaZillaWindow(QMainWindow):
             current = self.navigator.data_folder()
             if current is not None and Path(current) == data_folder:
                 self.navigator.refresh_tree(rescan=True)
-        self._start_next_magic_drop(data_folder)
+        self._start_next_magic_drop()
 
     def stop_magic_drop(self) -> None:
         self._magic_drop_queue.clear()

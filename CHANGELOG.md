@@ -6,6 +6,22 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop and the time limit end everything an AI agent started, not only the agent itself.
+- In the AI panel, Enter outside Create plugin keeps the typed text as Magic drop hints
+  instead of discarding it.
+- A queued Magic drop goes to the data folder it was dropped into, even if the data
+  folder changes meanwhile.
+- Saving the Settings dialog no longer withdraws an AI consent given while it was open.
+- Finding the Claude and Codex CLIs no longer blocks the window; after Sign in, the
+  provider that is signing in is checked again.
+- Map cards draw tracks at Sample limits of 200k points and above.
+- 3D plot cards no longer repaint continuously while idle.
+- Values boxes on 3D plot and Map cards come back when their point returns to view.
+- Times stored in milliseconds, microseconds or nanoseconds (written out) plot at the
+  right scale.
+
 ## [1.0.0-beta.2] - 2026-11-12
 
 ### Added

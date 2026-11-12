@@ -6,7 +6,6 @@ agent's whole process tree. The run keeps the session ID, so a next run can cont
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import threading
 import time
@@ -15,7 +14,7 @@ from pathlib import Path
 
 from src.ai.agent_common import NO_WINDOW, agent_environment
 from src.ai.providers import AgentProvider
-from src.jobs.process_tree import WindowsProcessTree
+from src.jobs.process_tree import WindowsProcessTree, kill_process_tree, popen_in_tree
 
 
 class AgentRun:
@@ -37,13 +36,11 @@ class AgentRun:
         """
         name = self.provider.name
         check_cancelled()
-        self.process = subprocess.Popen(
+        # Started suspended in its process tree, so nothing the agent starts can escape Stop.
+        self.process, self._tree = popen_in_tree(
             command, cwd=cwd, env=agent_environment(), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
             creationflags=NO_WINDOW)
-        if os.name == "nt":
-            self._tree = WindowsProcessTree()
-            self._tree.assign(self.process.pid)
         if self._stop_requested:
             # Stopped while the process was starting.
             self.stop()
@@ -88,12 +85,6 @@ class AgentRun:
 
     def stop(self) -> None:
         self._stop_requested = True
-        tree, self._tree = self._tree, None
-        if tree is not None:
-            try:
-                tree.close()
-            except (OSError, TimeoutError):
-                pass
-        process = self.process
-        if process is not None and process.poll() is None:
-            process.kill()
+        process, tree, self._tree = self.process, self._tree, None
+        if process is not None:
+            kill_process_tree(process, tree)

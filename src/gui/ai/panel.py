@@ -44,6 +44,8 @@ PLUGIN_INPUT_PLACEHOLDER = "Ask a question or describe the plugin you need"
 # The main window's answer to a question asked outside Create plugin.
 NOT_CONNECTED_REPLY = ("Questions go to the AI while creating a plugin: drop files on Create plugin, "
                        "or ask there. For Magic drop, drop the files on Magic drop.")
+# Enter outside Create plugin: the typed text stays in the AI input as hints for the next drop.
+HINTS_KEPT_NOTE = "Your text stays as hints for Magic drop: now drop the files on Magic drop."
 MAX_INPUT_LINES = 10
 MAGIC_DROP = "magic_drop"
 CREATE_PLUGIN = "create_plugin"
@@ -538,10 +540,16 @@ class AIPanel(QWidget):
     # The AI conversation.
 
     def submit(self) -> None:
-        """Show the question and its files in the AI conversation and clear the AI input."""
+        """Show the question and its files in the AI conversation and clear the AI input.
+
+        Outside Create plugin, text alone is kept in the AI input as Magic drop hints.
+        """
         text = self.input.toPlainText().strip()
         files = self.attached_files()
         if not text and not files:
+            return
+        if self._mode != CREATE_PLUGIN and not files:
+            self.append_note(HINTS_KEPT_NOTE)
             return
         self.append_user_message(text, files)
         for path in files:

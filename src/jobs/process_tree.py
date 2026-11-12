@@ -115,3 +115,53 @@ def start_process_tree(process, start_event):
         if tree is not None:
             tree.close()
         raise
+
+
+def popen_in_tree(args, **kwargs):
+    """Start a subprocess that cannot start children outside its process tree.
+
+    On Windows the process starts suspended, joins a job object and only then runs, so
+    everything it starts belongs to the job; closing the tree ends them all. Elsewhere it
+    starts in its own session, whose process group ``kill_process_tree`` ends.
+    Returns ``(process, tree)``; ``tree`` is None outside Windows.
+    """
+    if os.name != "nt":
+        import subprocess
+        return subprocess.Popen(args, start_new_session=True, **kwargs), None
+    import subprocess
+    kwargs["creationflags"] = kwargs.get("creationflags", 0) | 0x00000004  # CREATE_SUSPENDED
+    tree = WindowsProcessTree()
+    try:
+        process = subprocess.Popen(args, **kwargs)
+    except BaseException:
+        tree.close()
+        raise
+    try:
+        tree.assign(process.pid)
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.argtypes, ntdll.NtResumeProcess.restype = [wintypes.HANDLE], ctypes.c_long
+        status = ntdll.NtResumeProcess(int(process._handle))
+        if status < 0:
+            raise OSError(f"Could not resume the process (NTSTATUS {status & 0xFFFFFFFF:#010x})")
+    except BaseException:
+        process.kill()
+        tree.close()
+        raise
+    return process, tree
+
+
+def kill_process_tree(process, tree) -> None:
+    """End a process started with ``popen_in_tree`` and everything it started."""
+    if tree is not None:
+        try:
+            tree.close()
+        except (OSError, TimeoutError):
+            pass
+    elif os.name != "nt" and process.poll() is None:
+        import signal
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    if process.poll() is None:
+        process.kill()

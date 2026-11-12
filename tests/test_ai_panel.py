@@ -10,6 +10,7 @@ from PySide6.QtTest import QTest
 
 from src.gui.ai.panel import (
     CREATE_PLUGIN,
+    HINTS_KEPT_NOTE,
     INPUT_PLACEHOLDER,
     MAGIC_DROP,
     MAX_INPUT_LINES,
@@ -82,6 +83,7 @@ class AIPanelTests(_QtTestCase):
 
     def test_send_button_becomes_stop_while_the_agent_is_busy(self):
         panel = self.panel()
+        panel._open_conversation(CREATE_PLUGIN)
         stops, questions = [], []
         panel.stop_requested.connect(lambda: stops.append(True))
         panel.question_submitted.connect(lambda text, files: questions.append(text))
@@ -219,6 +221,18 @@ class AIPanelTests(_QtTestCase):
         panel.start_magic_drop([first])
         panel.dropEvent(drop)
         self.assertEqual(panel.attached_files(), [first, second, third])
+
+    def test_enter_in_magic_drop_mode_keeps_the_text_as_hints(self):
+        panel = self.panel()
+        submitted, dropped = [], []
+        panel.question_submitted.connect(lambda text, files: submitted.append(text))
+        panel.files_dropped.connect(lambda files, hints: dropped.append(hints))
+        panel.input.setPlainText("Speed is in knots")
+        QTest.keyClick(panel.input, Qt.Key.Key_Return)
+        self.assertEqual((submitted, panel.input.toPlainText()), ([], "Speed is in knots"))
+        self.assertIn(HINTS_KEPT_NOTE, panel.conversation.toPlainText())
+        panel.start_magic_drop([self.sample()])
+        self.assertEqual(dropped, ["Speed is in knots"])
 
     def test_a_question_and_its_files_go_to_the_conversation(self):
         panel = self.panel()

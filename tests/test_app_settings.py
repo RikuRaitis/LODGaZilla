@@ -300,6 +300,23 @@ class AppSettingsTests(unittest.TestCase):
         self.assertFalse(controls.hide_irrelevant_series)
         self.assertFalse(diagnostics["clipping"]["enabled"])
 
+    def test_consent_given_while_the_dialog_is_open_is_kept(self):
+        from src.app.settings import load_ai_settings
+        from src.gui.settings_widget import SettingsEditorWidget
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "app_settings.json"
+            save_settings_section(path, "ai", {**load_ai_settings(path), "codex_magic_drop_consent": True})
+            editor = SettingsEditorWidget(path)
+            self.addCleanup(editor.close)
+            # The AI panel saves Claude's consent; the user unticks Codex's in the dialog.
+            save_settings_section(path, "ai", {**load_ai_settings(path), "magic_drop_consent": True})
+            editor.codex_magic_drop_consent_checkbox.setChecked(False)
+            editor.save()
+            saved = load_ai_settings(path)
+        self.assertTrue(saved["magic_drop_consent"])
+        self.assertFalse(saved["codex_magic_drop_consent"])
+
     def test_theme_preview_applies_immediately_and_is_saved(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "app_settings.json"

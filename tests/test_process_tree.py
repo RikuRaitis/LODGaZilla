@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from src.jobs.parallel_jobs import run_process_jobs
-from src.jobs.process_tree import start_process_tree
+from src.jobs.process_tree import kill_process_tree, popen_in_tree, start_process_tree
 
 
 def _initialize(_queue, _cancel=None):
@@ -78,3 +78,23 @@ class ProcessTreeTests(unittest.TestCase):
         gate.set.assert_not_called()
         process.terminate.assert_called_once()
         owner.return_value.close.assert_called_once()
+
+    def test_popen_in_tree_owns_children_started_at_once(self):
+        """A CLI's children started right away cannot outlive Stop (the agent's process tree)."""
+        code = ("import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',"
+                "\"import pathlib,sys,time; time.sleep(3); pathlib.Path(sys.argv[1]).write_text('x')\","
+                "sys.argv[1]]); print('started', flush=True); time.sleep(30)")
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "child-wrote"
+            process, tree = popen_in_tree([sys.executable, "-c", code, str(marker)],
+                                          stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(process.stdout.readline().strip(), "started")
+                if tree is not None:
+                    self.assertGreaterEqual(tree.active_processes(), 2)
+            finally:
+                kill_process_tree(process, tree)
+                process.stdout.close()
+            time.sleep(4)
+            self.assertFalse(marker.exists())
+            self.assertIsNotNone(process.poll())

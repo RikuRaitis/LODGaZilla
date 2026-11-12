@@ -572,11 +572,19 @@ class SettingsEditorWidget(QWidget):
                 for name, (color, bold, italic) in self.diagnostic_style_controls.items()
             },
         })
+        # A consent the AI panel saved while this dialog was open is kept unless changed here.
+        shown_ai = sanitize_ai_settings(section_mapping(self.settings_data, AI_SECTION))
+        saved_ai = sanitize_ai_settings(section_mapping(data, AI_SECTION))
+
+        def consent(name: str, checkbox: QCheckBox) -> bool:
+            checked = checkbox.isChecked()
+            return saved_ai[name] if checked == shown_ai[name] else checked
+
         data[AI_SECTION] = sanitize_ai_settings({
             "claude_path": self.claude_path_edit.text(),
-            "magic_drop_consent": self.magic_drop_consent_checkbox.isChecked(),
+            "magic_drop_consent": consent("magic_drop_consent", self.magic_drop_consent_checkbox),
             "codex_path": self.codex_path_edit.text(),
-            "codex_magic_drop_consent": self.codex_magic_drop_consent_checkbox.isChecked(),
+            "codex_magic_drop_consent": consent("codex_magic_drop_consent", self.codex_magic_drop_consent_checkbox),
             "claude_web_access": self.claude_web_access_checkbox.isChecked(),
             "codex_web_access": self.codex_web_access_checkbox.isChecked(),
             "max_budget_usd": self.ai_budget_spin.value(),
