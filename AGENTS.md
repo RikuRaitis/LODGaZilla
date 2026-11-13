@@ -279,6 +279,48 @@ An H5 file supplies data series; it is not a separate tree item type.
 - **Report clearly.** Explain what changed, how it was verified, and any known
   limitations. Update this guide when agreed terminology or principles change.
 
+## Recurring tasks
+
+Do these when the user asks for them by name.
+
+### Full code review
+
+Review the main app, the tools and the plugins in `plugin/`:
+
+1. Run the full test suite when it helps the review (`python -m unittest discover -s tests`,
+   and each plugin's own tests with `python tools/run_tests.py --plugin plugin/<id>`).
+2. Find bugs and likely bugs.
+3. Check performance: program startup, H5 generation, plotting and UI responsiveness.
+4. Check the architecture: what to refactor or change, and why. Check that the plugins are
+   independent and that the main app and the plugins are separated properly (only
+   `src/contracts` between them; see **Keep plugins independently testable**).
+5. Look for unused or dead code.
+6. Check user friendliness: is it easy to use?
+7. Prioritise the findings and propose which to fix first.
+8. Fix trivial bugs and improvements at once, and list them under **Fixed in this review**.
+9. Write the results to `Code_review.md` (host) and `Code_review_plugin.md` (plugins), in
+   the same structure: Summary, Fixed in this review, Open findings by area, Accepted
+   design decisions, Test run, and **Lines of code** last, split by main component. Clear
+   the fixed findings of the previous round but keep their empty headings for the next.
+   `Code_review.md` never names private plugins (see **Keep plugin reviews separate**).
+
+### Release
+
+Follow `docs/Releasing.md`, with these checks:
+
+1. Run the full test suite, and the tests of each plugin with unpushed changes.
+2. Raise `APP_VERSION` in `src/version.py` and date the **Unreleased** changelog section.
+3. Commit as `Release <version>` and tag it `v<version>`.
+4. Check that nothing going public names a private plugin or its findings: the new
+   commits' messages and added lines (`git log`, `git diff` since the last pushed commit)
+   and the released tree (`git grep`). The private plugins are the ones whose remotes are
+   not public, such as those on Suunto's Bitbucket.
+5. Push `master` and the one new tag to `origin`, and each plugin repository with unpushed
+   commits to its own remote. Never run `git push --tags`: older history's tags, such as
+   `v0.2.0`, would publish it. Push one tag at a time.
+6. Creating the GitHub release from the tag (step 6 of `docs/Releasing.md`) publishes
+   text: show it and ask first.
+
 ## Useful entry points
 
 - `python -m src.app.lodgazilla [--default-settings] [--no-plugins] [data_folder]`:
