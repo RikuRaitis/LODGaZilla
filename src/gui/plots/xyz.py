@@ -21,6 +21,17 @@ from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.jobs.xyz import XYZLoadCoordinator
 
 
+def axis_tick_label(axis_name: str, low: float, high: float, fraction: float) -> str:
+    """The axis name and its value ``fraction`` of the way from ``low`` to ``high``."""
+    span = high - low
+    value = low + fraction * span
+    if abs(value) < 1e-6 * span:
+        value = 0.0
+    # Preserve small differences around a large offset (Unix time).
+    digits = min(16, max(6, int(np.ceil(np.log10(max(abs(value), 1)) - np.log10(span))) + 3))
+    return f"{axis_name} {value:.{digits}g}"
+
+
 class XYZView(gl.GLViewWidget):
     scroll_requested = Signal(int)
     # A press and release without dragging, which would otherwise rotate.
@@ -234,22 +245,24 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         text_color = self.palette().text().color()
         font = QFont(self.font())
         font.setPointSize(9)
+        minimums = []
         for axis_index, axis_name in enumerate("XYZ"):
             start, end = np.full(3, -1.0), np.full(3, -1.0)
             end[axis_index] = 1.0
             self._add_item(gl.GLLinePlotItem(pos=np.array([start, end]), color=pg.glColor(text_color), width=1, glOptions="opaque"))
             for fraction in (0, 0.5, 1):
+                label = axis_tick_label(axis_name, low[axis_index], high[axis_index], fraction)
+                if fraction == 0:
+                    minimums.append(label)
+                    continue
                 pos = start.copy()
                 pos[axis_index] = -1 + 2 * fraction
                 pos[(axis_index + 1) % 3] -= 0.16
-                value = low[axis_index] + fraction * (high[axis_index] - low[axis_index])
-                span = high[axis_index] - low[axis_index]
-                if abs(value) < 1e-6 * span:
-                    value = 0.0
-                # Preserve small differences around a large offset (Unix time).
-                digits = min(16, max(6, int(np.ceil(np.log10(max(abs(value), 1)) - np.log10(span))) + 3))
-                label = f"{axis_name} {value:.{digits}g}"
                 self._add_item(gl.GLTextItem(pos=pos, text=label, color=text_color, font=font))
+        # The three axes start at one corner: one label lists their minimums, where three would overlap.
+        # Just above the corner, clear of the X and Y labels beside and below it.
+        self._add_item(gl.GLTextItem(pos=np.array([-1.0, -1.0, -0.84]), text="  ".join(minimums),
+                                     color=text_color, font=font))
         self._update_legend()
         # New scene positions: the marker items are made again for them.
         self._clear_marker_items()

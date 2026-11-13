@@ -441,13 +441,20 @@ class FrequencyCardTests(unittest.TestCase):
         self.wait_for(lambda: card.data is not None and card.data.frequency_range == (0, 2048))
         np.testing.assert_allclose(card.plot_view_box().viewRange()[1], [0, 2048])
 
-    def test_unreachable_target_is_visible_in_card_status(self):
+    def test_unreachable_target_is_reported_in_the_app_log(self):
+        logged = []
+        self.workspace.plot_status_changed.connect(logged.append)
         card = self.workspace.add_frequency_plot(self.path, "Scope/Channel A")
         self.wait_for(lambda: card.data is not None)
         card.set_fft_settings(replace(card.settings, target_bin_hz=0.01))
-        self.wait_for(lambda: "not reached" in card.status_label.text())
+        self.wait_for(lambda: logged and "not reached" in logged[-1])
         self.assertEqual(card.data.window_size, 8192)
-        self.assertIn("Bin spacing 0.5 Hz", card.status_label.text())
+        self.assertIn("Bin spacing 0.5 Hz", logged[-1])
+        self.assertTrue(logged[-1].startswith("Frequency — "))
+        # A redraw with the same details logs nothing new.
+        count = len(logged)
+        card._log_status(card._logged_status)
+        self.assertEqual(len(logged), count)
 
 
 if __name__ == "__main__":

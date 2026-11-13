@@ -93,7 +93,8 @@ selector** chooses which trace the card's X/Y/Z assignment controls edit.
   mouse actions in a popup (`help_button`, text in `src/gui/plots/card_help.py`).
 - **Resize handle**: the bottom handle used to adjust card or shared row height (`resize_handle`).
 - **Header controls**: widgets in the Drag strip's row; `header_controls` are laid out right to
-  left from the Close button and `header_left_controls` left to right. The Map card's
+  left from the Close button, continuing on a row below when the card is too narrow, and
+  `header_left_controls` left to right. The Map card's
   **Map type selector** (Street/Satellite) is one; the rest of the strip still drags the card.
 - **FFT settings button**: the gear left of a Frequency card's Close button; opens the FFT settings menu (`fft_settings_button`).
 - **Sample limit selector**: the dropdown immediately left of the Close button on

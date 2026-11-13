@@ -314,8 +314,15 @@ class XYZCardTests(unittest.TestCase):
             [1_700_000_000., 5, 0], [1_700_000_001., 5, 1], [1_700_000_002., 5, 2],
         ]), ("Time", "Constant", "Value"), False)])
         texts = [item.text for item in card.view.items if hasattr(item, "text")]
-        self.assertEqual(len(set(text for text in texts if text.startswith("X "))), 3)
-        self.assertEqual(len(set(text for text in texts if text.startswith("Y "))), 3)
+        # Each label is "<axis> <value>"; the shared corner's label lists the three minimums.
+        ticks = {}
+        for text in texts:
+            for part in text.split("  "):
+                axis, value = part.split(" ", 1)
+                ticks.setdefault(axis, set()).add(value)
+        self.assertEqual(len(ticks["X"]), 3)
+        self.assertEqual(len(ticks["Y"]), 3)
+        self.assertEqual(sum(text.startswith("X ") and " Y " in text and " Z " in text for text in texts), 1)
 
     def test_loading_coalesces_requests_and_shutdown_does_not_wait(self):
         parent = QWidget()

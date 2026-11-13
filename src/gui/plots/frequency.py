@@ -8,8 +8,8 @@ from threading import Event
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QRectF, QSize, QThread, QTimer, Signal
-from PySide6.QtGui import QActionGroup, QColor
-from PySide6.QtWidgets import QColorDialog, QDialog, QInputDialog, QLabel, QMenu, QToolButton
+from PySide6.QtGui import QActionGroup, QColor, QFontMetrics
+from PySide6.QtWidgets import QColorDialog, QDialog, QInputDialog, QMenu, QToolButton
 
 from src.data.frequency import FFTSettings, FFT_WINDOW_SIZES, colour_values
 from src.gui.plots.base import PlotBaseWidget, apply_view_range_state, series_legend_name, view_range_state
@@ -28,6 +28,12 @@ from src.gui.plots.theme import apply_plot_palette
 
 # Cancelled reads may finish after their card closes; retain their threads only.
 _LIVE_WORKERS: set[QThread] = set()
+
+
+def ordinal(number: int) -> str:
+    """1st, 2nd, 3rd, 4th, ..., 11th, 12th, 13th, ..., 21st."""
+    suffix = "th" if 10 <= number % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
 
 
 class FrequencyLoader(QThread):
@@ -87,7 +93,8 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.plot_widget = FrequencyCanvas(self)
         self.plot_item = self.plot_widget.getPlotItem()
         self.plot_item.setLabel("left", "Frequency", units="Hz")
-        self.plot_item.setLabel("bottom", "Time")
+        # The time axis' ticks name the time, as on Line cards; a label would add an SI multiplier.
+        self.plot_item.setLabel("bottom", "")
         self.plot_item.disableAutoRange()
         self.image = pg.ImageItem(axisOrder="row-major")
         self.plot_item.addItem(self.image)
@@ -96,12 +103,14 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.plot_item.addItem(self.peak_line, ignoreBounds=True)
         self.colour_bar = pg.ColorBarItem(values=(-80, 0), colorMap=pg.colormap.get("viridis"), interactive=False)
         self.colour_bar.setImageItem(self.image, insert_in=self.plot_item)
-        self.status_label = QLabel("Calculating frequency plot…", self)
-        self.status_label.setWordWrap(True)
+        # The colour bar's label, in full and short, and the one that fits its height.
+        self._colour_bar_labels = ("Amplitude", "")
+        self.colour_bar.axis.geometryChanged.connect(self._fit_colour_bar_label)
+        # The last message sent to the app log, so a zoom that changes nothing logs nothing.
+        self._logged_status: str | None = None
         self.value_boxes = ValueBoxLayer(self.plot_widget)
         self.selection_info = SelectionDurationInfo(self.plot_widget, self.value_boxes, lambda: self.time_axis_metadata)
         self.content_layout.addWidget(self.plot_widget, stretch=1)
-        self.content_layout.addWidget(self.status_label)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(150)
@@ -195,10 +204,9 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
                 self.peak_line.clear()
                 self.data = None
                 self.hide_marker_data()
-                self.status_label.setText("The visible range is outside the selected data range.")
+                self._log_status("The visible range is outside the selected data range.")
                 return
         self._pending = (self._revision, self.series[0], self.settings, time_range)
-        self.status_label.setText("Calculating frequency plot…")
         if self._worker is None:
             self._start_pending()
 
@@ -223,8 +231,7 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
                 self.peak_line.clear()
                 self.data = None
                 self.hide_marker_data()
-                self.status_label.setText(worker.error)
-                self.plot_status_changed.emit("Frequency plot: " + worker.error)
+                self._log_status(worker.error)
             elif worker.result is not None:
                 self._show_data(worker.result)
         self._start_pending()
@@ -268,16 +275,36 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
                                  data.time_edges[1] - data.time_edges[0], data.amplitude.shape[0] * df))
         self.colour_bar.setLevels(levels)
         unit = data.unit or "unit"
-        self.colour_bar.axis.setLabel(f"Amplitude (dB re 1 {unit})" if self.settings.decibels else f"Amplitude ({unit})")
+        self._colour_bar_labels = ((f"Amplitude (dB re 1 {unit})", "dB") if self.settings.decibels
+                                   else (f"Amplitude ({unit})", unit))
+        self._fit_colour_bar_label()
         status = (f"{data.sample_rate:g} samples/s · FFT {data.window_size} · Bin spacing {df:g} Hz"
                   f" · Window {1000 * data.window_size / data.sample_rate:g} ms")
         if self.settings.target_bin_hz is not None and df > self.settings.target_bin_hz * (1 + 1e-9):
             status += f" · Target {self.settings.target_bin_hz:g} Hz not reached (available samples or FFT size limit)"
         if data.window_stride > 1:
-            status += f" · Overview: every {data.window_stride}th window; zoom for more detail"
+            status += f" · Overview: every {ordinal(data.window_stride)} window; zoom for more detail"
         if data.skipped_windows:
             status += f" · {data.skipped_windows} windows with gaps or irregular timing omitted"
-        self.status_label.setText(status)
+        self._log_status(status)
+
+    def _log_status(self, status: str) -> None:
+        """Send the card's FFT details or problem to the app log, once per change."""
+        if status == self._logged_status:
+            return
+        self._logged_status = status
+        name = series_legend_name(*self.series[0]) if self.series else "Frequency"
+        self.plot_status_changed.emit(f"Frequency — {name}: {status}")
+
+    def _fit_colour_bar_label(self):
+        """The full label when it fits along the colour bar, otherwise the short one, so a low card's
+        label doesn't run into the header."""
+        full, short = self._colour_bar_labels
+        axis = self.colour_bar.axis
+        fits = QFontMetrics(axis.label.font()).horizontalAdvance(full) <= axis.geometry().height()
+        text = full if fits else short
+        if axis.labelText != text:
+            axis.setLabel(text)
 
     def set_fft_settings(self, settings):
         old = self.settings

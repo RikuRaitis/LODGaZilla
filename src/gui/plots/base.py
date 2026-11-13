@@ -397,12 +397,17 @@ class PlotBaseWidget(QFrame):
                     if control not in self._suppressed_header_controls:
                         self._suppressed_header_controls.append(control)
         button_size = self.close_button.width()
-        x = self.close_button.x()
+        # Right to left from the Close button; a control that would cross the card's left edge
+        # continues on a row below, from the right, as the 3D Map's control groups do.
+        row_right = self.close_button.x() + button_size
+        x, y = self.close_button.x(), self.close_button.y()
         for control in self.header_controls:
             if control.isHidden():
                 continue
+            if x - control.width() - 2 < 8 and x < row_right:
+                x, y = row_right + 2, y + button_size + 4
             x -= control.width() + 2
-            control.move(x, self.close_button.y() + (button_size - control.height()) // 2)
+            control.move(x, y + (button_size - control.height()) // 2)
             control.raise_()
         x = 8
         for control in self.header_left_controls:

@@ -125,6 +125,16 @@ class GnssMapView(QWebEngineView):
 MAP_MAXIMUM_POINTS = 20_000
 
 
+def page_positions(result) -> list:  # type: ignore[no-untyped-def]
+    """A map page's ``markerScreenPositions`` result, sent as JSON text or as a list, as a list."""
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except ValueError:
+            return []
+    return result if isinstance(result, list) else []
+
+
 class MapMarkersMixin(PointMarkers):
     """Two markers, the selection and values boxes for a web map card.
 
@@ -159,8 +169,10 @@ class MapMarkersMixin(PointMarkers):
                 yield track_index, track, sample_index
 
     def show_marker_data(self, timestamp: float, index: int = FIRST_MARKER) -> None:
-        """Show one values box per track, beside its point nearest the marker."""
-        if not any(True for _ in self._track_samples(timestamp)):
+        """Show one values box per track, beside its point nearest the marker.
+
+        Before the tracks load, the time is kept; loading the tracks places its boxes."""
+        if self._track_data and not any(True for _ in self._track_samples(timestamp)):
             self.hide_marker_data(index)
             return
         self._value_box_times[index] = float(timestamp)
@@ -171,9 +183,10 @@ class MapMarkersMixin(PointMarkers):
         if timestamp is None or not self._markers_ready() or self.map_view is None:
             return
         generation = self._map_generation
+        # As JSON text: PySide6 6.11 hands a JavaScript array to the callback as an empty string.
         self.map_view.page().runJavaScript(
-            f"markerScreenPositions({timestamp!r});",
-            lambda positions: self._show_value_boxes(generation, index, timestamp, positions),
+            f"JSON.stringify(markerScreenPositions({timestamp!r}));",
+            lambda positions: self._show_value_boxes(generation, index, timestamp, page_positions(positions)),
         )
 
     def _refresh_value_box_positions(self) -> None:

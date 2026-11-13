@@ -46,6 +46,13 @@ Priority: **P1** fix as soon as possible, **P2** soon, **P3** when convenient.
 - **P3 — The Map card turns its track lists into arrays and searches them with `argmin` on
   every marker move** (`gnss.py` `_track_samples`, `_update_selection`), including every
   video frame during playback; X/Y and the 3D plot use a binary search.
+- **P3 — The 3D Map page logs "js: Expected value to be of type number, but found null
+  instead."** Seen in the status bar and Internal log on 2026-11-13, with the demo run's
+  track in a 3D Map card and both markers placed (found while fixing the map values
+  boxes). The wording is a MapLibre style-expression error, so a layer property probably
+  reads a feature value that is `null`, such as a missing altitude or marker time; not
+  yet traced in `gnss_3d.py`'s page script. The card still draws the track, markers and
+  values boxes.
 
 ### Data and H5 generation
 
