@@ -698,6 +698,16 @@ creates a 1 GiB synthetic log and its H5 file: about 25 hours of three series at
 To create the demo data by hand, run `python tools/create_demo_dataset.py`, or add
 `--no-video --long-hours 0` for a one-minute version without videos.
 
+To try [Magic drop](#magic-drop-import-any-file-with-ai) and [Create plugin](#create-plugin)
+by hand, `tests/AI_demodata/` holds synthetic files in many formats: CSV, JSON, JSON
+Lines, YAML, text, GPX, NMEA and binary, the binary ones with their descriptions as a
+document or as C, C++ or Python source. Its
+[README](tests/AI_demodata/README.md) lists what each file truly contains, so you can
+check what the AI found. The small files are in Git. To make the big ones (about 80 MB,
+in `tests/AI_demodata/big/`, ignored by Git) or to make all of them again, run
+`python tools/create_ai_demodata.py`; it takes about 20 seconds. Add `--no-big` to skip
+the big files, or `--output <folder>` to write them somewhere else.
+
 ### Starting for testing
 
 

@@ -21,3 +21,5 @@ app_settings_debug.json.corrupt-*
 Todo.txt
 # Plugin findings of a code review; names private plugins (see AGENTS.md).
 Code_review_plugin.md
+# Big AI test files, made by tools/create_ai_demodata.py.
+/tests/AI_demodata/big/
