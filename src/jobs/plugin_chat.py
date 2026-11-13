@@ -32,7 +32,8 @@ class PluginChatJob(QObject):
     def __init__(self, executable: Path, plugin_id: str, text: str, files: list[Path], *,
                  session_id: str = "", provider: AgentProvider = CLAUDE, web: bool = False,
                  max_budget_usd: float = 2.0, time_limit_seconds: float = 900.0,
-                 plugin_root: Path | None = None, parent: QObject | None = None) -> None:
+                 plugin_root: Path | None = None, examples_folder: Path | None = None,
+                 parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.executable = Path(executable)
         self.plugin_id = plugin_id
@@ -44,6 +45,9 @@ class PluginChatJob(QObject):
         self.max_budget_usd = max_budget_usd
         self.plugin_root = plugin_root or plugin_builder.PLUGIN_ROOT
         self.folder = self.plugin_root / plugin_id
+        # The plugin's examples folder in the data folder, where the attached files are also
+        # copied (off the GUI thread: they can be large); None without a data folder.
+        self.examples_folder = Path(examples_folder) if examples_folder is not None else None
         self._cancelled = threading.Event()
         self._agent = AgentRun(provider, self.event.emit, time_limit_seconds=time_limit_seconds)
         self._thread: threading.Thread | None = None
@@ -76,6 +80,12 @@ class PluginChatJob(QObject):
             elif not (self.folder / instructions_file).exists():
                 plugin_builder.add_instructions(self.folder, self.plugin_id, instructions_file)
             copies = plugin_builder.copy_inputs(self.folder, self.files)
+            if self.files and self.examples_folder is not None:
+                try:
+                    plugin_builder.copy_examples(self.examples_folder, self.plugin_id, self.files)
+                    self.event.emit("status", f"Copied to the folder {self.examples_folder.name} in the data folder.")
+                except (OSError, ValueError) as error:
+                    self.event.emit("status", f"Could not copy the files to {self.examples_folder}: {error}")
             had_manifest = plugin_builder.plugin_ready(self.folder)
             self._check_cancelled()
             self.event.emit("status", f"{self.provider.name} is working on the plugin…")

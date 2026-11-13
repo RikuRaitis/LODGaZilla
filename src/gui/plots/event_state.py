@@ -47,6 +47,11 @@ from src.gui.plots.series import (
 EVENT_COLORS = SERIES_COLORS
 
 
+# Samples read for one lane's view. A lane a few thousand pixels wide shows no more; with
+# more in view, every Nth sample is read (the drawing merges sub-pixel bars anyway).
+EVENT_STATE_MAX_SAMPLES = 200_000
+
+
 def load_event_state_series(
     h5_path: Path, series_name: str, *, time_range: tuple[float, float] | None = None
 ) -> dict[str, object]:
@@ -75,7 +80,8 @@ def load_event_state_series(
             # viewport edge; the following one closes its final rectangle.
             start = max(0, start - 1)
             stop = min(sample_count, stop + 1)
-        native_times = np.asarray(time_dataset[start:stop], dtype=np.float64)
+        step = max(1, -(-(stop - start) // EVENT_STATE_MAX_SAMPLES))
+        native_times = np.asarray(time_dataset[start:stop:step], dtype=np.float64)
         times = _canonical_time_values(native_times, metadata)
         file_start_seconds = h5_file.attrs.get("time_start_seconds")
         file_end_seconds = h5_file.attrs.get("time_end_seconds")
@@ -93,7 +99,7 @@ def load_event_state_series(
             return raw_seconds / metadata.seconds_per_unit if metadata.seconds_per_unit else fallback
         return {
             "time": times,
-            "value": np.asarray(group["value"][start:stop], dtype=np.float64),
+            "value": np.asarray(group["value"][start:stop:step], dtype=np.float64),
             "name": _attribute_text(group.attrs.get("navigator_name", series_name)),
             "unit": _attribute_text(group.attrs.get("unit", "")),
             "kind": _attribute_text(group.attrs.get("event_state_kind", "")),
@@ -699,8 +705,9 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
 
 
 def _looks_like_binary_state(values: np.ndarray) -> bool:
+    # One pass, no sort: this runs for every lane on every pan and zoom.
     finite = values[np.isfinite(values)]
-    return bool(len(finite)) and np.all(np.isin(np.unique(finite), (0.0, 1.0)))
+    return bool(len(finite)) and bool(np.all((finite == 0.0) | (finite == 1.0)))
 
 
 class EventStateLegend(PlotLegendWidget):

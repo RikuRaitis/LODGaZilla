@@ -113,9 +113,18 @@ def create_plugin_folder(plugin_id: str, instructions_file: str, *, root: Path |
 
 
 def add_instructions(folder: Path, plugin_id: str, instructions_file: str, *, host: Path = REPOSITORY_ROOT) -> None:
-    """The other agent's instructions file, when the user switches provider; kept out of commits too."""
+    """The agent's instructions in a plugin folder that already exists: the other provider's
+    file, or an installed plugin that Create plugin continues. Kept out of its commits, with
+    the user's files; a plugin's own tracked file of that name is never overwritten."""
+    if not (folder / ".git").is_dir():
+        raise ValueError(f"plugin/{folder.name} is not a Git repository; Create plugin needs one.")
+    tracked = subprocess.run(["git", "ls-files", "--error-unmatch", instructions_file], cwd=folder,
+                             capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    if tracked.returncode == 0:
+        raise ValueError(f"plugin/{folder.name} has its own {instructions_file}; Create plugin would replace it.")
     (folder / instructions_file).write_text(instructions(plugin_id, host), encoding="utf-8")
     _exclude(folder, f"/{instructions_file}")
+    _exclude(folder, f"/{WORK_FOLDER}/")
 
 
 def _exclude(folder: Path, pattern: str) -> None:

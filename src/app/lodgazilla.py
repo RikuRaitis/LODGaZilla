@@ -160,13 +160,14 @@ from src.app.demo_data import DEMO_DATA_ROOT, DemoDataJob, demo_data_exists, dem
 from src.app.log_paths import log_path
 from src.app.graphics import configure_graphics, shutdown_web_engine
 from src.jobs.process_tree import start_process_tree
-from src.jobs.magic_drop import MagicDropJob, SignInCheck
+from src.jobs.magic_drop import MagicDropJob, PluginDropJob, SignInCheck
 from src.jobs.plugin_chat import PluginChatJob
 from src.jobs.plugin_examples import PluginExamplesJob
 from src.ai.plugin_builder import (
-    check_plugin_id, copy_examples, example_sources, examples_folder, plugin_has_importer, plugin_id_from,
+    check_plugin_id, example_sources, examples_folder, plugin_has_importer, plugin_id_from,
 )
 from src.plugins.catalog import PLUGIN_ROOT
+from src.ai.magic_drop import read_plugin_suggestion
 from src.ai.providers import PROVIDERS, AgentProvider, provider_named
 from src.jobs.cache_files import is_cache_output
 
@@ -1696,11 +1697,13 @@ class PlotWorkspace(QScrollArea):
         return {"rows": rows, "active": plots.index(self.active_plot) if self.active_plot in plots else None,
                 "scroll": self.verticalScrollBar().value()}
 
-    @staticmethod
-    def _card_record(card: PlotBaseWidget) -> dict:
+    def _card_record(self, card: PlotBaseWidget) -> dict:
         record = {"type": card.drop_card_type, **card.workspace_state()}
         if isinstance(card, TWO_MARKER_CARD_TYPES):
             record["markers"] = list(card.marker_values())
+        if card in self._plot_navigator_ranges:
+            # The Plot navigator trim, in shared time (the card's time plus its offset).
+            record["trim"] = list(self._plot_navigator_ranges[card])
         return record
 
     def restore_workspace_state(self, state: dict) -> list[str]:
@@ -1745,6 +1748,14 @@ class PlotWorkspace(QScrollArea):
                 card.restore_workspace_state(record)
             except (OSError, KeyError, IndexError, TypeError, ValueError) as error:
                 problems.append(f"{CARD_TITLES.get(record.get('type'), 'Card')} card settings were not restored: {error}")
+        for card, record in restored:
+            trim = record.get("trim")
+            # After the card's own settings, so its time offset is already in place.
+            if (isinstance(trim, list) and len(trim) == 2
+                    and all(isinstance(value, (int, float)) for value in trim)):
+                start, stop = sorted(float(value) for value in trim)
+                self._plot_navigator_ranges[card] = (start, stop)
+                self._apply_plot_data_range(card, (start, stop))
         self.update_x_axis_links()
         self.update_time_axis_format_links()
         # Linked time axes align by pixel, so equal Y axis widths come before the saved time ranges.
@@ -2137,7 +2148,7 @@ class LODGaZillaWindow(QMainWindow):
         self.ai_panel.expanded_changed.connect(self.on_ai_panel_expanded_changed)
         self.ai_panel.conversation_started.connect(self.on_ai_conversation_started)
         # Magic drop: files dropped on the AI panel become H5 files with Claude or Codex.
-        self.magic_drop_job: MagicDropJob | None = None
+        self.magic_drop_job: MagicDropJob | PluginDropJob | None = None
         # Create plugin: the plugin being built (plugin/<id>), and each provider's session in it.
         self.plugin_chat_job: PluginChatJob | None = None
         # Imports the example files with the plugin being created, after each answer.
@@ -2146,6 +2157,8 @@ class LODGaZillaWindow(QMainWindow):
         self._plugin_chat_sessions: dict[str, str] = {}
         # Each queued drop keeps the data folder it was dropped into.
         self._magic_drop_queue: list[tuple[list[Path], str, AgentProvider, Path]] = []
+        # Magic drops an enabled plugin imports: folder -> (plugins, copied files), asked about when done.
+        self._plugin_drop_reviews: dict[str, tuple[list, list[Path]]] = {}
         self._sign_in_checks: dict[str, SignInCheck] = {}
         for provider in PROVIDERS.values():
             check = SignInCheck(provider, self)
@@ -2587,13 +2600,6 @@ class LODGaZillaWindow(QMainWindow):
         if data_folder is None or not Path(data_folder).is_dir():
             panel.append_note("Choose a data folder first; Magic drop creates its folder there.")
             return
-        executable = self.agent_executable(provider)
-        if executable is None:
-            panel.append_note(agent_missing_message(provider))
-            return
-        if not self.confirm_magic_drop_consent(provider):
-            panel.append_note("Magic drop cancelled: nothing was sent.")
-            return
         groups = [list(files)]
         if len(files) > 1:
             choice = self.ask_magic_drop_grouping(len(files))
@@ -2639,20 +2645,62 @@ class LODGaZillaWindow(QMainWindow):
         return {one: "one", each: "each"}.get(box.clickedButton())
 
     def _start_next_magic_drop(self) -> None:
-        while self._magic_drop_queue:
-            files, hints, provider, data_folder = self._magic_drop_queue.pop(0)
-            executable = self.agent_executable(provider)
-            if executable is not None:
-                break
-            self.ai_panel.append_note(agent_missing_message(provider))
-        else:
+        """The next drop: first the enabled importer plugins, without AI (``PluginDropJob``)."""
+        if not self._magic_drop_queue:
             # A Create plugin question may still be running; its Stop must stay.
             self.ai_panel.set_busy(self.plugin_chat_job is not None)
             return
+        files, hints, provider, data_folder = self._magic_drop_queue.pop(0)
+        job = PluginDropJob(files, data_folder, dict(self.plugin_manager.enabled), parent=self)
+        job.finished.connect(lambda folder, plugins: self.on_plugin_drop_checked(
+            folder, plugins, files, hints, provider, data_folder))
+        self.magic_drop_job = job
+        self.ai_panel.set_busy(True)
+        job.start()
+
+    def on_plugin_drop_checked(self, folder: Path | None, plugins: list, files: list[Path], hints: str,
+                               provider: AgentProvider, data_folder: Path) -> None:
+        """An enabled plugin reads the files: generate their H5 files and ask about the result
+        once done (``_review_plugin_drop``). Otherwise the AI's turn, after its consent."""
+        job, self.magic_drop_job = self.magic_drop_job, None
+        if job is not None:
+            job.deleteLater()
+        panel = self.ai_panel
+        if folder is not None:
+            names = ", ".join(name for _plugin, name in plugins)
+            panel.append_note(f"{names} reads these files: copied them to {Path(folder).name} and generating "
+                              "its H5 files, without AI.")
+            self.internal_logger.info(f"Magic drop: {names} imports {', '.join(path.name for path in files)}")
+            self._plugin_drop_reviews[_path_key(folder)] = (plugins, [Path(folder) / path.name for path in files])
+            current = self.navigator.data_folder()
+            if current is not None and Path(current) == data_folder:
+                self.navigator.refresh_tree(rescan=True)
+            self.start_import(Path(folder), recursive=False)
+            self._start_next_magic_drop()
+            return
+        executable = self.agent_executable(provider)
+        if executable is None:
+            panel.append_note(agent_missing_message(provider))
+        elif not self.confirm_magic_drop_consent(provider):
+            panel.append_note("Magic drop cancelled: nothing was sent.")
+        else:
+            self._start_ai_magic_drop(files, hints, provider, data_folder, executable)
+            return
+        self._start_next_magic_drop()
+
+    def _installed_importers(self) -> list[tuple[str, str, Path]]:
+        """(folder name, title, folder) of the installed importer plugins, for the AI."""
+        return [(descriptor.path.parent.name, descriptor.title, descriptor.path.parent)
+                for descriptor in self.plugin_manager.descriptors
+                if "importer" in descriptor.capabilities and not descriptor.error]
+
+    def _start_ai_magic_drop(self, files: list[Path], hints: str, provider: AgentProvider, data_folder: Path,
+                             executable: Path) -> None:
         settings = load_ai_settings(self.settings_path)
         job = MagicDropJob(executable, files, data_folder, hints=hints, max_budget_usd=settings["max_budget_usd"],
                            time_limit_seconds=60.0 * settings["time_limit_minutes"], provider=provider,
-                           web=settings[provider.web_setting], parent=self)
+                           web=settings[provider.web_setting], installed_importers=self._installed_importers(),
+                           parent=self)
         job.event.connect(lambda kind, text: self.on_magic_drop_event(kind, text, provider.name))
         job.finished.connect(lambda ok, message, folder: self.on_magic_drop_finished(
             ok, message, folder, data_folder, provider))
@@ -2679,13 +2727,72 @@ class LODGaZillaWindow(QMainWindow):
             current = self.navigator.data_folder()
             if current is not None and Path(current) == data_folder:
                 self.navigator.refresh_tree(rescan=True)
+            importers = {plugin: title for plugin, title, _folder in self._installed_importers()}
+            suggestion = (read_plugin_suggestion(job.draft, set(importers))
+                          if job is not None and job.draft is not None else None)
+            if suggestion is not None and folder is not None:
+                plugin, reason = suggestion
+                self.ask_about_plugin(plugin, importers[plugin], [Path(folder) / path.name for path in job.files],
+                                      reason=reason)
         self._start_next_magic_drop()
+
+    def _review_plugin_drop(self, folder: Path, review, imported: int, failed: int, error: str) -> None:  # type: ignore[no-untyped-def]
+        """After a plugin generated a Magic drop's H5 files: show what it found and ask about it."""
+        plugins, files = review
+        h5_files = sorted(Path(folder).glob("*.h5"))
+        lines = []
+        for h5_path in h5_files:
+            data = read_h5_navigator_data(h5_path)
+            lines.append(f"{h5_path.name}: {len(data.series)} series" + (f" ({data.error})" if data.error else ""))
+        outcome = error or (f"{failed} file(s) failed" if failed else "")
+        self.ai_panel.append_note("\n".join(lines + ([outcome] if outcome else [])) or "No H5 files were created.")
+        plugin, name = plugins[0]
+        self.ask_about_plugin(plugin, name, files)
+
+    def ask_about_plugin(self, plugin: str, name: str, files: list[Path], *, reason: str = "") -> None:
+        """Improve that plugin with the AI, create a new plugin from scratch, or keep the result."""
+        if reason:
+            question = f"The AI found these files close to what {name} reads: {reason}"
+            improve_text = (f"The attached files are a variant of the format this plugin reads ({reason}). "
+                            "Update the plugin to read them too, keeping the formats it reads now.")
+        else:
+            question = f"{name} imported these files. Are the results OK?"
+            improve_text = ("The attached files were imported with this plugin. Check the result and improve the "
+                            "plugin where it reads them wrong or misses data.")
+        self.ai_panel.append_note(question)
+        box = QMessageBox(QMessageBox.Icon.Question, "Magic drop", question, parent=self)
+        box.setInformativeText("Improve that plugin with the AI, create a new plugin from scratch, or keep the "
+                               "result as it is?")
+        improve = box.addButton(f"Improve {name}", QMessageBox.ButtonRole.AcceptRole)
+        new = box.addButton("Create a new plugin", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Keep the result", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is improve:
+            self.open_create_plugin(files, plugin, improve_text)
+        elif box.clickedButton() is new:
+            self.open_create_plugin(files, None, "Create a new importer plugin for the attached files.")
+
+    def open_create_plugin(self, files: list[Path], plugin: str | None, request: str) -> None:
+        """Create plugin with these files attached and a request to send: on the installed
+        ``plugin`` (its folder name) or, with None, on a new plugin whose ID is asked first."""
+        if plugin != self.plugin_chat_id:
+            self.plugin_chat_id = plugin
+            self._plugin_chat_sessions = {}
+        self.ai_panel.attach_for_plugin([path for path in files if Path(path).is_file()])
+        self.ai_panel.input.setPlainText(request)
 
     def stop_magic_drop(self) -> None:
         self._magic_drop_queue.clear()
-        if self.magic_drop_job is not None:
+        job = self.magic_drop_job
+        if isinstance(job, PluginDropJob):
+            # The plugin check reports nothing once stopped, so it ends here.
+            job.cancel()
+            self.magic_drop_job = None
+            self.ai_panel.append_note("Magic drop stopped.")
+            self._start_next_magic_drop()
+        elif job is not None:
             self.ai_panel.append_note("Stopping…")
-            self.magic_drop_job.cancel()
+            job.cancel()
 
     def stop_ai(self) -> None:
         """The AI panel's Stop button: stop Magic drop and the Create plugin question in progress."""
@@ -2720,10 +2827,12 @@ class LODGaZillaWindow(QMainWindow):
                 return
             self.plugin_chat_id = plugin_id
             self._plugin_chat_sessions = {}
-        if files:
-            self._copy_plugin_examples([Path(path) for path in files])
+        examples = self._plugin_examples_folder()
+        if files and examples is None:
+            panel.append_note("Choose a data folder to see the example files as H5 files there.")
         settings = load_ai_settings(self.settings_path)
         job = PluginChatJob(executable, self.plugin_chat_id, text, [Path(path) for path in files],
+                            examples_folder=examples,
                             session_id=self._plugin_chat_sessions.get(provider.name, ""), provider=provider,
                             web=settings[provider.web_setting], max_budget_usd=settings["max_budget_usd"],
                             time_limit_seconds=60.0 * settings["time_limit_minutes"], parent=self)
@@ -2757,6 +2866,9 @@ class LODGaZillaWindow(QMainWindow):
             self._plugin_chat_sessions[provider.name] = session_id
         if note:
             self.ai_panel.append_note(note)
+        if job is not None and job.files and job.examples_folder is not None:
+            # The job copied the attached files to the examples folder.
+            self.navigator.refresh_tree(rescan=True)
         if succeeded:
             self.ai_panel.set_signed_in(provider.name, True)
             self._import_plugin_examples()
@@ -2769,21 +2881,6 @@ class LODGaZillaWindow(QMainWindow):
         if self.plugin_chat_id is None or data_folder is None or not Path(data_folder).is_dir():
             return None
         return examples_folder(Path(data_folder), self.plugin_chat_id)
-
-    def _copy_plugin_examples(self, files: list[Path]) -> None:
-        """Files attached while creating a plugin also go to a folder of the data folder,
-        where each answer's plugin turns them into H5 files."""
-        folder = self._plugin_examples_folder()
-        if folder is None:
-            self.ai_panel.append_note("Choose a data folder to see the example files as H5 files there.")
-            return
-        try:
-            copy_examples(folder, self.plugin_chat_id, files)
-        except (OSError, ValueError) as error:
-            self.ai_panel.append_note(f"Could not copy the files to {folder}: {error}")
-            return
-        self.ai_panel.append_note(f"Copied to the folder {folder.name} in the data folder.")
-        self.navigator.refresh_tree(rescan=True)
 
     def _import_plugin_examples(self) -> None:
         """After an answer: the plugin's importer, as it is now, on the example files."""
@@ -3457,6 +3554,11 @@ class LODGaZillaWindow(QMainWindow):
             self.remove_progress_states_for_scope(active.folder, recursive=active.recursive)
             if active.operation in {"H5 cache", MediaJobRequest.operation}:
                 self.refresh_tree_preserving_progress()
+            review = self._plugin_drop_reviews.pop(_path_key(active.folder), None)
+            if review is not None and active.operation == "H5 cache":
+                # A Magic drop that an enabled plugin imported.
+                QTimer.singleShot(0, self, lambda: self._review_plugin_drop(active.folder, review, imported,
+                                                                            failed, error))
         self.start_queued_imports()
         outcome = error or (
             f"Created {imported} H5 cache file(s); {failed} failed."

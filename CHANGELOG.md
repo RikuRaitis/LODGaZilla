@@ -22,8 +22,14 @@ All notable changes to LODGaZilla are listed here. The format follows
 - Create plugin copies the attached files to a folder named after the plugin in the data
   folder and, once the plugin has an importer, imports them with it after each answer,
   showing the series found or the error in the AI panel.
+- Magic drop asks the enabled importer plugins first. If one reads the files, it imports
+  them without AI and nothing is sent; afterwards it asks whether to keep the result,
+  improve that plugin with the AI or create a new plugin. When the AI imports the files
+  and finds them close to an installed plugin's format, it suggests updating that plugin.
 
 ### Changed
+
+- The video card's Mute button sits next to the Volume slider.
 
 - Workspaces no longer save the Plot navigator buttons (linking, legends, card controls,
   time axis, snapping); they keep your own preferences. Older workspaces still open.
@@ -34,6 +40,13 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Fixed
 
+- A series is found by the key its importer gave it, so a key unlike its group and name
+  (as an AI-written importer may use) plots, and a bare name never shows another group's
+  series.
+- Plot navigator trims are saved in workspaces.
+- Event/state cards stay responsive with dense data in view, and new H5 files need about a
+  quarter of the LOD data they did (no levels finer than 16 samples per bucket).
+- Create plugin copies attached files without freezing the window.
 - Stop, and closing LODGaZilla, now end an import that the AI's parser is running in Magic
   drop or Create plugin, instead of letting it run for up to 10 minutes.
 - Code written by the AI (Magic drop and Create plugin's trial imports) no longer gets the

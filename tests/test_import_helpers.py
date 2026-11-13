@@ -396,7 +396,8 @@ class Hdf5TimeDatasetTests(unittest.TestCase):
                 self.assertNotIn("time_unix", group)
                 # Without a transform, value_raw is the same dataset as value (a hard link).
                 self.assertEqual(group["value_raw"], group["value"])
-                level = group["lod"]["level_001"]
+                # Only the top level of this short series is written; finer ones are skipped.
+                level = group["lod"][group["lod"].attrs["top_level"]]
                 self.assertIn("time_start_ms", level)
                 self.assertIn("time_end_ms", level)
 
@@ -458,6 +459,65 @@ class Hdf5TimeDatasetTests(unittest.TestCase):
         for result in (data, older):
             warning = {entry.column_id: entry.value for entry in result.series[0].metadata}.get("warning")
             self.assertEqual(warning, "Sampleloss detected")
+
+    def test_series_are_found_by_their_importer_key_and_never_by_another_series_leaf_name(self):
+        import h5py
+        from src.data.h5_series import _series_group_for_navigator_name
+        configuration = ImportConfiguration(Path("test.json"), {}, hdf5_config={})
+
+        def series(group, name, value):
+            return {"time": np.asarray([0.0, 1.0]), "values": np.asarray([value, value]), "time_unit": "s",
+                    "time_reference": "device_relative", "navigator_name": name, "time_sorted": True,
+                    **({"navigator_group": group} if group else {})}
+
+        result = {"series": {
+            # A key unlike group/name, as an AI-written importer may use.
+            "acc_x": series("Accelerometer", "X", 1.0),
+            # The same leaf name in a group and without one.
+            "GNSS/Speed (km/h)": series("GNSS", "Speed (km/h)", 1.0),
+            "Speed (km/h)": series("", "Speed (km/h)", 2.0),
+        }}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "keys.h5"
+            input_path = Path(temp_dir) / "keys.bin"
+            input_path.write_bytes(b"x")
+            write_hdf5_cache(output_path=output_path, input_path=input_path, selected_config=configuration,
+                             import_result=result)
+            with h5py.File(output_path, "r") as h5_file:
+                def value(name):
+                    return float(_series_group_for_navigator_name(h5_file, name)["value"][0])
+                self.assertEqual(value("acc_x"), 1.0)
+                self.assertEqual(value("Accelerometer/X"), 1.0)
+                self.assertEqual(value("GNSS/Speed (km/h)"), 1.0)
+                # The ungrouped series by its own key, not GNSS's series of the same name.
+                self.assertEqual(value("Speed (km/h)"), 2.0)
+
+    def test_lod_levels_start_at_sixteen_samples_per_bucket_and_still_plot(self):
+        import h5py
+        from src.gui.plots.series import load_plot_series
+        from src.jobs.import_data import MIN_LOD_BUCKET_SAMPLES
+        configuration = ImportConfiguration(
+            Path("test.json"), {}, hdf5_config={"hdf5": {"lod_target_buckets": 100, "lod_bucket_growth": 4}})
+        count = 20_000
+        series = {"Sine": {"time": np.arange(count) * 0.01, "values": np.sin(np.arange(count) / 50.0),
+                           "time_unit": "s", "time_reference": "device_relative", "navigator_group": "Signal",
+                           "navigator_name": "Sine", "time_sorted": True}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "sine.h5"
+            input_path = Path(temp_dir) / "sine.csv"
+            input_path.write_bytes(b"x")
+            write_hdf5_cache(output_path=output_path, input_path=input_path, selected_config=configuration,
+                             import_result={"series": series})
+            with h5py.File(output_path, "r") as h5_file:
+                lod = h5_file["series/Signal/Sine/lod"]
+                sizes = sorted(int(level.attrs["bucket_size_samples"]) for level in lod.values())
+                names = list(lod)
+            self.assertNotIn("level_001", names)
+            self.assertEqual(sizes[0], MIN_LOD_BUCKET_SAMPLES)
+            # A zoomed-out plot reads a level, with the extrema of the raw data.
+            data = load_plot_series(output_path, "Signal/Sine", maximum_points=2_000)
+            self.assertIsNotNone(data.lod_level)
+            self.assertAlmostEqual(float(np.max(data.y)), float(np.max(np.sin(np.arange(count) / 50.0))))
 
     def test_hdf5_writer_reports_monotonic_progress(self):
         parser_config = {}

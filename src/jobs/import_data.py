@@ -687,7 +687,9 @@ def transformed_series_values(
     group = str(series_data.get("navigator_group", "")).strip()
     source_key = f"{group}/{source_name}" if group else source_name
     source_data = all_series.get(source_key, series_data)
-    source_normalized = _normalise_series(source_data) if isinstance(source_data, dict) else None
+    # A transform of the series itself uses its values as they are, not a second copy.
+    source_normalized = (_normalise_series(source_data)
+                         if isinstance(source_data, dict) and source_data is not series_data else None)
     source_values = raw_values if source_normalized is None else source_normalized[1]
     if len(source_values) != len(raw_values):
         raise ValueError(f"Transform source {source_key!r} does not match {series_name!r} sample count.")
@@ -897,6 +899,12 @@ def create_dataset(
     return group.create_dataset(name, **kwargs)
 
 
+# The finest LOD level written groups at least this many samples. Finer levels would store
+# more than the raw data (12 arrays per bucket), while a Line card reads raw samples until
+# about four per pixel are in view, so 16 per bucket still gives about one point per pixel.
+MIN_LOD_BUCKET_SAMPLES = 16
+
+
 def create_lod_levels(
     series_group: Any,
     time_values: np.ndarray,
@@ -910,7 +918,11 @@ def create_lod_levels(
     compression_level: int | None,
     progress_callback: Callable[[float], None] | None = None,
 ) -> None:
-    """Create min/max LOD buckets until the top level has <= target buckets."""
+    """Create min/max LOD buckets until the top level has <= target buckets.
+
+    Levels finer than ``MIN_LOD_BUCKET_SAMPLES`` are not written (the top level always is);
+    level numbers keep counting them, so ``bucket_size_samples`` = growth ** level.
+    """
 
     sample_count = len(values)
     lod_group = series_group.create_group("lod")
@@ -934,6 +946,8 @@ def create_lod_levels(
         level += 1
         if progress_callback is not None:
             progress_callback((level - 1) / total_levels)
+        if bucket_size < MIN_LOD_BUCKET_SAMPLES and bucket_count > target_bucket_count:
+            continue
 
         level_group = lod_group.create_group(f"level_{level:03d}")
         level_group.attrs["source_sample_count"] = sample_count
@@ -1219,8 +1233,10 @@ def _normalise_series(series_data: dict[str, Any]) -> tuple[np.ndarray, np.ndarr
     if not np.any(finite):
         return None
 
-    time_values = time_values[finite]
-    values = values[finite]
+    if not np.all(finite):
+        # Copy only when there is something to drop; long series are large.
+        time_values = time_values[finite]
+        values = values[finite]
     # Checked even when the parser says "time_sorted": a clock reset would otherwise give
     # wrong time ranges and lookups without notice. The check is one pass; sorting only if needed.
     if len(time_values) < 2 or not np.any(time_values[1:] < time_values[:-1]):

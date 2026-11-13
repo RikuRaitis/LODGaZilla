@@ -19,13 +19,7 @@ atomic, and the shared marker code, bounded loaders and diagnostic areas from th
 review hold up. The AI agent's permissions are now documented as they are, and accepted
 (see Accepted design decisions).
 
-**Fix as soon as possible**, in this order:
-
-1. **A series whose importer key is not `group/name` can't be plotted, or plots another
-   series** (see Data). This is a silent wrong result, and Magic drop's agent can produce
-   such files.
-2. **Plot navigator trims are not saved in workspaces** (see Plot cards), which breaks
-   "workspaces reopen exactly as saved".
+**Fix as soon as possible:** nothing open in the app.
 
 ## Fixed in this review
 
@@ -35,9 +29,6 @@ Priority: **P1** fix as soon as possible, **P2** soon, **P3** when convenient.
 
 ### AI integration
 
-- **P2 — Create plugin copies the attached files on the GUI thread**
-  (`lodgazilla.py` `_copy_plugin_examples` → `plugin_builder._copy_numbered`), comparing
-  identical files byte by byte. Attaching a multi-GB log freezes the window.
 - **P3 — A cancelled Create plugin question loses its text and attachments**
   (`src/gui/ai/panel.py:542` clears them before the main window can cancel on consent or
   the plugin ID dialog).
@@ -49,13 +40,6 @@ Priority: **P1** fix as soon as possible, **P2** soon, **P3** when convenient.
 
 ### Plot cards
 
-- **P2 — Plot navigator trims are not saved in workspaces.** A trim lives only in
-  `PlotWorkspace._plot_navigator_ranges` (`lodgazilla.py`); neither the workspace nor the
-  card records save it. Save it in the card record and reapply it after the time ranges.
-- **P2 — Event/state lanes read every sample in view and sort it on the GUI thread on each
-  pan** (`event_state.py` `load_event_state_series`, `_looks_like_binary_state` twice per
-  lane, the label pass). Drawing is bounded since the first review; reading and sorting
-  are not. Decimate in the loader, or compute the state flag once per load.
 - **P3 — The 3D plot uses seconds for relative times; Line and X/Y use the native unit**
   (`src/data/xyz.py:149-150`), so a linked marker on a millisecond series without a log
   start misses the 3D trace.
@@ -65,17 +49,6 @@ Priority: **P1** fix as soon as possible, **P2** soon, **P3** when convenient.
 
 ### Data and H5 generation
 
-- **P2 — The series index `name` is the importer's dict key**, and lookups only know the
-  physical path, `navigator_name` and `group/name` (`import_data.py:499`,
-  `h5_series.py:56-59`). A key such as `"acc_x"` for group `Accelerometer`, name `X` can't
-  be plotted (`KeyError`); a leaf name can resolve to another group's series of the same
-  name, which then plots silently. Write the full navigator name as the index `name` and
-  register full names before leaf aliases; existing caches need regenerating.
-- **P2 — LOD levels on very long series.** Level 1 is about 1.5× the raw data and is held
-  in memory; `_normalise_series` copies time and values, and a `$self` transform
-  normalises the same series twice. A 500M-sample series can run the worker out of memory.
-  Start the levels at a minimum bucket size (as the audio writer does) and write levels
-  block by block.
 - **P3 — One duplicate output stops the whole batch** (`import_batch.py:92-96`): two sources
   with the same stem in one folder stop every folder's import.
 - **P3 — The stale-temp cleanup can remove Magic drop's temp file on Linux and macOS**

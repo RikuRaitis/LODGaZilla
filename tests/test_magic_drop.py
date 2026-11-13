@@ -17,7 +17,8 @@ from src.ai import claude_cli, codex_cli, magic_drop  # noqa: E402
 from src.ai.providers import CLAUDE, CODEX, provider_named  # noqa: E402
 from src.app.settings import DEFAULT_AI_SETTINGS, sanitize_ai_settings  # noqa: E402
 from src.data.folder_info import read_info_file  # noqa: E402
-from src.jobs.magic_drop import MagicDropJob, SignInCheck  # noqa: E402
+from src.jobs.magic_drop import MagicDropJob, PluginDropJob, SignInCheck  # noqa: E402
+from tests.plugin_fixtures import sample_importer  # noqa: E402
 from tests.qt_wait import qt_wait_until  # noqa: E402
 
 # What Claude would write: a parser for "time_s,temperature_C,pressure_hPa" CSV files.
@@ -363,17 +364,77 @@ class MagicDropQueueTests(unittest.TestCase):
         from types import SimpleNamespace
         from src.app.lodgazilla import LODGaZillaWindow
 
-        started = []
+        checked, started = [], []
         window = SimpleNamespace(
             _magic_drop_queue=[([Path("a.csv")], "", CLAUDE, Path("first")),
                                ([Path("b.csv")], "", CLAUDE, Path("second"))],
-            agent_executable=lambda provider: Path("claude"), settings_path=None,
+            plugin_manager=SimpleNamespace(enabled={}, descriptors=[]), plugin_chat_job=None,
             ai_panel=mock.Mock(), internal_logger=mock.Mock(), magic_drop_job=None)
-        with mock.patch("src.app.lodgazilla.MagicDropJob") as job_class,                 mock.patch("src.app.lodgazilla.load_ai_settings", return_value=dict(DEFAULT_AI_SETTINGS)):
-            job_class.side_effect = lambda executable, files, folder, **options: started.append(folder) or mock.Mock()
+        with mock.patch("src.app.lodgazilla.PluginDropJob") as job_class:
+            job_class.side_effect = lambda files, folder, enabled, **options: checked.append(folder) or mock.Mock()
             LODGaZillaWindow._start_next_magic_drop(window)
             LODGaZillaWindow._start_next_magic_drop(window)
-        self.assertEqual(started, [Path("first"), Path("second")])
+        self.assertEqual(checked, [Path("first"), Path("second")])
+
+        # No enabled plugin reads the file: the AI's turn, told about the installed importers.
+        importer = SimpleNamespace(path=Path("plugin/sample_importer/plugin.json"), title="Sample",
+                                   capabilities=("importer",), error="")
+        window = SimpleNamespace(
+            _magic_drop_queue=[], plugin_chat_job=None, settings_path=None, magic_drop_job=None,
+            plugin_manager=SimpleNamespace(enabled={}, descriptors=[importer]), ai_panel=mock.Mock(),
+            internal_logger=mock.Mock(), agent_executable=lambda provider: Path("claude"),
+            confirm_magic_drop_consent=lambda provider: True)
+        window._installed_importers = lambda: LODGaZillaWindow._installed_importers(window)
+        window._start_ai_magic_drop = lambda *args: LODGaZillaWindow._start_ai_magic_drop(window, *args)
+        window._start_next_magic_drop = lambda: LODGaZillaWindow._start_next_magic_drop(window)
+        with mock.patch("src.app.lodgazilla.MagicDropJob") as job_class, \
+                mock.patch("src.app.lodgazilla.load_ai_settings", return_value=dict(DEFAULT_AI_SETTINGS)):
+            job_class.side_effect = lambda executable, files, folder, **options: started.append(
+                (folder, options["installed_importers"])) or mock.Mock()
+            LODGaZillaWindow.on_plugin_drop_checked(window, None, [], [Path("a.csv")], "", CLAUDE, Path("first"))
+        self.assertEqual(started, [(Path("first"), [("sample_importer", "Sample", Path("plugin/sample_importer"))])])
+
+    def test_a_drop_an_enabled_plugin_reads_is_imported_without_ai_and_asked_about(self):
+        from types import SimpleNamespace
+        from src.app.lodgazilla import LODGaZillaWindow, _path_key
+
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "log"
+            folder.mkdir()
+            imports, asked = [], []
+            window = SimpleNamespace(
+                _magic_drop_queue=[], _plugin_drop_reviews={}, plugin_chat_job=None, magic_drop_job=None,
+                ai_panel=mock.Mock(), internal_logger=mock.Mock(),
+                navigator=SimpleNamespace(data_folder=lambda: None),
+                agent_executable=lambda provider: self.fail("no AI for a plugin's files"),
+                start_import=lambda path, recursive: imports.append(path),
+                ask_about_plugin=lambda plugin, name, files, **options: asked.append((plugin, name, files)))
+            window._start_next_magic_drop = lambda: LODGaZillaWindow._start_next_magic_drop(window)
+            LODGaZillaWindow.on_plugin_drop_checked(window, folder, [("sample_importer", "Sample")],
+                                                    [Path("in/log.csv")], "", CLAUDE, Path(directory))
+            self.assertEqual(imports, [folder])
+            review = window._plugin_drop_reviews[_path_key(folder)]
+            LODGaZillaWindow._review_plugin_drop(window, folder, review, 1, 0, "")
+            self.assertEqual(asked, [("sample_importer", "Sample", [folder / "log.csv"])])
+
+    def test_create_plugin_opens_on_the_chosen_plugin_with_the_files(self):
+        from types import SimpleNamespace
+        from src.app.lodgazilla import LODGaZillaWindow
+
+        with tempfile.TemporaryDirectory() as directory:
+            copy = Path(directory) / "log.csv"
+            copy.write_text("t,v\n")
+            panel = mock.Mock()
+            window = SimpleNamespace(plugin_chat_id="other_importer", _plugin_chat_sessions={"claude": "s"},
+                                     ai_panel=panel)
+            LODGaZillaWindow.open_create_plugin(window, [copy, Path(directory) / "gone.csv"], "sample_importer",
+                                                "Improve it")
+            self.assertEqual((window.plugin_chat_id, window._plugin_chat_sessions), ("sample_importer", {}))
+            panel.attach_for_plugin.assert_called_once_with([copy])
+            panel.input.setPlainText.assert_called_once_with("Improve it")
+            # A new plugin: its ID is asked with the first question.
+            LODGaZillaWindow.open_create_plugin(window, [copy], None, "Create one")
+            self.assertIsNone(window.plugin_chat_id)
 
     def test_sign_in_check_finds_the_cli_in_the_background(self):
         import threading
@@ -401,3 +462,61 @@ class MagicDropQueueTests(unittest.TestCase):
         qt_wait_until(lambda: not check._running, timeout_ms=5000)
         QApplication.processEvents()
         self.assertEqual(answers, [])
+
+
+class PluginFirstTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.data = self.root / "data"
+        self.data.mkdir()
+        self.source = self.root / "incoming" / "run.csv"
+        self.source.parent.mkdir()
+        self.source.write_text("time,signal\n0,1\n1,2\n", encoding="utf-8")
+
+    def check(self, enabled):
+        import functools
+        from src.jobs import import_data
+        results = []
+        with sample_importer() as plugins, mock.patch.object(
+                import_data, "load_import_configurations",
+                functools.partial(import_data.load_import_configurations, plugins)):
+            job = PluginDropJob([self.source], self.data, enabled)
+            job.finished.connect(lambda folder, found: results.append((folder, found)))
+            job.start()
+            qt_wait_until(lambda: results, timeout_ms=10000)
+        return results[0]
+
+    def test_an_enabled_importer_gets_a_copy_in_a_new_folder(self):
+        folder, plugins = self.check({"sample": True})
+        self.assertEqual(folder, self.data / "run")
+        self.assertEqual([plugin for plugin, _name in plugins], ["sample"])
+        self.assertEqual((folder / "run.csv").read_text(encoding="utf-8"), self.source.read_text(encoding="utf-8"))
+        self.assertTrue(self.source.is_file())
+
+    def test_without_an_enabled_importer_nothing_is_copied(self):
+        self.assertEqual(self.check({"sample": False}), (None, []))
+        self.assertEqual(list(self.data.iterdir()), [])
+
+    def test_the_draft_lists_installed_importers_and_reads_the_suggestion(self):
+        draft = magic_drop.create_draft([self.source], root=self.root / "drafts",
+                                        installed_importers=[("logger_importer", "Logger", Path("plugin/logger"))])
+        text = (draft / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("`logger_importer`: Logger", text)
+        self.assertIn(magic_drop.SUGGESTION_FILE, text)
+        self.assertNotIn("Installed importer plugins",
+                         (magic_drop.create_draft([self.source], root=self.root / "plain") / "CLAUDE.md").read_text(
+                             encoding="utf-8"))
+        self.assertIsNone(magic_drop.read_plugin_suggestion(draft, {"logger_importer"}))
+        suggestion = draft / magic_drop.SUGGESTION_FILE
+        suggestion.write_text(json.dumps({"plugin": "logger_importer", "reason": "A new header"}), encoding="utf-8")
+        self.assertEqual(magic_drop.read_plugin_suggestion(draft, {"logger_importer"}),
+                         ("logger_importer", "A new header"))
+        self.assertIsNone(magic_drop.read_plugin_suggestion(draft, {"other_importer"}))
+        suggestion.write_text("not json", encoding="utf-8")
+        self.assertIsNone(magic_drop.read_plugin_suggestion(draft, {"logger_importer"}))

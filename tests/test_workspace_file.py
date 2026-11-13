@@ -199,6 +199,23 @@ class WorkspaceRestoreTests(unittest.TestCase):
         self.assertEqual(len(problems), 4)
         self.assertEqual([card.series for card in restored.plots()], [[(self.cache, "x")]])
 
+    def test_plot_navigator_trims_survive_a_round_trip(self):
+        source = self.workspace()
+        line = source.add_line_plot(self.cache, "x")
+        xy = source.add_xy_plot((self.cache, "x"), (self.cache, "y"))
+        source.set_plot_navigator_range(line, 20.0, 30.0)
+        source.set_plot_navigator_range(xy, 5.0, 15.0)
+        saved = write_workspace_file(self.folder / "trim.umw", {"workspace": source.workspace_state()})
+        state = read_workspace_file(saved)["workspace"]
+        self.assertEqual([card.get("trim") for card in cards(state)], [[20.0, 30.0], [5.0, 15.0]])
+        restored = self.workspace()
+        self.assertEqual(restored.restore_workspace_state(state), [])
+        restored_line, restored_xy = restored.plots()
+        # Each card shows only its trimmed range again, and its Plot navigator bar is trimmed.
+        self.assertEqual(restored._plot_navigator_ranges[restored_line], (20.0, 30.0))
+        self.assertEqual(restored_line.series_plot.data_time_range, (20.0, 30.0))
+        self.assertEqual(restored_xy.time_range, (5.0, 15.0))
+
     def test_opening_replaces_existing_cards(self):
         source = self.workspace()
         source.add_line_plot(self.cache, "x")

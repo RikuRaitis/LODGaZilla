@@ -460,15 +460,25 @@ above the conversation, so you can drop more files on either. Close the panel to
 **AI Integration** row with the arrow in its header, and click the row to open it
 again; LODGaZilla remembers which way you left it.
 
-1. LODGaZilla creates a new folder in the data folder and copies the file there. The
-   original stays where it was.
-2. The AI, Claude or Codex as chosen in the panel header, reads the file, finds the
-   data series, writes a parser and tests it. In the conversation it tells you the
-   format, the series it found and what it assumed about units and time. It then asks
-   whether the data looks right and whether you'd like a plugin for the format.
+1. LODGaZilla first asks your enabled importer plugins. If one reads the file, it
+   creates a new folder in the data folder, copies the file there and generates its
+   H5 files with that plugin, without AI and without sending anything. When the H5
+   files are ready, the panel shows the series found and asks whether the result is
+   OK: **Improve** the plugin with the AI, **Create a new plugin** from scratch, or
+   **Keep the result**. Either AI choice opens [Create plugin](#create-plugin) with the
+   copied file attached and a request ready to send.
+2. Otherwise the AI takes over, Claude or Codex as chosen in the panel header (it asks
+   for consent first). LODGaZilla creates the new folder and copies the file there; the
+   original stays where it was. The AI reads the file, finds the data series, writes a
+   parser and tests it. In the conversation it tells you the format, the series it
+   found and what it assumed about units and time. It then asks whether the data looks
+   right and whether you'd like a plugin for the format.
 3. LODGaZilla runs the parser, writes the H5 file and the folder's `_info.json` with
    the fixed values the AI found, such as device and serial number. The new folder
    appears in the Navigator.
+4. The AI is told which importer plugins are installed. If the file looks like a
+   variant of a format one of them reads, LODGaZilla asks whether to update that plugin
+   or create a new one, again through Create plugin.
 
 Tips:
 

@@ -123,6 +123,40 @@ questions in the final summary (step 5).
 - No new dependencies.
 """
 
+# The AI's suggestion to extend an installed importer plugin, in the draft; LODGaZilla
+# then asks the user whether to update that plugin or create a new one.
+SUGGESTION_FILE = "plugin_suggestion.json"
+
+
+def installed_importers_section(importers) -> str:  # type: ignore[no-untyped-def]
+    """Instructions listing the installed importer plugins: (id, title, folder) tuples."""
+    if not importers:
+        return ""
+    lines = ["", "## Installed importer plugins", "",
+             "No enabled plugin can read these files; LODGaZilla asked them first. These importer",
+             "plugins are installed; read their code (in the folder named) when the file looks related:", ""]
+    lines += [f"- `{plugin_id}`: {title} (`{folder}`)" for plugin_id, title, folder in importers]
+    lines += ["",
+              "If the file is a variant of a format one of them reads (the same device family or",
+              f"format, slightly different), write `{SUGGESTION_FILE}` in this folder:",
+              '`{"plugin": "<plugin id>", "reason": "<one sentence on what differs>"}`.',
+              "Say so in your summary too. LODGaZilla then asks the user whether to update that",
+              "plugin or create a new one. Write the file only for a real near match.", ""]
+    return "\n".join(lines)
+
+
+def read_plugin_suggestion(draft: Path, known: set[str]) -> tuple[str, str] | None:
+    """The AI's suggested plugin and its reason, when it names an installed importer."""
+    try:
+        data = json.loads((draft / SUGGESTION_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    plugin_id = str(data.get("plugin", "")).strip()
+    return (plugin_id, str(data.get("reason", "")).strip()) if plugin_id in known else None
+
+
 # The unit rules, shared with Create plugin's instructions.
 UNITS_SECTION = INSTRUCTIONS[INSTRUCTIONS.index("## Units"):INSTRUCTIONS.index("## Rules")]
 
@@ -131,7 +165,8 @@ def drafts_root() -> Path:
     return DRAFTS_ROOT
 
 
-def create_draft(sources: list[Path], *, root: Path | None = None, instructions_file: str = "CLAUDE.md") -> Path:
+def create_draft(sources: list[Path], *, root: Path | None = None, instructions_file: str = "CLAUDE.md",
+                 installed_importers=()) -> Path:  # type: ignore[no-untyped-def]
     """A new importer plugin folder for the agent to complete, outside the repository.
 
     The instructions go in ``instructions_file``: CLAUDE.md for Claude, AGENTS.md for Codex.
@@ -147,7 +182,8 @@ def create_draft(sources: list[Path], *, root: Path | None = None, instructions_
     (draft / "importer.json").write_text(json.dumps({"sections": []}, indent=2), encoding="utf-8")
     (draft / "importer.py").write_text(
         IMPORTER_TEMPLATE.format(sources=", ".join(path.name for path in sources), stamp=stamp), encoding="utf-8")
-    (draft / instructions_file).write_text(INSTRUCTIONS, encoding="utf-8")
+    (draft / instructions_file).write_text(INSTRUCTIONS + installed_importers_section(installed_importers),
+                                           encoding="utf-8")
     shutil.copyfile(REPOSITORY_ROOT / "docs" / "H5_Format.md", draft / "H5_Format.md")
     shutil.copyfile(REPOSITORY_ROOT / "src" / "data" / "parser_base.py", draft / "parser_base.py")
     return draft

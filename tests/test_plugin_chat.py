@@ -77,6 +77,28 @@ class PluginBuilderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already exists"):
             plugin_builder.create_plugin_folder("logger_importer", "CLAUDE.md", root=self.root)
 
+    def test_an_installed_plugin_gets_instructions_but_keeps_its_own_files(self):
+        plain = self.root / "plain_importer"
+        plain.mkdir()
+        with self.assertRaisesRegex(ValueError, "not a Git repository"):
+            plugin_builder.add_instructions(plain, "plain_importer", "CLAUDE.md")
+        installed = self.root / "installed_importer"
+        installed.mkdir()
+        git = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "core.hooksPath="]
+        subprocess.run(["git", "init", "-q"], cwd=installed, check=True)
+        (installed / "AGENTS.md").write_text("The plugin's own notes", encoding="utf-8")
+        subprocess.run(git + ["add", "AGENTS.md"], cwd=installed, check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "init"], cwd=installed, check=True)
+        with self.assertRaisesRegex(ValueError, "own AGENTS.md"):
+            plugin_builder.add_instructions(installed, "installed_importer", "AGENTS.md")
+        self.assertEqual((installed / "AGENTS.md").read_text(encoding="utf-8"), "The plugin's own notes")
+        plugin_builder.add_instructions(installed, "installed_importer", "CLAUDE.md")
+        (installed / ".lodgazilla_ai").mkdir()
+        (installed / ".lodgazilla_ai" / "input.bin").write_bytes(b"\x01")
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=installed,
+                                capture_output=True, text=True, check=True).stdout
+        self.assertEqual(status, "")
+
     def test_prompt_names_the_instructions_once_and_the_attached_files(self):
         folder = plugin_builder.create_plugin_folder("logger_importer", "AGENTS.md", root=self.root)
         source = self.root.parent / "spec.pdf"
@@ -147,9 +169,10 @@ class PluginChatJobTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def ask(self, text, files=(), session_id=""):
+    def ask(self, text, files=(), session_id="", examples_folder=None):
         job = PluginChatJob(Path("claude"), "logger_importer", text, list(files), session_id=session_id,
-                            provider=self.provider, web=True, plugin_root=self.root)
+                            provider=self.provider, web=True, plugin_root=self.root,
+                            examples_folder=examples_folder)
         events, finished = [], []
         job.event.connect(lambda kind, event_text: events.append((kind, event_text)))
         job.finished.connect(lambda *result: finished.append(result))
@@ -160,7 +183,12 @@ class PluginChatJobTests(unittest.TestCase):
     def test_conversation_creates_the_repository_and_continues_the_session(self):
         example = self.temp / "logger.bin"
         example.write_bytes(b"\x00" * 8)
-        events, (succeeded, note, session) = self.ask("Make an importer for this", [example])
+        examples = self.temp / "data" / "logger_importer"
+        events, (succeeded, note, session) = self.ask("Make an importer for this", [example],
+                                                      examples_folder=examples)
+        # The job, not the GUI thread, also copies the file to the examples folder.
+        self.assertTrue((examples / "logger.bin").is_file())
+        self.assertIn(("status", "Copied to the folder logger_importer in the data folder."), events)
         self.assertTrue(succeeded)
         folder = self.root / "logger_importer"
         self.assertTrue((folder / ".git").is_dir())

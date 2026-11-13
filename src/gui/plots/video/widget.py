@@ -289,11 +289,12 @@ class VideoPlotWidget(PlotBaseWidget):
         self.sync_panel.setVisible(False)
         controls = QHBoxLayout(self.playback_bar)
         controls.setContentsMargins(4, 2, 4, 2)
-        for widget in (self.play_button, self.mute_button, self.sync_button, self.sync_panel):
+        for widget in (self.play_button, self.sync_button, self.sync_panel):
             widget.setParent(self.playback_bar)
             controls.addWidget(widget)
         controls.addStretch(1)
-        for widget in (self.volume_icon, self.volume_slider):
+        # The sound controls together at the right: Volume icon, Volume slider, Mute button.
+        for widget in (self.volume_icon, self.volume_slider, self.mute_button):
             widget.setParent(self.playback_bar)
             controls.addWidget(widget)
         content = QWidget(self)

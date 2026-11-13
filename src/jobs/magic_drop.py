@@ -33,9 +33,12 @@ class MagicDropJob(QObject):
     def __init__(self, executable: Path, files: list[Path], data_folder: Path, *, hints: str = "",
                  max_budget_usd: float = 2.0, time_limit_seconds: float = 900.0,
                  trial_timeout_seconds: float = 600.0, drafts_root: Path | None = None,
-                 provider: AgentProvider = CLAUDE, web: bool = False, parent: QObject | None = None) -> None:
+                 provider: AgentProvider = CLAUDE, web: bool = False, installed_importers=(),
+                 parent: QObject | None = None) -> None:  # type: ignore[no-untyped-def]
         super().__init__(parent)
         self.provider = provider
+        # (id, title, folder) of the installed importer plugins, for the AI's suggestion.
+        self.installed_importers = tuple(installed_importers)
         # Whether the agent may read web pages, such as the format's specification.
         self.web = web
         self.executable = Path(executable)
@@ -71,6 +74,7 @@ class MagicDropJob(QObject):
             copies = magic_drop.copy_sources(self.files, self.folder)
             self.event.emit("status", f"Copied {len(copies)} file(s) to {self.folder}.")
             self.draft = magic_drop.create_draft(copies, root=self.drafts_root,
+                                                 installed_importers=self.installed_importers,
                                                  instructions_file=self.provider.instructions_file)
             self._run_agent(copies)
             for copy in copies:
@@ -157,3 +161,65 @@ class SignInCheck(QObject):
                 pass  # Deleted with its window while the CLI answered.
 
         threading.Thread(target=run, name=f"{self.provider.name.lower()}-sign-in-check", daemon=True).start()
+
+
+class PluginDropJob(QObject):
+    """Magic drop's first step, without AI: can an enabled importer plugin read every file?
+
+    If so, the files are copied to a new folder of the data folder, as Magic drop does, and
+    ``finished`` gives that folder and the plugins' (id, name) pairs; otherwise ``None`` and
+    no pairs, and nothing is copied.
+    """
+
+    finished = Signal(object, list)
+
+    def __init__(self, files: list[Path], data_folder: Path, enabled_plugins: dict[str, bool],
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.files = [Path(path) for path in files]
+        self.data_folder = Path(data_folder)
+        self.enabled_plugins = dict(enabled_plugins)
+        self.folder: Path | None = None
+        self._thread: threading.Thread | None = None
+        self._detached = threading.Event()
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="magic-drop-plugins", daemon=True)
+        self._thread.start()
+
+    def cancel(self) -> None:
+        """Nothing long runs here; a stopped check reports nothing."""
+        self._detached.set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        if self._thread is not None:
+            self._thread.join(timeout)
+        return self._thread is None or not self._thread.is_alive()
+
+    def _run(self) -> None:
+        from src.app.settings import load_hdf5_settings
+        from src.jobs.import_data import load_import_configurations, select_importer
+        plugins: list[tuple[str, str]] = []
+        folder = None
+        try:
+            configurations = load_import_configurations(enabled_plugins=self.enabled_plugins,
+                                                        hdf5_settings=load_hdf5_settings())
+            for path in self.files:
+                configuration, _importer = select_importer(path, configurations)
+                pair = (configuration.path.parent.name, configuration.name)
+                if pair not in plugins:
+                    plugins.append(pair)
+            if self._detached.is_set():
+                return  # Stopped: copy nothing.
+            folder = magic_drop.magic_drop_folder(self.data_folder, self.files)
+            magic_drop.copy_sources(self.files, folder)
+        except (OSError, ValueError):
+            # Some file no enabled plugin reads (or no plugin is enabled): the AI's turn.
+            folder, plugins = None, []
+        self.folder = folder
+        if self._detached.is_set():
+            return
+        try:
+            self.finished.emit(folder, plugins)
+        except RuntimeError:
+            pass  # Deleted with its window meanwhile.

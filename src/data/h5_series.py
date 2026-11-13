@@ -43,7 +43,8 @@ def _build_series_path_index(h5_file: h5py.File) -> _SeriesPathIndex:
     if not isinstance(series_root, h5py.Group):
         raise KeyError("HDF5 cache has no /series group")
 
-    paths: dict[str, str] = {}
+    full_paths: dict[str, str] = {}
+    leaf_paths: dict[str, str] = {}
     full_names: list[str] = []
 
     def add_group(_path: str, candidate) -> None:  # type: ignore[no-untyped-def]
@@ -54,13 +55,42 @@ def _build_series_path_index(h5_file: h5py.File) -> _SeriesPathIndex:
         full_name = "/".join(part for part in (navigator_group, navigator_name) if part)
         physical_path = candidate.name
         if navigator_name:
-            paths.setdefault(navigator_name, physical_path)
+            leaf_paths.setdefault(navigator_name, physical_path)
         if full_name:
-            paths.setdefault(full_name, physical_path)
+            full_paths.setdefault(full_name, physical_path)
             full_names.append(full_name)
 
     series_root.visititems(add_group)
+    # A full "group/name" is exact, so it comes first. Next the importer's own keys, which the
+    # Navigator uses as the series' identity (the series index "name", such as "acc_x" for
+    # Accelerometer/X). A bare leaf name comes last: it must never hide another series.
+    paths = dict(full_paths)
+    for key, full_name in _index_keys(h5_file):
+        if full_name in full_paths:
+            paths.setdefault(key, full_paths[full_name])
+    for name, physical_path in leaf_paths.items():
+        paths.setdefault(name, physical_path)
     return _SeriesPathIndex(paths, tuple(full_names))
+
+
+def _index_keys(h5_file: h5py.File) -> list[tuple[str, str]]:
+    """(importer key, full navigator name) pairs from the file's series index, if any."""
+    import json
+    try:
+        payload = json.loads(_attribute_text(h5_file.attrs.get("series_index_json", "")) or "[]")
+    except ValueError:
+        return []
+    pairs = []
+    for item in payload if isinstance(payload, list) else []:
+        if not isinstance(item, dict):
+            continue
+        key = _attribute_text(item.get("name", ""))
+        name = _attribute_text(item.get("navigator_name", item.get("display_name", "")))
+        group = _attribute_text(item.get("navigator_group", ""))
+        full_name = "/".join(part for part in (group, name) if part)
+        if key and full_name:
+            pairs.append((key, full_name))
+    return pairs
 
 
 def _series_path_index(h5_file: h5py.File, *, refresh: bool = False) -> _SeriesPathIndex:

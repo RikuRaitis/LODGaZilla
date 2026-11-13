@@ -180,6 +180,21 @@ class MultiSeriesLaneTests(unittest.TestCase):
         self.assertAlmostEqual(starts.min(), 0.0)
         self.assertAlmostEqual(ends.max(), times[-1])
 
+    def test_a_dense_event_lane_reads_a_bounded_number_of_samples(self):
+        from src.gui.plots.event_state import EVENT_STATE_MAX_SAMPLES, load_event_state_series
+        count = EVENT_STATE_MAX_SAMPLES * 3 + 7
+        with h5py.File(self.path, 'a') as h5:
+            group = h5.create_group('series/steps')
+            group.attrs.update(time_dataset='time_s', time_unit='s', navigator_name='steps', unit='index')
+            group.create_dataset('time_s', data=np.arange(count, dtype=float) * 0.001)
+            group.create_dataset('value', data=np.arange(count, dtype=float) % 3)
+        data = load_event_state_series(self.path, 'steps')
+        self.assertLessEqual(len(data['time']), EVENT_STATE_MAX_SAMPLES)
+        self.assertEqual(len(data['time']), len(data['value']))
+        # The read still spans the whole series.
+        self.assertAlmostEqual(float(data['time'][0]), 0.0)
+        self.assertGreater(float(data['time'][-1]), (count - 4) * 0.001)
+
     def test_sample_loss_areas_cover_each_series_lane(self):
         with h5py.File(self.path, 'a') as h5:
             for name in ('voltage', 'pressure'):

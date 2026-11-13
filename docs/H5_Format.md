@@ -374,7 +374,9 @@ extrema. It supplements `value` and the original timestamps; never replace
 those datasets with downsampled data.
 
 `/series/<series>/lod` has `levels` (integer) and, when levels exist,
-`top_level` (e.g. `"level_003"`). `level_001` is the finest aggregated level;
+`top_level` (e.g. `"level_003"`). The lowest-numbered level present is the finest
+aggregated level (the host writes none finer than 16 samples per bucket, so its numbering
+may start at `level_002`);
 larger level numbers contain larger buckets and fewer points. `levels=0` and
 no level subgroups is valid for a short recording. Omitting `lod` is also valid,
 but large plots may need more reads and work.
@@ -477,7 +479,9 @@ its `sample_loss_list` and `clipping_list`. When every entry has it, the Navigat
 walk the file for warnings; without it, the warnings are read from the groups.
 
 Include every series and keep index names, counts, units, visibility and bounds
-consistent with the actual groups. `navigator_metadata` entries provide logical
+consistent with the actual groups. `name` is the series' identity in LODGaZilla (the key
+the importer used); it need not equal `navigator_group/navigator_name`, because readers map
+it to its group through those two fields. `navigator_metadata` entries provide logical
 Navigator columns with `id`, `title`, `format` and a resolved `value`. Supported
 formatters are `integer`, `number`, `rate` and ordinary text. The index is a
 cache of presentation metadata, not a place to store sample arrays.
