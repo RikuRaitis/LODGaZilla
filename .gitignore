@@ -23,3 +23,6 @@ Todo.txt
 Code_review_plugin.md
 # Big AI test files, made by tools/create_ai_demodata.py.
 /tests/AI_demodata/big/
+
+# Demo video recordings and renders, made by tools/demo_video/.
+/build/

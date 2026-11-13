@@ -748,6 +748,27 @@ running agents and writes the report so far.
 Copy `app_settings.json` to the ignored `app_settings_debug.json` to keep your recent
 folders, plugin choices and column layouts out of Git.
 
+### Demo video
+
+The demo video (about 3 minutes) is made from the demo data by scripts in
+`tools/demo_video/`, on Windows. They drive LODGaZilla with real mouse and keyboard
+input, record the window from the screen, and edit the recordings in code:
+
+```
+python tools/create_demo_dataset.py           # the demo data, if it isn't there
+python tools/demo_video/record.py             # record every scene, about 15 minutes
+python tools/demo_video/edit.py               # cut the video, about 10 minutes
+```
+
+While `record.py` runs, don't touch the mouse or keyboard and keep the screen unlocked.
+Two scenes run Magic drop and Create plugin with Claude, so they need it signed in and
+spend tokens; the map scenes need an internet connection. Re-record single scenes with
+`--scenes`, such as `--scenes 3 6`. `edit.py` writes `build/demo_video/lodgazilla_demo.mp4`
+(subtitles burned in), `lodgazilla_demo_clean.mp4`, `lodgazilla_demo.srt` and
+`narration.txt`; `--voice narration.wav` uses a final narration instead of the Windows
+draft voice. [docs/VIDEO_DEMO.md](docs/VIDEO_DEMO.md) describes the scenes, the narration
+and how it all works.
+
 ### Versions and releases
 
 LODGaZilla uses [Semantic Versioning](https://semver.org/): `1.0.0-beta.1`, then
