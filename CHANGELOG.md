@@ -6,6 +6,11 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `LODGaZilla.bat` starts LODGaZilla from any folder, so a shortcut with another start
+  folder works instead of failing with "No module named src".
+
 ## [1.0.0-beta.3] - 2026-11-13
 
 ### Security

@@ -90,9 +90,6 @@ Priority: **P1** fix as soon as possible, **P2** soon, **P3** when convenient.
 - **P3 — `take_readme_screenshots.py` pairs cards with picture names by position**, so one
   card that isn't restored shifts every later picture's name; it leaves its settings
   folder in `%TEMP%` on an unexpected error.
-- **P3, needs a decision — `LODGaZilla.bat` works only from the checkout folder.** A
-  shortcut with another start folder fails with "No module named src". Fixing it
-  (`cd /d "%~dp0"`) means changing the AGENTS.md rule that keeps the file to one line.
 
 ## Accepted design decisions
 

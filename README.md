@@ -74,7 +74,8 @@ installer. Missing that box is the number one reason for "python is not recogniz
 
 ### 4. Start it
 
-On Windows, double-click `LODGaZilla.bat` in the LODGaZilla folder. On any platform,
+On Windows, double-click `LODGaZilla.bat` in the LODGaZilla folder; a shortcut to it
+works from anywhere, such as the desktop or the Start menu. On any platform,
 you can also open a terminal in that folder and run:
 
 ```

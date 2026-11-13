@@ -325,7 +325,9 @@ Follow `docs/Releasing.md`, with these checks:
 
 - `python -m src.app.lodgazilla [--default-settings] [--no-plugins] [data_folder]`:
   the start command, the same on every platform; on Windows `LODGaZilla.bat` runs
-  exactly this one line (passing on its options with `%*`) and must stay free of other logic. It runs
+  this command (passing on its options with `%*`) with the checkout added to `PYTHONPATH`
+  inside `setlocal`, so it works from any start folder, such as a shortcut's, and keeps
+  the caller's current folder. Keep it free of other logic. The command runs
   `tools/setup_environment.py` first. `--default-settings` uses the committed
   `app_settings.json` and saves changes to it, so revert them before committing;
   `--no-plugins` loads no plugin. Both are passed to worker processes as the
