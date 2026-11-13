@@ -1,11 +1,11 @@
 {
   "navigator_controls": {
-    "align_columns_of_different_type": true,
+    "align_columns_of_different_type": false,
     "hide_irrelevant_series": true,
     "recent_folders": []
   },
   "appearance": {
-    "theme": "dark"
+    "theme": "os"
   },
   "plot": {
     "multi_selected_line_width": 5,
@@ -91,24 +91,24 @@
       "clipping"
     ],
     "sample_loss": {
-      "enabled": false,
-      "color": "#ff0000",
+      "enabled": true,
+      "color": "#806b00",
       "bold": true,
       "italic": false
     },
     "clipping": {
-      "enabled": false,
-      "color": "#8a8a00",
+      "enabled": true,
+      "color": "#8a4d00",
       "bold": true,
       "italic": false
     }
   },
   "hdf5": {
-    "compression": "none",
-    "compression_level": 0,
+    "compression": "gzip",
+    "compression_level": 4,
     "chunk_rows": 65536,
-    "lod_target_buckets": 1983,
-    "lod_bucket_growth": 2
+    "lod_target_buckets": 2000,
+    "lod_bucket_growth": 4
   },
   "tree_columns": {
     "shared_widths": {},

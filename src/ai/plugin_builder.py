@@ -77,8 +77,9 @@ The user talks to you through LODGaZilla's AI panel; keep replies short and plai
 - After each of your answers, LODGaZilla copies the example files into the user's data
   folder (`{plugin_id}` there), imports them with this plugin's importer, if it has one,
   and shows the user the series found or the error. Keep the importer runnable.
-- When the plugin works, tell the user to restart LODGaZilla and enable it in
-  Settings > Plugins.
+- When the plugin works, tell the user to enable it in Settings > Plugins; no restart is
+  needed. Only a plugin with new requirements needs one, to install them; and so does a
+  change to the UI code of a plugin that is already enabled.
 
 {UNITS_SECTION}
 ## Rules
@@ -219,7 +220,8 @@ def commit_changes(folder: Path, request: str) -> str:
     message = first_line if len(first_line) <= 72 else first_line[:69].rstrip() + "..."
 
     def git(*arguments: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *arguments], cwd=folder, capture_output=True, text=True,
+        # The agent can write in this folder, .git included (Claude): run no hooks it wrote.
+        return subprocess.run(["git", "-c", "core.hooksPath=", *arguments], cwd=folder, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
 
     try:
@@ -237,5 +239,5 @@ def commit_changes(folder: Path, request: str) -> str:
 
 
 def plugin_ready(folder: Path) -> bool:
-    """Whether the folder has a plugin manifest, so it can be enabled after a restart."""
+    """Whether the folder has a plugin manifest, so it can be enabled in Settings > Plugins."""
     return (folder / "plugin.json").is_file()

@@ -515,7 +515,8 @@ is one), and press Enter.
    Once the plugin has an importer, LODGaZilla imports them with it after each answer,
    so you see the H5 files in the Navigator and, in the AI panel, the series found or
    why a file could not be read.
-5. When the plugin works, restart LODGaZilla and enable it in **Settings > Plugins**.
+5. When the plugin works, enable it in **Settings > Plugins**; no restart is needed. Only a
+   plugin that needs new Python packages asks for one, to install them.
 
 Your files go to the plugin's `.lodgazilla_ai` folder, which is never committed, as
 are the AI's instructions. The AI may write only in the plugin's folder and run
@@ -540,8 +541,9 @@ Plugins are released separately, each in its own Git repository named
 In **Settings > Plugins**, **Check now** looks in the **Plugin sources**, which start
 with `https://github.com/RikuRaitis`; add any GitHub account or Bitbucket workspace that
 publishes plugins. LODGaZilla lists the `LODGaZilla-*` repositories it finds there, with
-**Install** and **Update** buttons. New plugins start disabled: restart LODGaZilla, then
-enable them in Settings.
+**Install** and **Update** buttons. Installing and updating finish when LODGaZilla next
+starts; new plugins start disabled, so enable them in Settings afterwards. A plugin you add to
+the `plugin` folder yourself, or make with Create plugin, can be enabled at once.
 
 LODGaZilla never stores passwords or tokens. Only install plugins you trust: a plugin
 runs Python code with your permissions.

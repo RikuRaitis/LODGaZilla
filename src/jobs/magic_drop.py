@@ -77,7 +77,7 @@ class MagicDropJob(QObject):
                 self._check_cancelled()
                 self.event.emit("status", f"Importing {copy.name}…")
                 summary = magic_drop.run_trial_import(self.draft, copy, copy.with_suffix(".h5"),
-                                                      timeout=self.trial_timeout_seconds)
+                                                      timeout=self.trial_timeout_seconds, cancelled=self._cancelled)
                 self.event.emit("result", f"{copy.with_suffix('.h5').name}\n{magic_drop.summary_text(summary)}")
             metadata = magic_drop.read_metadata(self.draft)
             magic_drop.write_folder_info(self.folder, metadata, self.draft)

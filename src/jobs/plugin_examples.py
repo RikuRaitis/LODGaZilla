@@ -30,20 +30,26 @@ class PluginExamplesJob(QObject):
         self.examples_folder = Path(examples_folder)
         self.timeout = timeout
         self._detached = threading.Event()
+        self._cancelled = threading.Event()
 
     def start(self) -> None:
         threading.Thread(target=self._run, name="plugin-examples", daemon=True).start()
 
     def detach(self) -> None:
-        """The window is closing: report nothing more."""
+        """The window is closing: stop the import and report nothing more."""
         self._detached.set()
+        self._cancelled.set()
 
     def _run(self) -> None:
         lines = []
         for source in example_sources(self.examples_folder):
+            if self._cancelled.is_set():
+                return
             try:
                 summary = run_trial_import(self.plugin_folder, source, default_output_path(source),
-                                           timeout=self.timeout)
+                                           timeout=self.timeout, cancelled=self._cancelled)
+            except InterruptedError:
+                return
             except subprocess.TimeoutExpired:
                 lines.append(f"{source.name}: stopped after {self.timeout:g} s")
                 continue

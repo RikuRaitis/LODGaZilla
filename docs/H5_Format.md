@@ -526,10 +526,11 @@ def build_import_result():
     }
 ```
 
-The writer filters nonfinite timestamps with their matching values. When
-`time_sorted` is false or absent it performs a stable time sort; when true it
-trusts the flag. `DataParser.make_series()` defaults this flag to true, so a
-parser must set it correctly. Value NaNs are not removed by this normalization.
+The writer filters nonfinite timestamps with their matching values, checks that the
+timestamps ascend and, when they do not (for example after a clock reset), performs a
+stable time sort, whatever `time_sorted` says. Value NaNs are not removed by this
+normalization. Complex values are refused; store magnitude and phase, or real and
+imaginary parts, as separate series.
 
 Prefer the helpers exposed by `src.contracts.importer`:
 

@@ -45,15 +45,6 @@ class XYZData:
         return len(self.time)
 
 
-def nearest_sample_indices(times, queries) -> np.ndarray:
-    """Return the index of the ascending ``times`` sample nearest each query."""
-    times = np.asarray(times, dtype=float)
-    queries = np.asarray(queries, dtype=float)
-    upper = np.clip(np.searchsorted(times, queries, side="left"), 0, len(times) - 1)
-    lower = np.maximum(0, upper - 1)
-    return np.where(np.abs(queries - times[lower]) <= np.abs(times[upper] - queries), lower, upper)
-
-
 def _check_cancelled(cancelled):
     if cancelled is not None and cancelled.is_set():
         raise InterruptedError("3D data loading cancelled")

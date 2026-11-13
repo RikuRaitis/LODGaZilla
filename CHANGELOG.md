@@ -8,6 +8,9 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Added
 
+- A plugin added while LODGaZilla runs, such as one made with Create plugin, can be enabled
+  in Settings > Plugins at once, without a restart. A restart is still needed to install a
+  plugin's new Python packages, and to change the UI code of a plugin that is already running.
 - Create plugin copies the attached files to a folder named after the plugin in the data
   folder and, once the plugin has an importer, imports them with it after each answer,
   showing the series found or the error in the AI panel.
@@ -23,6 +26,22 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Fixed
 
+- Stop, and closing LODGaZilla, now end an import that the AI's parser is running in Magic
+  drop or Create plugin, instead of letting it run for up to 10 minutes.
+- Code written by the AI (Magic drop and Create plugin's trial imports) no longer gets the
+  GitHub and Bitbucket tokens, and Create plugin's commits run no Git hooks.
+- A fresh installation uses the intended defaults again: compressed H5 caches, the system
+  theme and Navigator diagnostics on.
+- Double-clicking a parent folder no longer starts H5 generation.
+- Complex values are refused with a clear message instead of keeping only their real part.
+- Map cards keep their values boxes, and 3D plot cards their traces, while reloading for a
+  Sample limit or trim.
+- Event/state lanes can no longer be dragged out of place by their names.
+- LODGaZilla starts even when unrelated installed Python packages conflict.
+- An intermittent crash: a delayed update (such as a legend's repositioning) could still run
+  after its card was closed, and PySide then corrupted memory reporting the error.
+- A plugin installation no longer waits for the next start when Windows briefly holds the
+  downloaded files.
 - The 3D Map's terrain no longer goes beyond the map tiles' zoom, so MapLibre drapes the map
   correctly when zoomed in close (no more "cannot calculate elevation" warnings).
 - H5 generation builds each LOD level from the level below, so long series need far less

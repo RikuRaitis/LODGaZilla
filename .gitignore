@@ -19,3 +19,5 @@ app_settings_debug.json.corrupt-*
 
 # Personal to-do list, never committed.
 Todo.txt
+# Plugin findings of a code review; names private plugins (see AGENTS.md).
+Code_review_plugin.md

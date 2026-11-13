@@ -86,8 +86,19 @@ def main():
         return int(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
     directory = Path(tempfile.mkdtemp(prefix="lodgazilla-tests-"))
     staged_host = directory / "host"
+    try:
+        return _run_snapshot(args, host, plugin, directory, staged_host)
+    finally:
+        # The logs and summary stay; the host copy (tens of MB per run) goes, also when a
+        # run is interrupted.
+        remove_tree(staged_host)
+
+
+def _run_snapshot(args, host, plugin, directory, staged_host):  # type: ignore[no-untyped-def]
     staged_plugin = snapshot(host, plugin, staged_host, all_plugins=args.all_plugins)
     print(f"Test snapshot and logs: {directory}", flush=True)
+    # The app's own logs of this run go here too, not to the shared test log folder.
+    log_environment = {**os.environ, "LODGAZILLA_LOG_DIR": str(directory / "logs")}
     test_dir = test_folder(staged_plugin or staged_host)
     patterns = [p.name for p in sorted(test_dir.glob(args.pattern))] if args.isolated else [args.pattern]
     if not patterns:
@@ -104,7 +115,8 @@ def main():
         start = time.monotonic()
         log_path = directory / (pattern.replace("*", "all") + ".log")
         with log_path.open("w", encoding="utf-8") as log:
-            process = subprocess.Popen(command, cwd=staged_host, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, cwd=staged_host, stdout=log, stderr=subprocess.STDOUT,
+                                       env=log_environment)
             try:
                 code = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -122,8 +134,6 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         results = list(pool.map(run, patterns))
     (directory / "summary.json").write_text(json.dumps(results, indent=2))
-    # The logs and summary stay; the host copy (tens of MB per run) goes.
-    remove_tree(staged_host)
     return int(any(result["exit"] != 0 for result in results))
 
 

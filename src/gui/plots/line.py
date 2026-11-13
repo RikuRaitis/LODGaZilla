@@ -101,7 +101,7 @@ class LinePlotWidget(TimeCardMarkers, PlotBaseWidget):
             self.series_plot.plot_widget.update()
             # A series drop is handled while Qt is still dispatching its drag
             # event. Reposition once that event has completed as well.
-            QTimer.singleShot(0, self.legend.reposition)
+            QTimer.singleShot(0, self.legend, self.legend.reposition)
 
     def _show_load_error(self, error: str) -> None:
         if self.series:

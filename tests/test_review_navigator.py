@@ -525,6 +525,8 @@ class FolderGenerationRuleTests(unittest.TestCase):
             run = year / "run"
             run.mkdir(parents=True)
             (year / "2024_info.json").write_text("{}", encoding="utf-8")
+            # Writing folder info leaves its lock beside it.
+            (year / "2024_info.json.lock").write_bytes(b"\0")
             (year / ".hidden").write_text("x", encoding="utf-8")
             # A parent folder with only subfolders, its info and hidden files is not data.
             self.assertFalse(folder_needs_h5_generation(year))

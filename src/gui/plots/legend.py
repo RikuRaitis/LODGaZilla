@@ -237,7 +237,7 @@ class PlotLegendWidget(QFrame):
         # after its current event returns.  Reposition once more after Qt has
         # applied that deferred layout; otherwise an event/state legend may
         # retain a zero-width or stale geometry until the card is resized.
-        QTimer.singleShot(0, self.reposition)
+        QTimer.singleShot(0, self, self.reposition)
 
     def show_drop_hint(self, point: QPoint) -> int:
         """Outline a hovered row, or mark the insertion gap between rows."""
@@ -409,6 +409,8 @@ class _LegendLabel(QLabel):
     def contextMenuEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if self.entry.group_sources is not None:
             menu = QMenu(self)
+            # Deleted after use; otherwise each right-click leaves one alive with the row.
+            menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
             menu.addAction("Remove group", lambda: self.source_plot.grouped_series.remove(self.entry.group_index))
             menu.exec(event.globalPos())
             return
@@ -416,6 +418,7 @@ class _LegendLabel(QLabel):
             event.ignore()
             return
         menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if self.entry.component_editable:
             for component, title in (("value", "Values"), ("time", "Time")):
                 action = menu.addAction(title)

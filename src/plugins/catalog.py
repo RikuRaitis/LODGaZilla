@@ -198,7 +198,9 @@ def discover_plugins(plugin_root: str | Path = PLUGIN_ROOT, *, log: Callable[[st
                 launcher = PluginLauncher(str(manifest["launcher"].get("title", title)),
                                           local_file(path.parent, icon) if icon else None)
             if check_dependencies:
-                errors.extend(requirement_errors(path.parent / "requirements.txt"))
+                missing = requirement_errors(path.parent / "requirements.txt")
+                # Startup installs every installed plugin's requirements (tools/setup_environment.py).
+                errors.extend(missing + (["restart LODGaZilla to install them"] if missing else []))
             descriptor = PluginDescriptor(plugin_id, title, path, entry, capabilities,
                                           str(manifest.get("version", "0.1.0")),
                                           {spec.name: spec.worker for spec in specs}, "; ".join(errors),

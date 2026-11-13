@@ -910,6 +910,8 @@ class _NavigatorCanvas(QWidget):
             self.navigator.offset_reset_requested.emit(entry.plot)
         elif chosen is reset_range:
             self.navigator.range_reset_requested.emit(entry.plot)
+        # Otherwise each right-click would leave a menu alive for as long as the Plot navigator.
+        menu.deleteLater()
 
     def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if self._entry_at(event.position()) is not None or self._view_edge_at(event.position()) is not None:

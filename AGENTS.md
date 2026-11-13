@@ -197,6 +197,11 @@ An H5 file supplies data series; it is not a separate tree item type.
 - **Keep the UI responsive.** Avoid lengthy file reads, parsing, decoding, and
   computation on the GUI thread. Reuse the relevant worker/coordinator patterns,
   bound background work, and clean up resources when cards close.
+- **Give deferred calls an owner.** Write `QTimer.singleShot(delay, owner, callable)`,
+  never `QTimer.singleShot(delay, callable)`: Qt cancels the call when `owner` is
+  deleted. A call into a deleted widget raises inside Qt's event handling, and PySide
+  6.11 corrupts the heap reporting it (the crashes of 1.0.0-beta.2's test suite).
+  `tests/test_timer_context.py` checks this.
 - **Preserve user data and state.** Distinguish original files, generated H5
   caches, metadata, and attachment links. Removing an attachment link must not
   delete its source file. Preserve selection, layout, and playback state when

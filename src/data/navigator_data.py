@@ -124,15 +124,16 @@ def folder_has_h5_files(folder: Path) -> bool:
 def folder_needs_h5_generation(folder: Path) -> bool:
     """Whether a folder holds data files of its own but no H5 files yet.
 
-    Subfolders, hidden files and the folder's own ``_info.json`` do not count, so a
-    parent folder such as a year folder is never treated as unimported data.
+    Subfolders, hidden files and the folder's own ``_info.json`` (with the lock and temp
+    files of writing it) do not count, so a parent folder such as a year folder is never
+    treated as unimported data.
     """
     if not folder.is_dir():
         return False
     info_name = f"{folder.name}_info.json"
     has_data = False
     for path in folder.iterdir():
-        if not path.is_file() or path.name.startswith(".") or path.name == info_name:
+        if not path.is_file() or path.name.startswith(".") or path.name.startswith(info_name):
             continue
         if path.suffix.lower() in {".h5", ".hdf5"}:
             return False

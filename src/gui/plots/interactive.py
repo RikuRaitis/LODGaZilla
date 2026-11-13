@@ -319,7 +319,9 @@ class InteractivePlotWidget(pg.PlotWidget):
                 self._begin_axis_drag("marker" if self._dragged_marker is not None else "plot_x", event.position())
                 event.accept()
                 return
-            if plot_item.getAxis("left").sceneBoundingRect().contains(scene_position):
+            if (plot_item.getAxis("left").sceneBoundingRect().contains(scene_position)
+                    and getattr(self, "y_axis_zoom_enabled", True)):
+                # Cards with a fixed vertical layout (Event/state lanes) keep it.
                 self._begin_axis_drag("y", event.position())
                 event.accept()
                 return

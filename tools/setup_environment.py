@@ -80,7 +80,12 @@ def main(argv: list[str] | None = None):
     for path in constraints:
         command.extend(["-c", str(path)])
     subprocess.run(command, check=True)
-    subprocess.run([str(python), "-m", "pip", "check"], check=True)
+    # pip check covers every package in this Python, including unrelated ones a developer
+    # installed; their conflicts are reported, not allowed to stop LODGaZilla. Its own
+    # requirements are checked strictly below.
+    if subprocess.run([str(python), "-m", "pip", "check"]).returncode != 0:
+        print("pip check reports conflicts between installed packages (see above); "
+              "LODGaZilla's own requirements are checked next.", file=sys.stderr)
     # Source checkouts have no installed distribution metadata, so validate
     # their declared requirements explicitly in the target interpreter too.
     subprocess.run([str(python), "-c",

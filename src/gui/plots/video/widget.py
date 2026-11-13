@@ -535,7 +535,7 @@ class VideoPlotWidget(PlotBaseWidget):
             LOG.warning('%s; restarting with CPU transfer fallback', message)
             self.gpu_allowed = False
             self.restart_position = (self.position, self.playing)
-            QTimer.singleShot(0, self._open_video)
+            QTimer.singleShot(0, self, self._open_video)
             return
         self.set_playing(False)
         self.status_label.setText(message)

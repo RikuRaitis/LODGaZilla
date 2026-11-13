@@ -184,16 +184,37 @@ def copy_sources(files: list[Path], folder: Path) -> list[Path]:
     return copies
 
 
-def run_trial_import(draft: Path, source: Path, output: Path, *, timeout: float) -> dict:
-    """Run the draft's parser on ``source`` in its own process and return its summary."""
-    completed = subprocess.run(
+def run_trial_import(draft: Path, source: Path, output: Path, *, timeout: float, cancelled=None) -> dict:
+    """Run the draft's parser on ``source`` in its own process and return its summary.
+
+    The parser is code the AI wrote, so it gets the agent's environment: without the Git
+    hosting tokens (``agent_environment``). It runs in its own process tree: setting
+    ``cancelled`` (a ``threading.Event``), or the timeout, ends it and everything it started.
+    """
+    import time
+    from src.ai.agent_common import agent_environment
+    from src.jobs.process_tree import kill_process_tree, popen_in_tree
+    process, tree = popen_in_tree(
         [sys.executable, "-m", "src.ai.trial_import", str(draft), str(source), str(output)],
-        cwd=REPOSITORY_ROOT, capture_output=True, text=True, timeout=timeout, creationflags=NO_WINDOW,
-        stdin=subprocess.DEVNULL, encoding="utf-8", errors="replace")
-    if completed.returncode != 0:
-        lines = (completed.stderr or completed.stdout or "").strip().splitlines()
-        raise RuntimeError(lines[-1] if lines else f"Trial import failed with exit code {completed.returncode}")
-    return json.loads(completed.stdout.strip().splitlines()[-1])
+        cwd=REPOSITORY_ROOT, env=agent_environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                if cancelled is not None and cancelled.is_set():
+                    raise InterruptedError("Trial import stopped") from None
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(process.args, timeout) from None
+    finally:
+        kill_process_tree(process, tree)
+    if process.returncode != 0:
+        lines = (stderr or stdout or "").strip().splitlines()
+        raise RuntimeError(lines[-1] if lines else f"Trial import failed with exit code {process.returncode}")
+    return json.loads(stdout.strip().splitlines()[-1])
 
 
 def read_metadata(draft: Path) -> dict[str, str]:

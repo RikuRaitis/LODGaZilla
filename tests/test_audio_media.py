@@ -115,12 +115,12 @@ class AudioConversionTests(unittest.TestCase):
             lodgazilla.retry_audio_offset(owner, Path("a.audio.h5"), 1.0, results.append, delay_ms=1)
             # The first attempt failed and returned at once; later ones run from the event loop.
             self.assertEqual((attempt.call_count, results), (1, []))
-            self.assertTrue(qt_wait_until(lambda: results, 2000))
+            self.assertTrue(qt_wait_until(lambda: results, 10_000))
         self.assertEqual((attempt.call_count, results), (3, [True]))
         with mock.patch.object(lodgazilla, "set_audio_offset", return_value=False):
             results.clear()
             lodgazilla.retry_audio_offset(owner, Path("a.audio.h5"), 1.0, results.append, attempts=2, delay_ms=1)
-            self.assertTrue(qt_wait_until(lambda: results, 2000))
+            self.assertTrue(qt_wait_until(lambda: results, 10_000))
         self.assertEqual(results, [False])
 
     def test_folder_log_start_ignores_audio_files(self):

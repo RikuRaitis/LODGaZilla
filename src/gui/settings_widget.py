@@ -374,7 +374,10 @@ class SettingsEditorWidget(QWidget):
         layout.addLayout(form)
         note = QLabel("Only use sources you trust. Private repositories use your Git credentials. "
                       "Install and Update take effect after restarting LODGaZilla, and do not depend on "
-                      "Apply or Cancel; Apply saves the sources and the enabled plugins.")
+                      "Apply or Cancel; Apply saves the sources and the enabled plugins. A plugin "
+                      "added to the plugin folder meanwhile, such as one made with Create plugin, works "
+                      "as soon as it is enabled; one that needs new Python packages gets them when "
+                      "LODGaZilla next starts.")
         note.setWordWrap(True)
         layout.addWidget(note)
         self.plugin_rows_layout = QVBoxLayout()

@@ -1200,6 +1200,10 @@ def _estimate_lod_level_count(
 def _normalise_series(series_data: dict[str, Any]) -> tuple[np.ndarray, np.ndarray] | None:
     time_values = np.asarray(series_data.get("time", []), dtype=np.float64)
     values = np.asarray(series_data.get("values", []))
+    if values.dtype.kind == "c":
+        # astype(float) would silently keep only the real part.
+        raise ValueError(f"Series {series_data.get('name', '<unnamed>')} has complex values; "
+                         "store real and imaginary parts (or magnitude and phase) as separate series.")
     if values.dtype.kind not in {"b", "u", "i", "f"}:
         values = values.astype(np.float64)
 

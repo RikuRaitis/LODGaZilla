@@ -158,13 +158,16 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         # Keep the axis scaling so the camera shows the same region at the new limit.
         if self._fixed_extent is None and any(isinstance(result, XYZData) for result in self.results):
             self._fixed_extent = self._extent
-        self._request()
+        self._request(keep_traces=True)
 
-    def _request(self):
+    def _request(self, *, keep_traces=False):
+        """Load the traces again; ``keep_traces`` shows the current ones until the new arrive
+        (a new Sample limit or trim), as X/Y does. A legend change clears them at once."""
         self.series = self.grouped_series.entries()
         self._loading = True
-        self.results = []
-        self._render()
+        if not keep_traces:
+            self.results = []
+            self._render()
         self.current_status = "Loading 3D data…"
         self.loader.request([trace.axes for trace in self.traces], self.time_range, self.sample_limit)
         self.series_changed.emit()
@@ -429,7 +432,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
     def set_data_time_range(self, time_range):
         self.time_range = tuple(sorted(time_range)) if time_range is not None else None
         self._fixed_extent = None
-        self._request()
+        self._request(keep_traces=True)
 
     def workspace_state(self):
         opts = self.view.opts

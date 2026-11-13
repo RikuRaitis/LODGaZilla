@@ -43,6 +43,37 @@ class PluginManagerTests(unittest.TestCase):
         self.assertEqual(manager.plugins["sample"].calls, [("usb_connected", "second")])
         self.assertTrue(any("launch failed (RuntimeError): launch failure" in item for item in messages))
 
+    def test_a_plugin_added_while_running_can_be_enabled_without_a_restart(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = PluginManager(object(), plugin_root=temp_dir)
+            self.assertEqual(manager.descriptors, [])
+            # Create plugin writes a new importer while LODGaZilla runs.
+            folder = Path(temp_dir) / "new_importer"
+            folder.mkdir()
+            (folder / "importer.py").write_text("", encoding="utf-8")
+            (folder / "importer.json").write_text("{}", encoding="utf-8")
+            write_manifest(folder, plugin_id="new_importer", capabilities=["importer"], entry_point="importer.py")
+            self.assertEqual(manager.refresh(), ["new_importer"])
+            manager.set_enabled({"new_importer": True})
+            self.assertTrue(manager.has_enabled_importer())
+            # Looking again finds nothing new.
+            self.assertEqual(manager.refresh(), [])
+
+    def test_a_running_ui_plugin_keeps_its_descriptor_on_refresh(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_path = Path(temp_dir) / "sample" / "plugin.py"
+            plugin_path.parent.mkdir()
+            plugin_path.write_text("class Plugin:\n    def __init__(self, window, log): pass\nPLUGIN_CLASS = Plugin\n",
+                                   encoding="utf-8")
+            write_manifest(plugin_path.parent)
+            manager = PluginManager(object(), plugin_root=temp_dir)
+            manager.set_enabled({"sample": True})
+            running = manager.descriptors[0]
+            write_manifest(plugin_path.parent, title="Renamed")
+            manager.refresh()
+            # Its code already runs: the change applies after a restart.
+            self.assertIs(manager.descriptors[0], running)
+
     def test_no_plugins_option_loads_none_even_when_enabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             plugin_path = Path(temp_dir) / "sample" / "plugin.py"

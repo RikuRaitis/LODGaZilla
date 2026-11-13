@@ -45,6 +45,14 @@ if args.fail:
 print("PROGRESS 1.0000", flush=True)
 """
 
+def setUpModule():
+    # Windows built here would start the real plugin update check against GitHub;
+    # these tests stay offline.
+    # A plain function, not a Mock: PySide cannot connect signals to a Mock.
+    patcher = mock.patch("src.plugins.updates.PluginUpdates.check", lambda self, sources: None)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
 
 class DemoDataHelperTests(unittest.TestCase):
     def test_parse_progress(self):

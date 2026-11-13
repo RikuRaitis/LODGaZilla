@@ -202,6 +202,20 @@ class PluginChatJobTests(unittest.TestCase):
 
 
 
+
+class PluginCommitTests(unittest.TestCase):
+    def test_commit_runs_no_git_hook_the_agent_wrote(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = plugin_builder.create_plugin_folder("hooked_importer", "CLAUDE.md", root=Path(directory))
+            hook = folder / ".git" / "hooks" / "post-commit"
+            hook.write_text("#!/bin/sh\necho ran > hook_ran.txt\n", encoding="utf-8")
+            hook.chmod(0o755)
+            (folder / "plugin.json").write_text("{}", encoding="utf-8")
+            plugin_builder.commit_changes(folder, "Add the manifest")
+            self.assertFalse((folder / "hook_ran.txt").exists())
+            log = subprocess.run(["git", "log", "--oneline"], cwd=folder, capture_output=True, text=True).stdout
+            self.assertIn("Add the manifest", log)
+
 class PluginExamplesTests(unittest.TestCase):
     """Example files in the data folder, imported with the plugin being created."""
 

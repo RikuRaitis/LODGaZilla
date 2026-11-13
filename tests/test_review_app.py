@@ -52,6 +52,14 @@ from src.jobs.import_data import log_start_from_source_filename  # noqa: E402
 from src.jobs.parallel_jobs import run_process_jobs  # noqa: E402
 from src.plugins.manager import PluginManager  # noqa: E402
 
+def setUpModule():
+    # Windows built here would start the real plugin update check against GitHub;
+    # these tests stay offline.
+    # A plain function, not a Mock: PySide cannot connect signals to a Mock.
+    patcher = mock.patch("src.plugins.updates.PluginUpdates.check", lambda self, sources: None)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
 
 def _sleeping_worker(seconds):  # type: ignore[no-untyped-def]
     """Top-level (spawn-safe) worker that ignores cooperative cancellation."""

@@ -332,7 +332,7 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
         self.legend.reposition()
-        QTimer.singleShot(0, self._update_lane_vertical_scale)
+        QTimer.singleShot(0, self, self._update_lane_vertical_scale)
 
     def plot_view_box(self):  # type: ignore[no-untyped-def]
         return self.plot_item.getViewBox()
@@ -507,8 +507,8 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.plot_item.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
         self._update_lane_vertical_scale()
         self._create_lane_axis_labels()
-        QTimer.singleShot(0, self._update_lane_vertical_scale)
-        QTimer.singleShot(0, self._update_lane_axis_labels)
+        QTimer.singleShot(0, self, self._update_lane_vertical_scale)
+        QTimer.singleShot(0, self, self._update_lane_axis_labels)
         self.plot_item.enableAutoRange(axis=pg.ViewBox.XAxis, enable=True)
         entries = self._legend_entries()
         if entries != self._shown_legend_entries or not self.legend.isVisible():
@@ -614,14 +614,8 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
 
     def _legend_entries(self) -> list[tuple[str, str, int, str | None]]:
         entries: list[tuple[str, str, int, str | None]] = []
-        for data, entry in zip(self._timeline_data, self._timeline_entries):
-            values = np.asarray(data["value"], dtype=float)
-            source_index, path, name = entry
-            display_name = series_legend_name(path, name)
-            if _looks_like_binary_state(values):
-                entries.append((display_name, self._colors[source_index], source_index, None))
-            else:
-                entries.append((display_name, self._colors[source_index], source_index, None))
+        for _data, (source_index, path, name) in zip(self._timeline_data, self._timeline_entries):
+            entries.append((series_legend_name(path, name), self._colors[source_index], source_index, None))
         return entries
 
     def _clear_items(self) -> None:

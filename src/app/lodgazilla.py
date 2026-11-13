@@ -501,7 +501,7 @@ class PlotWorkspace(QScrollArea):
         )
         self._data_drop_controller.create_requested.connect(self.create_dropped_card)
         self._data_drop_controller.create_beside_requested.connect(self.create_dropped_card_beside)
-        QTimer.singleShot(0, self._sync_content_width)
+        QTimer.singleShot(0, self, self._sync_content_width)
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
@@ -1274,18 +1274,12 @@ class PlotWorkspace(QScrollArea):
             if plot not in visible_plots:
                 plot.hide_marker_data()
         for plot in visible_plots:
-            if isinstance(plot, TWO_MARKER_CARD_TYPES):
-                # Each series gets a values box at each placed marker.
-                for index, timestamp in enumerate(timestamps):
-                    if timestamp is None:
-                        plot.hide_marker_data(index)
-                    else:
-                        plot.show_marker_data(self._marker_value_for_plot(plot, timestamp), index)
-            elif timestamps[0] is None:
-                plot.hide_marker_data()
-            else:
-                # X/Y and Map cards show values for the first marker only.
-                plot.show_marker_data(self._marker_value_for_plot(plot, timestamps[0]))
+            # Each series gets a values box at each placed marker.
+            for index, timestamp in enumerate(timestamps):
+                if timestamp is None:
+                    plot.hide_marker_data(index)
+                else:
+                    plot.show_marker_data(self._marker_value_for_plot(plot, timestamp), index)
 
     def reload_plot_settings(self) -> None:
         for plot in self.plots():
@@ -1597,7 +1591,7 @@ class PlotWorkspace(QScrollArea):
         # Axis geometry is updated on the next graphics-layout pass. Measuring
         # immediately after setWidth(None) can retain the previous plot's
         # width, leaving different X-axis start positions.
-        QTimer.singleShot(0, lambda current_axes=axes, current_plots=time_plots: self._apply_axis_width_and_notify(current_axes, current_plots))
+        QTimer.singleShot(0, self, lambda current_axes=axes, current_plots=time_plots: self._apply_axis_width_and_notify(current_axes, current_plots))
 
     def _apply_axis_width_and_notify(self, axes, time_plots) -> None:  # type: ignore[no-untyped-def]
         self._apply_common_left_axis_width(axes, time_plots)
@@ -1767,7 +1761,7 @@ class PlotWorkspace(QScrollArea):
         self._emit_plot_navigator_changed()
         scroll = int(state.get("scroll") or 0)
         # The scroll range is known once the restored rows are laid out.
-        QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(scroll))
+        QTimer.singleShot(0, self, lambda: self.verticalScrollBar().setValue(scroll))
         return problems
 
     @staticmethod
@@ -2164,7 +2158,7 @@ class LODGaZillaWindow(QMainWindow):
         self.ai_panel.sign_in_requested.connect(self.sign_in_to_ai)
         # Queued: the panel opens during startup too, and finding the CLI should not delay the window.
         self.ai_panel.expanded_changed.connect(
-            lambda expanded: expanded and QTimer.singleShot(0, self.check_ai_sign_in))
+            lambda expanded: expanded and QTimer.singleShot(0, self, self.check_ai_sign_in))
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.addWidget(self.left_splitter)
         self.main_splitter.addWidget(self.plot_area)
@@ -2230,7 +2224,7 @@ class LODGaZillaWindow(QMainWindow):
         self.plugin_manager = PluginManager(self, log=self.internal_logger.info)
         self.plugin_updates = PluginUpdates(self)
         self.plugin_updates.changed.connect(self.report_plugin_updates)
-        QTimer.singleShot(0, self.check_plugin_updates_at_startup)
+        QTimer.singleShot(0, self, self.check_plugin_updates_at_startup)
         startup_mark("plugin manager construction completed")
 
         # No menu bar: workspace files are on the Navigator's File bar, Settings and
@@ -2259,10 +2253,10 @@ class LODGaZillaWindow(QMainWindow):
         self.internal_logger.info(f"Internal log started: {internal_log_path}")
         self._log_version()
         self.plot_workspace._emit_plot_navigator_changed()
-        QTimer.singleShot(0, self.schedule_plot_navigator_alignment)
-        QTimer.singleShot(0, self.restore_splitter_position)
-        QTimer.singleShot(0, self.restore_log_panel_size)
-        QTimer.singleShot(0, lambda: self.size_ai_panel(self.ai_panel.is_expanded))
+        QTimer.singleShot(0, self, self.schedule_plot_navigator_alignment)
+        QTimer.singleShot(0, self, self.restore_splitter_position)
+        QTimer.singleShot(0, self, self.restore_log_panel_size)
+        QTimer.singleShot(0, self, lambda: self.size_ai_panel(self.ai_panel.is_expanded))
         startup_mark("LODGaZilla is ready")
 
     def schedule_settings_flush(self) -> None:
@@ -2440,9 +2434,9 @@ class LODGaZillaWindow(QMainWindow):
         )
         handle.setVisible(expanded)
         if expanded:
-            QTimer.singleShot(0, self.restore_log_panel_size)
+            QTimer.singleShot(0, self, self.restore_log_panel_size)
         else:
-            QTimer.singleShot(0, self.collapse_log_panel_to_mini_row)
+            QTimer.singleShot(0, self, self.collapse_log_panel_to_mini_row)
         self.schedule_save_log_panel_height()
 
     def schedule_save_log_panel_height(self, *_args) -> None:  # type: ignore[no-untyped-def]
@@ -2511,6 +2505,9 @@ class LODGaZillaWindow(QMainWindow):
             self.internal_logger.warning(error)
 
     def reload_plugin_settings(self) -> None:
+        # Plugins added since start (such as one made with Create plugin) can be enabled at once.
+        for plugin_id in self.plugin_manager.refresh():
+            self.internal_logger.info(f"Found new plugin: plugin/{plugin_id}")
         plugin_settings = load_settings_section(PLUGINS_SECTION, self.settings_path)
         enabled = plugin_settings.get("enabled", {}) if isinstance(plugin_settings, dict) else {}
         enabled = dict(enabled) if isinstance(enabled, dict) else {}
@@ -2579,7 +2576,7 @@ class LODGaZillaWindow(QMainWindow):
         self.ai_panel.append_note(f"Sign in to {provider.name} in the window that opened, then drop your files again.")
         # The CLI's sign-in has no completion signal here; check again after a while.
         for delay in (15_000, 45_000, 90_000):
-            QTimer.singleShot(delay, lambda name=provider.name: self.check_ai_sign_in(name))
+            QTimer.singleShot(delay, self, lambda name=provider.name: self.check_ai_sign_in(name))
 
     def start_magic_drop(self, files: list[Path], hints: str) -> None:
         """Turn files dropped on Magic drop into H5 files in a new folder of the data folder,
@@ -3483,7 +3480,7 @@ class LODGaZillaWindow(QMainWindow):
     def schedule_tree_refresh_after_completed_process(self) -> None:
         if not self.tree_refresh_pending:
             self.tree_refresh_pending = True
-            QTimer.singleShot(0, self.refresh_tree_after_completed_processes)
+            QTimer.singleShot(0, self, self.refresh_tree_after_completed_processes)
 
     def refresh_tree_after_completed_processes(self) -> None:
         self.tree_refresh_pending = False
@@ -3540,7 +3537,7 @@ class LODGaZillaWindow(QMainWindow):
             return
         if not self._splitter_save_retry_pending:
             self._splitter_save_retry_pending = True
-            QTimer.singleShot(1_000, self.retry_save_splitter_position)
+            QTimer.singleShot(1_000, self, self.retry_save_splitter_position)
 
     def retry_save_splitter_position(self) -> None:
         self._splitter_save_retry_pending = False
@@ -3740,7 +3737,7 @@ class LODGaZillaWindow(QMainWindow):
         self.ai_panel.set_expanded(bool(self.lodgazilla_settings["ai_panel_expanded"]))
         self.log_panel.set_expanded(bool(self.lodgazilla_settings["internal_log_expanded"]))
         if self.log_panel.is_expanded:
-            QTimer.singleShot(0, self.restore_log_panel_size)
+            QTimer.singleShot(0, self, self.restore_log_panel_size)
         theme = load_theme(self.settings_path)
         apply_theme(theme)
         if theme != getattr(self, "_card_theme", None):
@@ -3932,8 +3929,8 @@ def main() -> int:
         splash.finish(window)
     startup_mark("main window shown; entering Qt event loop")
     # After the window's first paint.
-    QTimer.singleShot(50, window.start_loading_cards)
-    QTimer.singleShot(500, window.offer_demo_data)
+    QTimer.singleShot(50, window, window.start_loading_cards)
+    QTimer.singleShot(500, window, window.offer_demo_data)
     return app.exec()
 
 

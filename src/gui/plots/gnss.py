@@ -386,7 +386,9 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
 
     def on_series_changed(self) -> None:
         if hasattr(self, "value_boxes"):
-            self.hide_marker_data()
+            # The boxes return on the reloaded tracks (Sample limit, trim): keep their times.
+            for marker in (FIRST_MARKER, SECOND_MARKER):
+                self.value_boxes.clear(marker)
         self._loading = True
         self.loader.request([group.axes for group in self.grouped_series.groups], self.time_range,
                             self.sample_limit)

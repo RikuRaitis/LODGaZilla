@@ -245,6 +245,22 @@ class MagicDropTests(unittest.TestCase):
         self.assertEqual(magic_drop.magic_drop_folder(self.data, [self.source]).name, "weather log_2")
         self.assertTrue(self.source.is_file())
 
+    def test_stop_ends_a_slow_parser_and_its_process(self):
+        import threading
+        import time
+        draft = magic_drop.create_draft([self.source], root=self.root / "drafts")
+        # A parser that would take a minute, as AI-written code might.
+        (draft / "importer.py").write_text(CSV_PARSER.replace(
+            "    def can_parse(self, input_path):\n",
+            "    def can_parse(self, input_path):\n        import time; time.sleep(60)\n"), encoding="utf-8")
+        cancelled = threading.Event()
+        threading.Timer(1.0, cancelled.set).start()
+        started = time.monotonic()
+        with self.assertRaises(InterruptedError):
+            magic_drop.run_trial_import(draft, self.source, self.root / "out.h5", timeout=120, cancelled=cancelled)
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertFalse((self.root / "out.h5").exists())
+
     def test_broken_parser_fails_with_its_error(self):
         draft = magic_drop.create_draft([self.source], root=self.root / "drafts")
         with self.assertRaisesRegex(RuntimeError, "NotImplementedError"):

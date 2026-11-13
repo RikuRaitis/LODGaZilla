@@ -567,7 +567,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.map_view.stop()
 
 
-def load_track_heights(height_series, gnss_times):
+def load_track_heights(height_series, gnss_times, cancelled=None):
     if height_series is None or not gnss_times:
         return [0.0] * len(gnss_times), "m"
     with h5py.File(height_series[0], "r") as h5_file:
@@ -577,7 +577,8 @@ def load_track_heights(height_series, gnss_times):
         # Only the altitude around the track's (sampled) times is read, in bounded chunks.
         try:
             heights = interpolated_values(group[time_name], group["value"],
-                                          _time_axis_metadata_from_group(h5_file, group), np.asarray(gnss_times))
+                                          _time_axis_metadata_from_group(h5_file, group), np.asarray(gnss_times),
+                                          cancelled)
         except ValueError as error:
             raise ValueError(f"Altitude series: {error}") from error
     return heights.astype(float).tolist(), unit
@@ -593,7 +594,9 @@ def load_3d_gnss_group(axes, *, time_range=None, cancelled=None, maximum_points=
         heights, unit = load_track_heights(None, track["time"])
     else:
         try:
-            heights, unit = load_track_heights((altitude.path, altitude.name), track["time"])
+            heights, unit = load_track_heights((altitude.path, altitude.name), track["time"], cancelled)
+        except InterruptedError:
+            raise  # A newer load replaced this one.
         except Exception as error:  # noqa: BLE001 - any unreadable altitude falls back to flat
             warning = str(error) or type(error).__name__
             LOG.warning("Altitude %s cannot be used for 3D GNSS track %s; drawing it flat at 0 m: %s",

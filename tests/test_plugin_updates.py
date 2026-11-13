@@ -253,3 +253,28 @@ class PluginSettingsTests(unittest.TestCase):
             self.assertFalse(controller.busy)
             self.assertEqual(len(controller.errors), 1)
             self.assertIsNone(controller.process)
+
+
+class CheckoutMoveTests(unittest.TestCase):
+    def test_a_moment_of_access_denied_is_retried(self):
+        # A virus scanner or the indexer may hold a fresh checkout's files for a moment.
+        from src.plugins.installation import _rename_with_retry
+        with tempfile.TemporaryDirectory() as directory:
+            source, target = Path(directory) / "checkout", Path(directory) / "example"
+            source.mkdir()
+            original = Path.rename
+            failures = iter([PermissionError("in use"), PermissionError("in use")])
+
+            def rename(path, destination):
+                error = next(failures, None)
+                if error is not None:
+                    raise error
+                return original(path, destination)
+
+            with mock.patch("pathlib.Path.rename", rename):
+                _rename_with_retry(source, target)
+            self.assertTrue(target.is_dir())
+            source.mkdir()
+            with mock.patch("pathlib.Path.rename", side_effect=PermissionError("locked")):
+                with self.assertRaises(PermissionError):
+                    _rename_with_retry(source, target, seconds=0.05)

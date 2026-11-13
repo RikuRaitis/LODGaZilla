@@ -89,8 +89,8 @@ class PluginChatJob(QObject):
                 self.event.emit("status", committed)
             note = ""
             if plugin_builder.plugin_ready(self.folder) and not had_manifest:
-                note = (f"plugin/{self.plugin_id} now has a plugin manifest. When it works, restart LODGaZilla "
-                        "and enable it in Settings > Plugins.")
+                note = (f"plugin/{self.plugin_id} now has a plugin manifest. When it works, enable it in "
+                        "Settings > Plugins; no restart is needed.")
             self.finished.emit(True, note, self._agent.session_id or self.session_id)
         except PluginChatCancelled:
             self.finished.emit(False, "Stopped.", self._agent.session_id or self.session_id)

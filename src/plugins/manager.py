@@ -22,12 +22,34 @@ class PluginManager:
     ) -> None:  # type: ignore[no-untyped-def]
         self.main_window = main_window
         self.log = log or (lambda _message: None)
+        self.plugin_root = Path(plugin_root)
         # --no-plugins: no plugin is discovered, so none loads; saved enable settings are kept.
         self.descriptors = [] if plugins_disabled() else discover_plugins(plugin_root, log=self.log)
         # Plugin classes are instantiated only when first enabled, so disabled
         # plugins never run their constructors (for example a USB listener).
         self.plugins: dict[str, object] = {}
         self.enabled: dict[str, bool] = {}
+
+    def refresh(self) -> list[str]:
+        """Find plugins added or changed since start, such as one made with Create plugin.
+
+        Importers and operations run in worker processes that load their code each time,
+        so a new or changed one works once it is enabled. A plugin whose UI code already
+        runs keeps its descriptor: changing that code still needs a restart. Returns the
+        IDs of plugins that are new since the last look.
+        """
+        if plugins_disabled():
+            return []
+        known = {descriptor.plugin_id: descriptor for descriptor in self.descriptors}
+        # Problems were logged when each plugin was first found; only new ones are logged here.
+        found = discover_plugins(self.plugin_root)
+        new = [descriptor for descriptor in found if descriptor.plugin_id not in known]
+        for descriptor in new:
+            if descriptor.error:
+                self.log(f"Plugin {descriptor.title} unavailable: {descriptor.error}")
+        self.descriptors = [known[descriptor.plugin_id] if descriptor.plugin_id in self.plugins else descriptor
+                            for descriptor in found]
+        return [descriptor.plugin_id for descriptor in new]
 
     def _instantiate(self, descriptor: PluginDescriptor) -> object | None:
         plugin = self.plugins.get(descriptor.plugin_id)

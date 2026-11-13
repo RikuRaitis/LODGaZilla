@@ -163,6 +163,31 @@ class AppSettingsTests(unittest.TestCase):
             ),
         )
 
+    def test_committed_settings_are_the_code_defaults(self):
+        # AGENTS.md: the committed app_settings.json uses the code defaults and never holds
+        # machine- or user-specific values (which are left out, or empty).
+        from src.app.settings import default_app_settings_data
+        committed = json.loads((ROOT / "app_settings.json").read_text(encoding="utf-8"))
+        defaults = default_app_settings_data()
+        left_out = {("default_info_metadata",), ("plugins", "enabled"), ("navigator_controls", "recent_folders"),
+                    ("lodgazilla", "recent_workspaces"), ("tree_columns",)}
+        differences = []
+
+        def compare(saved, default, path=()):
+            if path in left_out:
+                return
+            if isinstance(saved, dict) and isinstance(default, dict):
+                for key in set(saved) | set(default):
+                    if key in saved and key in default:
+                        compare(saved[key], default[key], (*path, key))
+                    elif (*path, key) not in left_out:
+                        differences.append(".".join((*path, key)))
+            elif saved != default:
+                differences.append(".".join(path))
+
+        compare(committed, defaults)
+        self.assertEqual(sorted(differences), [])
+
     def test_recent_folders_do_not_persist_elided_display_text(self):
         full_path = r"C:\Users\example1\OneDrive - ExampleCo\Desktop\LOG\SensorRecordings\Data"
         with tempfile.TemporaryDirectory() as temp_dir:

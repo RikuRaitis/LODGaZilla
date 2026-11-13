@@ -32,6 +32,14 @@ from tests.test_xyz_plot import FakeView
 
 HEIGHTS = {"line": 200, "multi": 200, "xy": 250, "xyz": 300, "event": 100, "image": 200}
 
+def setUpModule():
+    # Windows built here would start the real plugin update check against GitHub;
+    # these tests stay offline.
+    # A plain function, not a Mock: PySide cannot connect signals to a Mock.
+    patcher = mock.patch("src.plugins.updates.PluginUpdates.check", lambda self, sources: None)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
 
 def write_cache(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

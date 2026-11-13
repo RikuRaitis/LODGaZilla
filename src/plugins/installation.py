@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import tempfile
+import time
 
 from src.plugins.catalog import PLUGIN_ROOT, discover_plugins, requirement_errors, validate_manifest
 from src.plugins.repositories import Candidate, authorization, command, repository_url
@@ -178,7 +179,7 @@ def apply_pending(root: Path = PLUGIN_ROOT) -> list[str]:
                 # Make subsequent developer commits behave like a normal clone.
                 git(checkout, "checkout", "-B", candidate.branch, candidate.commit)
                 git(checkout, "branch", "--set-upstream-to", f"origin/{candidate.branch}")
-                checkout.rename(target)
+                _rename_with_retry(checkout, target)
             else:
                 check_checkout(target, candidate.url)
                 head = git(target, "rev-parse", "HEAD")
@@ -203,3 +204,18 @@ def apply_pending(root: Path = PLUGIN_ROOT) -> list[str]:
             except (OSError, ValueError, TypeError):
                 pass
     return messages
+
+
+def _rename_with_retry(source: Path, target: Path, *, seconds: float = 5.0) -> None:
+    """Move a fresh checkout into place. On Windows a virus scanner or the search indexer
+    may hold its new files for a moment ("Access is denied"), so try again briefly
+    rather than postponing the installation to the next start."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            source.rename(target)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)

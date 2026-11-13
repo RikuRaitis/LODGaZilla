@@ -421,6 +421,11 @@ class Hdf5TimeDatasetTests(unittest.TestCase):
                 for name, values in (("Car/Speed (km/h)", [1.0, 2.0]), ("Car/Speed [km/h]", [3.0, 4.0])):
                     np.testing.assert_array_equal(_series_group_for_navigator_name(h5_file, name)["value"], values)
 
+    def test_complex_values_are_refused_not_silently_truncated(self):
+        from src.jobs.import_data import _normalise_series
+        with self.assertRaisesRegex(ValueError, "complex"):
+            _normalise_series({"name": "iq", "time": [0.0, 1.0], "values": [1 + 2j, 3 - 1j]})
+
     def test_time_said_to_be_sorted_is_checked(self):
         from src.jobs.import_data import _normalise_series
         # A clock reset in a series the parser called sorted.

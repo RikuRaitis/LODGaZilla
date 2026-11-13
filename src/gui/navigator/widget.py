@@ -257,9 +257,9 @@ class CopyableTreeWidget(QTreeWidget):
             self.navigator.restore_horizontal_scroll_position(self._horizontal_scroll_position_on_press)
         generation = self._scroll_lock_generation
         QTimer.singleShot(
-            0,
+            0, self,
             lambda: QTimer.singleShot(
-                0,
+                0, self,
                 lambda: self._release_horizontal_scroll_lock(generation),
             ),
         )
@@ -285,7 +285,7 @@ class CopyableTreeWidget(QTreeWidget):
                 if self._horizontal_scroll_position_on_press is not None:
                     self.horizontalScrollBar().setValue(self._horizontal_scroll_position_on_press)
                 generation = self._scroll_lock_generation
-                QTimer.singleShot(0, lambda: self._release_horizontal_scroll_lock(generation))
+                QTimer.singleShot(0, self, lambda: self._release_horizontal_scroll_lock(generation))
                 event.accept()
                 return
         super().mouseDoubleClickEvent(event)
@@ -1521,7 +1521,7 @@ class DataNavigatorWidget(QWidget):
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         super().resizeEvent(event)
-        QTimer.singleShot(0, self.update_physical_value_column_width)
+        QTimer.singleShot(0, self, self.update_physical_value_column_width)
 
     def resize_data_column_if_unsized(self) -> None:
         if COLUMN_DATA in self.column_settings.shared_widths:
@@ -2083,9 +2083,9 @@ class DataNavigatorWidget(QWidget):
     def restore_horizontal_scroll_position(self, position: int) -> None:
         scrollbar = self.tree.horizontalScrollBar()
         QTimer.singleShot(
-            0,
+            0, self,
             lambda: QTimer.singleShot(
-                0,
+                0, self,
                 lambda: scrollbar.setValue(min(position, scrollbar.maximum())),
             ),
         )
@@ -2955,7 +2955,7 @@ class DataNavigatorWidget(QWidget):
                 self.set_item_values(item, values)
             if self.folder_sort_direction:
                 # Let the delegate finish committing before moving its row.
-                QTimer.singleShot(0, self.apply_folder_sort)
+                QTimer.singleShot(0, self, self.apply_folder_sort)
             return
 
     def update_info_subtree_values(self, folder: Path, info: FolderInfoData | None = None) -> None:
@@ -3001,7 +3001,7 @@ class DataNavigatorWidget(QWidget):
                 # QTreeWidget toggles expansion after emitting itemDoubleClicked.
                 # Queue this so activation consistently leaves cached folders
                 # expanded instead of also starting a destructive rebuild.
-                QTimer.singleShot(0, lambda: item.setExpanded(True))
+                QTimer.singleShot(0, self, lambda: item.setExpanded(True))
             # Otherwise, such as a parent folder, the double-click only expands or collapses it.
             return
         if item_type == ROW_TYPE_GROUP:

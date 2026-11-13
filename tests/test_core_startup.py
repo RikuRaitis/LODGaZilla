@@ -17,6 +17,14 @@ from src.gui.about_dialog import AboutDialog
 from src.plugins.manager import PluginManager
 from tests.qt_wait import qt_wait_until
 
+def setUpModule():
+    # Windows built here would start the real plugin update check against GitHub;
+    # these tests stay offline.
+    # A plain function, not a Mock: PySide cannot connect signals to a Mock.
+    patcher = mock.patch("src.plugins.updates.PluginUpdates.check", lambda self, sources: None)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
 
 class CoreStartupTests(unittest.TestCase):
     @classmethod
@@ -138,7 +146,9 @@ class CoreStartupTests(unittest.TestCase):
             settings.write_text(json.dumps({"plugins": {"sources": ["https://github.com/owner"],
                                                        "check_at_startup": False, "enabled": {}}}))
             manager = mock.Mock(descriptors=[SimpleNamespace(plugin_id="new_plugin")])
-            window = SimpleNamespace(settings_path=settings, plugin_manager=manager, plugin_updates=mock.Mock())
+            manager.refresh.return_value = []
+            window = SimpleNamespace(settings_path=settings, plugin_manager=manager, plugin_updates=mock.Mock(),
+                                     internal_logger=mock.Mock())
             LODGaZillaWindow.reload_plugin_settings(window)
             saved = json.loads(settings.read_text())["plugins"]
             self.assertEqual(saved["sources"], ["https://github.com/owner"])

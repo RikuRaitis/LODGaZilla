@@ -291,7 +291,15 @@ class VisibleWindowTests(_QtTestCase):
         self.assertEqual(widget._current_data.x[0], LOG_START + 99)
         self.assertIsNotNone(widget.additional_series[0].data)
 
-        path.unlink()
+        def removed():
+            # The loader thread may still be closing the file after delivering its data.
+            try:
+                path.unlink(missing_ok=True)
+            except PermissionError:
+                return False
+            return True
+
+        self.wait_for(removed)
         widget.plot_item.getViewBox().setXRange(LOG_START + 200, LOG_START + 210, padding=0)
         widget._view_update_timer.timeout.emit()
         self.wait_for(lambda: any("Could not load" in status for status in statuses))
