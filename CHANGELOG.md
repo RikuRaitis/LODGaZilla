@@ -6,6 +6,14 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- The AI consent question and the README now say plainly what the AI can do on your
+  computer: on Windows, the Python Claude runs can read your files and reach the internet;
+  Codex's commands cannot reach the internet. Codex is recommended for files from others.
+- Claude may use Git only to look (status, diff, log, show), and its file tools can no
+  longer read known credential folders such as `.ssh` or Git and cloud sign-ins.
+
 ### Added
 
 - A plugin added while LODGaZilla runs, such as one made with Create plugin, can be enabled

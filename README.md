@@ -489,13 +489,25 @@ allowed to share them. The answers, whether each tool may read web pages, the co
 limit (Claude only, default $2 per drop or question) and the time limit (15 minutes)
 are in **Settings > General > AI**.
 
-Claude may only read the dropped files, write in its own working folder, run Python
-and read web pages, such as the format's specification; everything else is denied.
-Codex runs in its sandbox: it can write only in its working folder, the new data
-folder and the temporary folder, and can search the web but its commands have no
-network access; it's told to run only Python. Either way, the parser runs on your
-computer, in a separate process with a time limit. Web access can be switched off
-for each tool in Settings.
+#### What the AI can do on your computer
+
+Both tools run Python on your computer with your permissions, to inspect the file and
+test the parser they write. The parser then runs in a separate process with a time
+limit, which **Stop** ends.
+
+- **Claude** may use only its file tools, Python and (when allowed) web pages; any other
+  tool or command is denied, and its file tools can't open known credential folders such
+  as `.ssh` or the Git and cloud sign-in folders. But on Windows Claude Code has no
+  sandbox, so **the Python it runs can read any file you can and reach the internet**.
+- **Codex** runs its commands in its sandbox: they can write only in its working folder,
+  the new data folder and the temporary folder, and have **no internet access**. They can
+  still read your files. Its own web search reads pages when allowed.
+
+A dropped file can contain text written to steer the AI (a "prompt injection"), for
+example asking it to read and send out your files. Drop only files you trust; for files
+from others, Codex is the safer choice, since its commands can't send anything out. The
+Git hosting tokens of your environment are never passed to either tool or to the code it
+writes. Web access can be switched off for each tool in Settings.
 
 ### Create plugin
 
@@ -519,8 +531,9 @@ is one), and press Enter.
    plugin that needs new Python packages asks for one, to install them.
 
 Your files go to the plugin's `.lodgazilla_ai` folder, which is never committed, as
-are the AI's instructions. The AI may write only in the plugin's folder and run
-Python and Git there.
+are the AI's instructions. Claude may write only in the plugin's folder, run Python and
+use Git only to look (status, diff, log, show); LODGaZilla makes the commits, with Git
+hooks off. What the AI can do on your computer is the same as for Magic drop (above).
 
 ## Plugins
 

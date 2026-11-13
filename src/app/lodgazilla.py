@@ -2618,7 +2618,9 @@ class LODGaZillaWindow(QMainWindow):
         answer = QMessageBox.question(
             self, "AI Integration",
             f"Magic drop and Create plugin send the files you drop here, and your questions, to {name} "
-            f"({vendor}). {name} may read the whole files.{web}\n\nDo not drop files with personal data, "
+            f"({vendor}). {name} may read the whole files.{web}\n\n{provider.confinement} "
+            "A dropped file can contain instructions aimed at the AI, so drop only files you trust; "
+            "for files from others, Codex is the safer choice.\n\nDo not drop files with personal data, "
             "such as location or heart rate of real people, unless you are allowed to share them.\n\n"
             f"Allow sending dropped files to {name}? You can withdraw this in Settings.")
         if answer != QMessageBox.StandardButton.Yes:

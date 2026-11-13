@@ -23,9 +23,20 @@ VSCODE_EXTENSIONS = Path.home() / ".vscode" / "extensions"
 # writing only in its working folder (the draft). Python runs its inspection and the
 # trial import; on Windows the CLI's shell tool is PowerShell, elsewhere Bash. Every
 # other tool and command is denied, because a -p run cannot ask.
+#
+# These limit Claude's own tools only. On native Windows Claude Code has no sandbox, so the
+# Python it runs can read any file the user can and reach the network (see README, "What
+# the AI can do"). Codex runs its commands in its sandbox instead (codex_cli.py).
 MAGIC_DROP_TOOLS = ("Read", "Glob", "Grep", "Write(./**)", "Edit(./**)", "Bash(python:*)", "PowerShell(python:*)")
-# Create plugin also runs Git in the plugin's own repository.
-PLUGIN_TOOLS = MAGIC_DROP_TOOLS + ("Bash(git:*)", "PowerShell(git:*)")
+# Create plugin also looks at the plugin's Git history; LODGaZilla itself commits.
+PLUGIN_TOOLS = MAGIC_DROP_TOOLS + tuple(f"{shell}(git {command}:*)" for shell in ("Bash", "PowerShell")
+                                        for command in ("status", "diff", "log", "show"))
+# Credentials Claude's file tools may never read. Python can still reach them; this stops
+# the easy route, a prompt-injected "read this file". Deny rules win over allow rules.
+SECRET_PATHS = ("~/.ssh/**", "~/.aws/**", "~/.azure/**", "~/.config/gh/**", "~/.git-credentials",
+                "~/.docker/**", "~/.kube/**", "~/.claude/**", "~/.claude.json", "~/.codex/**",
+                "~/AppData/Roaming/GitHub CLI/**", "~/AppData/Roaming/gcloud/**", "~/.netrc", "~/_netrc")
+DENIED_TOOLS = tuple(f"Read({path})" for path in SECRET_PATHS)
 # Reading web pages, such as file format specifications; allowed unless switched off in Settings.
 WEB_TOOLS = ("WebFetch", "WebSearch")
 
@@ -67,7 +78,8 @@ def agent_command(executable: Path, folders: list[Path], *, tools: tuple[str, ..
     command = [str(executable), "-p", "--output-format", "stream-json", "--verbose",
                # dontAsk: a tool that is not allowed below is denied, never asked about.
                "--permission-mode", "dontAsk", "--strict-mcp-config",
-               "--max-budget-usd", f"{max_budget_usd:g}", "--allowedTools", *tools, *(WEB_TOOLS if web else ())]
+               "--max-budget-usd", f"{max_budget_usd:g}", "--allowedTools", *tools, *(WEB_TOOLS if web else ()),
+               "--disallowedTools", *DENIED_TOOLS]
     if resume:
         command += ["--resume", resume]
     for folder in folders:

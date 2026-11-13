@@ -16,71 +16,18 @@ the fix; afterwards five full runs completed without a crash.
 
 The code is in good shape for a beta. The host/plugin boundary is clean, H5 writes are
 atomic, and the shared marker code, bounded loaders and diagnostic areas from the first
-review hold up. The main risk now is the AI agent's permissions.
+review hold up. The AI agent's permissions are now documented as they are, and accepted
+(see Accepted design decisions).
 
 **Fix as soon as possible**, in this order:
 
-1. **AI agent permissions are broader than documented** (security; see AI integration).
-   Tokens are withheld from the agent and now also from the code it writes; the tool
-   allow-list still lets Python and Git do anything.
-2. **A series whose importer key is not `group/name` can't be plotted, or plots another
+1. **A series whose importer key is not `group/name` can't be plotted, or plots another
    series** (see Data). This is a silent wrong result, and Magic drop's agent can produce
    such files.
-3. **Plot navigator trims are not saved in workspaces** (see Plot cards), which breaks
+2. **Plot navigator trims are not saved in workspaces** (see Plot cards), which breaks
    "workspaces reopen exactly as saved".
 
-## Lines of code
-
-Non-blank, non-comment lines; whole files in brackets.
-
-| Component | Files | Code lines (all lines) |
-| --- | ---: | ---: |
-| `src/gui/plots` (cards) | 42 | 12,336 (14,390) |
-| `src/gui` (Navigator, AI panel, settings) | 10 | 4,837 (5,510) |
-| `src/app` (main window, settings, startup) | 11 | 4,675 (5,465) |
-| `src/jobs` (H5 writer, imports, Magic drop, Create plugin) | 19 | 2,820 (3,376) |
-| `src/data` (H5 reading, workspaces, folder info) | 15 | 1,908 (2,353) |
-| `src/plugins` (discovery, install, updates) | 8 | 875 (1,018) |
-| `src/ai` (Claude, Codex, Magic drop, plugin builder) | 8 | 714 (901) |
-| `src/contracts` (public plugin API) | 7 | 75 (91) |
-| `src/version.py`, `src/__init__.py` | 2 | 37 (47) |
-| **App total** | **122** | **28,277 (33,151)** |
-| `tests` | 67 | 14,575 (16,808) |
-| `tools` (setup, test runner, demo data, screenshots) | 13 | 2,463 (2,897) |
-| Public plugins (gpx, picoscope, pyubx2) | 15 | 1,297 (1,540) |
-
-Counted before tonight's fixes, which change the totals by a few dozen lines. The private
-plugins are counted in `Code_review_plugin.md`.
-
 ## Fixed in this review
-
-| What | Where |
-| --- | --- |
-| **The full-suite heap crash** (0xc0000374, access violations in shiboken6). 31 deferred calls, `QTimer.singleShot(delay, callable)`, had no context object, so they still ran after their widget was deleted (first caught: a floating legend's `reposition`). The call raised "Internal C++ object already deleted" inside Qt's event handling, and PySide 6.11 corrupts the heap while reporting that error. Found with full page heap and `cdb`: every page-heap run crashed in `test_filmstrip.py` before the fix; afterwards five full page-heap runs completed without a crash. Every timer now names its owner; `tests/test_timer_context.py` keeps it so. | `src/` (31 calls), `tests/test_timer_context.py`, AGENTS.md |
-| A plugin installation was postponed to the next start when a virus scanner or the indexer briefly held the fresh checkout ("Access is denied"); the move is retried for a few seconds. | `src/plugins/installation.py` |
-| The AI-written importer in Magic drop's and Create plugin's trial import ran with the GitHub and Bitbucket tokens, which the agent itself doesn't get. It now gets the agent's environment. | `src/ai/magic_drop.py` `run_trial_import` |
-| Create plugin's commit after each answer ran Git hooks, which the agent can write into the plugin's `.git`; hooks are now disabled for it, as for plugin installs. | `src/ai/plugin_builder.py` `commit_changes` |
-| The committed `app_settings.json` differed from the code defaults in 8 values (dark theme, uncompressed H5 caches, other LOD settings, diagnostics off). It now matches; a test compares the whole file. | `app_settings.json`, `tests/test_app_settings.py` |
-| Double-clicking a parent folder (such as a year folder) still started H5 generation: the `_info.json.lock` file counted as data. | `src/data/navigator_data.py` `folder_needs_h5_generation` |
-| Complex values were written with only their real part; they are now refused with a clear message. `H5_Format.md` no longer says the writer trusts `time_sorted`. | `src/jobs/import_data.py`, `docs/H5_Format.md` |
-| Plugin problems were logged again at every look for new plugins (twice at start, again at each Settings Apply). | `src/plugins/manager.py` `refresh` |
-| Four test modules built main windows that started the real plugin update check against GitHub (slow, network-dependent, and could use up the GitHub API limit). | `test_core_startup`, `test_workspace_file`, `test_demo_data_app`, `test_review_app` |
-| `tools/run_tests.py` wrote every run's app logs to one shared folder (rotation failures, mixed logs) and left its host copy behind when interrupted. | `tools/run_tests.py` |
-| A `pip check` conflict between unrelated packages in the same Python stopped LODGaZilla from starting; it is now a warning, and LODGaZilla's own requirements are still checked strictly. | `tools/setup_environment.py` |
-| The Map card's values boxes did not come back after a Sample limit change or trim. | `src/gui/plots/gnss.py` |
-| The 3D plot went blank while reloading for a Sample limit or trim; it now keeps its traces until the new ones arrive, as X/Y does. | `src/gui/plots/xyz.py` |
-| Dragging the lane names of an Event/state card moved the lanes, although the card has no Y zoom; that drag is now off where Y zoom is off. | `src/gui/plots/interactive.py` |
-| The 3D Map's altitude read ignored cancellation, so a replaced load still read the whole altitude range. | `src/gui/plots/gnss_3d.py` |
-| Every right-click on a Plot navigator bar or a legend row left one more menu alive. | `src/gui/plots/navigator.py`, `src/gui/plots/legend.py` |
-| Dead code: `nearest_sample_indices`, two identical branches in the Event/state legend (and their extra sort per reload), two unreachable branches in `refresh_marker_info_boxes`. | `src/data/xyz.py`, `src/gui/plots/event_state.py`, `src/app/lodgazilla.py` |
-| Stop and Close did not stop the AI-written parser in Magic drop and Create plugin's example import: it ran outside the process tree, up to 10 minutes per file, and kept running after the window closed. It now runs with `popen_in_tree`, and Stop, Close or the timeout end it and everything it started. | `src/ai/magic_drop.py` `run_trial_import`, `src/jobs/plugin_examples.py` |
-| Two tests failed only under page heap's slowness: a 2-second wait, and a test deleting a file its loader thread was still closing. | `tests/test_audio_media.py`, `tests/test_review_plots.py` |
-
-Also new since the first review, as you asked: a plugin added while LODGaZilla runs (such
-as one made with Create plugin) can be enabled at once in Settings > Plugins.
-
-Not done: about 99 old `%TEMP%\lodgazilla-tests-*` folders from earlier test runs (about
-2 GB) are still left for you to delete.
 
 ## Open findings
 
@@ -88,14 +35,6 @@ Priority: **P1** fix as soon as possible, **P2** soon, **P3** when convenient.
 
 ### AI integration
 
-- **P1 — Agent permissions broader than documented.** `Bash(python:*)` lets the agent run
-  any Python, which can read or write anywhere and reach the network even with web access
-  off; Read/Glob/Grep are unrestricted; `PLUGIN_TOOLS` allows any Git command though the
-  instructions say "Git to look". A dropped file with prompt-injection text could make the
-  agent read `~/.ssh` or CLI credentials and send them out. Options: restrict Git to
-  `git status`/`diff`/`log`, run the trial import as a fixed command instead of free
-  Python, and document the real confinement in AGENTS.md and the consent text
-  (`src/ai/claude_cli.py:26-28`).
 - **P2 — Create plugin copies the attached files on the GUI thread**
   (`lodgazilla.py` `_copy_plugin_examples` → `plugin_builder._copy_numbered`), comparing
   identical files byte by byte. Attaching a multi-GB log freezes the window.
@@ -184,6 +123,18 @@ Priority: **P1** fix as soon as possible, **P2** soon, **P3** when convenient.
 
 ## Accepted design decisions
 
+**AI agent permissions (was P1).** The agents must run Python to inspect unknown formats
+and test their parsers, so Python stays allowed. On native Windows Claude Code has no
+sandbox: that Python can read any file the user can and reach the network, and no tool
+rule stops it. Codex's Windows sandbox keeps its commands off the network and writing
+only in their folders, but they can read widely. Narrowed on 2026-11-13: Claude may use
+Git only to look (`status`, `diff`, `log`, `show`); its file tools may not read known
+credential folders (`DENIED_TOOLS`); the Git hosting tokens are withheld from the agents
+and the code they write; LODGaZilla's commits run no hooks. The README ("What the AI can
+do on your computer"), AGENTS.md and the consent question state the remaining risk, a
+prompt-injected file reading and sending out the user's files, and recommend Codex for
+files from others. Closing it fully would mean running Claude in WSL2 with its sandbox.
+
 **Claude C9, series metadata reads:** When a series is assigned, Line, Multi-series and Sample interval cards still read its time axis metadata and its sample-loss and clipping ranges on the GUI thread (`SeriesPlotWidget._set_primary_series()`). These are small attribute and range reads. Linked time axes and the time axis format use the metadata as soon as a card is created, so loading it later would spread waiting states to that code for little gain.
 
 ## Test run
@@ -202,3 +153,26 @@ memory error stops the program where it happens):
   offline window modules) pass on their own.
 - pyflakes: only the deliberate re-exports remain (`src/contracts/jobs.py`,
   `branding.version_text`, `claude_cli.agent_environment`). vulture is not installed.
+
+## Lines of code
+
+Non-blank, non-comment lines; whole files in brackets.
+
+| Component | Files | Code lines (all lines) |
+| --- | ---: | ---: |
+| `src/gui/plots` (cards) | 42 | 12,336 (14,390) |
+| `src/gui` (Navigator, AI panel, settings) | 10 | 4,837 (5,510) |
+| `src/app` (main window, settings, startup) | 11 | 4,675 (5,465) |
+| `src/jobs` (H5 writer, imports, Magic drop, Create plugin) | 19 | 2,820 (3,376) |
+| `src/data` (H5 reading, workspaces, folder info) | 15 | 1,908 (2,353) |
+| `src/plugins` (discovery, install, updates) | 8 | 875 (1,018) |
+| `src/ai` (Claude, Codex, Magic drop, plugin builder) | 8 | 714 (901) |
+| `src/contracts` (public plugin API) | 7 | 75 (91) |
+| `src/version.py`, `src/__init__.py` | 2 | 37 (47) |
+| **App total** | **122** | **28,277 (33,151)** |
+| `tests` | 67 | 14,575 (16,808) |
+| `tools` (setup, test runner, demo data, screenshots) | 13 | 2,463 (2,897) |
+| Public plugins (gpx, picoscope, pyubx2) | 15 | 1,297 (1,540) |
+
+Counted before tonight's fixes, which change the totals by a few dozen lines. The private
+plugins are counted in `Code_review_plugin.md`.

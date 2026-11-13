@@ -94,13 +94,18 @@ class AgentCommandTests(unittest.TestCase):
     def test_claude_runs_git_reads_the_web_when_allowed_and_resumes(self):
         command = claude_cli.plugin_command(Path("claude"), [Path("host")], max_budget_usd=1.0, web=True,
                                             resume="s1")
-        self.assertIn("Bash(git:*)", command)
+        # Git only to look: LODGaZilla commits, and push, config or reset are not allowed.
+        self.assertIn("Bash(git log:*)", command)
+        self.assertNotIn("Bash(git:*)", command)
+        # Claude's file tools never read credentials.
+        denied = command[command.index("--disallowedTools") + 1:]
+        self.assertIn("Read(~/.ssh/**)", denied)
         self.assertIn("WebFetch", command)
         self.assertEqual(command[command.index("--resume") + 1], "s1")
         self.assertEqual(command[command.index("--add-dir") + 1], "host")
         plain = claude_cli.magic_drop_command(Path("claude"), [], max_budget_usd=1.0)
         self.assertNotIn("WebFetch", plain)
-        self.assertNotIn("Bash(git:*)", plain)
+        self.assertNotIn("Bash(git log:*)", plain)
         self.assertNotIn("--resume", plain)
 
     def test_codex_searches_the_web_only_when_allowed_and_resumes_its_session(self):
