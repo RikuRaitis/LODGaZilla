@@ -19,6 +19,9 @@ from src.ai import magic_drop
 from src.ai.providers import CLAUDE, AgentProvider
 from src.jobs.agent_run import AgentRun
 
+# A trial import's error for a file the parser does not accept (``select_importer``).
+REJECTED = "No configured importer accepts"
+
 
 class MagicDropCancelled(Exception):
     pass
@@ -77,15 +80,30 @@ class MagicDropJob(QObject):
                                                  installed_importers=self.installed_importers,
                                                  instructions_file=self.provider.instructions_file)
             self._run_agent(copies)
+            imported, rejected = 0, []
             for copy in copies:
                 self._check_cancelled()
                 self.event.emit("status", f"Importing {copy.name}…")
-                summary = magic_drop.run_trial_import(self.draft, copy, copy.with_suffix(".h5"),
-                                                      timeout=self.trial_timeout_seconds, cancelled=self._cancelled)
+                try:
+                    summary = magic_drop.run_trial_import(self.draft, copy, copy.with_suffix(".h5"),
+                                                          timeout=self.trial_timeout_seconds,
+                                                          cancelled=self._cancelled)
+                except RuntimeError as error:
+                    # A file the parser does not accept, such as the format's description
+                    # dropped with the data, stays as it is; any other failure ends the drop.
+                    if REJECTED not in str(error):
+                        raise
+                    rejected.append((copy, error))
+                    continue
+                imported += 1
                 self.event.emit("result", f"{copy.with_suffix('.h5').name}\n{magic_drop.summary_text(summary)}")
+            if not imported:
+                raise rejected[0][1]
+            for copy, _error in rejected:
+                self.event.emit("status", f"{copy.name}: not imported; the parser does not read it.")
             metadata = magic_drop.read_metadata(self.draft)
             magic_drop.write_folder_info(self.folder, metadata, self.draft)
-            self.finished.emit(True, f"Created {self.folder.name} with {len(copies)} H5 file(s).", self.folder)
+            self.finished.emit(True, f"Created {self.folder.name} with {imported} H5 file(s).", self.folder)
         except MagicDropCancelled:
             self._remove_folder()
             self.finished.emit(False, "Magic drop stopped.", None)

@@ -1,0 +1,231 @@
+{
+  "about": "Live AI test cases for tools/run_ai_tests.py; true contents from tools/create_ai_demodata.py. A series check passes when some series' name matches 'match' (a regular expression on the lower-case name, other characters as spaces), its sample count is within 'samples' and its min and max fall inside one of 'ranges' (one per accepted unit). 'start' lists accepted UTC start prefixes, 'duration' the time span in seconds, 'metadata' text that must appear in the folder info or the H5 attributes.",
+  "cases": [
+    {
+      "id": "csv_weather_fi",
+      "data": ["csv/weather_station_fi.csv"],
+      "start": ["2026-05-14T07:00", "2026-05-14T10:00"],
+      "duration": [603000, 605400],
+      "checks": [
+        {"label": "temperature", "match": "temp|lämpö|lampo", "samples": [1008, 1008], "ranges": [[-5, 30], [268, 303]]},
+        {"label": "air pressure", "match": "press|paine|baro", "samples": [1008, 1008], "ranges": [[990, 1035], [99000, 103500], [99, 103.5]]},
+        {"label": "humidity", "match": "humid|kosteus|\\brh\\b", "samples": [1008, 1008], "ranges": [[0, 100], [0, 1]]},
+        {"label": "wind", "match": "wind|tuuli", "samples": [1008, 1008], "ranges": [[0, 15], [0, 54]]}
+      ]
+    },
+    {
+      "id": "csv_bike_power",
+      "data": ["csv/bike_ride_power.csv"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [5390, 5405],
+      "metadata": ["VL-0042-77"],
+      "checks": [
+        {"label": "power", "match": "power|watt", "samples": [5330, 5346], "ranges": [[0, 500]]},
+        {"label": "cadence", "match": "cad", "samples": [5330, 5346], "ranges": [[0, 130]]},
+        {"label": "heart rate", "match": "heart|\\bhr\\b|pulse", "samples": [5330, 5346], "ranges": [[60, 220]]},
+        {"label": "speed", "match": "speed|velocity", "samples": [5330, 5346], "ranges": [[15, 45], [4, 12.5]]}
+      ]
+    },
+    {
+      "id": "csv_imu_short",
+      "data": ["csv/imu_200hz_short.csv"],
+      "duration": [59.9, 60.1],
+      "checks": [
+        {"label": "six 200 Hz series", "samples": [12000, 12000], "at_least": 6},
+        {"label": "vertical acceleration", "match": "z", "samples": [12000, 12000], "ranges": [[0.5, 2.1], [4.9, 20.6]]}
+      ]
+    },
+    {
+      "id": "json_run_session",
+      "data": ["json/run_session.json"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [2690, 2705],
+      "metadata": ["TP5-118-2093"],
+      "checks": [
+        {"label": "heart rate", "match": "heart|\\bhr\\b|pulse", "samples": [2700, 2700], "ranges": [[60, 220]]},
+        {"label": "speed", "match": "speed|velocity", "samples": [2700, 2700], "ranges": [[1.5, 4.5], [5, 17]]},
+        {"label": "altitude", "match": "\\balt|\\bele", "samples": [2700, 2700], "ranges": [[80, 140]]},
+        {"label": "latitude", "match": "\\blat", "samples": [2700, 2700], "ranges": [[61.47, 61.53]]},
+        {"label": "longitude", "match": "\\blon|\\blng", "samples": [2700, 2700], "ranges": [[23.75, 23.83]]}
+      ]
+    },
+    {
+      "id": "jsonl_home_sensors",
+      "data": ["json/home_sensors.jsonl"],
+      "start": ["2026-05-14T07:3"],
+      "duration": [80000, 120000],
+      "checks": [
+        {"label": "temperature", "match": "temp", "samples": [1300, 1700], "ranges": [[18, 24]]},
+        {"label": "battery", "match": "batt|hub|volt", "samples": [60, 200], "ranges": [[2.9, 3.01], [2900, 3010]]},
+        {"label": "door state", "match": "door", "samples": [150, 350]},
+        {"label": "motion events", "match": "motion", "samples": [450, 800]}
+      ]
+    },
+    {
+      "id": "yaml_dive_log",
+      "data": ["yaml/dive_log.yaml"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [2750, 2765],
+      "metadata": ["0007-3321"],
+      "checks": [
+        {"label": "depth", "match": "depth", "samples": [1380, 1380], "ranges": [[0, 27.5], [-27.5, 0], [0, 91]]},
+        {"label": "water temperature", "match": "temp", "samples": [1380, 1380], "ranges": [[8.5, 17], [281, 290]]}
+      ]
+    },
+    {
+      "id": "txt_fixed_width",
+      "data": ["txt/logger_fixed_width.txt"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [21590, 21600],
+      "metadata": ["004211"],
+      "checks": [
+        {"label": "CH1 voltage", "match": "ch ?1|volt", "samples": [4317, 4320], "ranges": [[12.0, 12.7]]},
+        {"label": "CH2 current", "match": "ch ?2|curr", "samples": [4320, 4320], "ranges": [[300, 600], [0.3, 0.6]]},
+        {"label": "CH3 temperature", "match": "ch ?3|temp", "samples": [4320, 4320], "ranges": [[24, 36]]},
+        {"label": "CH4 state", "match": "ch ?4|state", "samples": [4320, 4320], "ranges": [[0, 1]]}
+      ]
+    },
+    {
+      "id": "txt_serial_console",
+      "data": ["txt/serial_console.log"],
+      "duration": [2390, 2400],
+      "checks": [
+        {"label": "heart rate", "match": "heart|\\bhr\\b|pulse", "samples": [2400, 2400], "ranges": [[60, 130]]},
+        {"label": "RR interval", "match": "\\brr\\b|interval|ibi", "samples": [2400, 2400], "ranges": [[450, 900], [0.45, 0.9]]},
+        {"label": "battery", "match": "batt|volt", "samples": [240, 240], "ranges": [[3.9, 4.13], [3900, 4130]]},
+        {"label": "temperature", "match": "temp", "samples": [240, 240], "ranges": [[30, 32]]}
+      ]
+    },
+    {
+      "id": "gpx_trail_run",
+      "data": ["gpx/trail_run.gpx"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [3590, 3605],
+      "checks": [
+        {"label": "latitude", "match": "\\blat", "samples": [3600, 3600], "ranges": [[61.47, 61.53]]},
+        {"label": "longitude", "match": "\\blon|\\blng", "samples": [3600, 3600], "ranges": [[23.75, 23.84]]},
+        {"label": "elevation", "match": "\\bele|\\balt", "samples": [3600, 3600], "ranges": [[80, 140]]},
+        {"label": "heart rate", "match": "heart|\\bhr\\b|pulse", "samples": [3600, 3600], "ranges": [[60, 220]]},
+        {"label": "cadence", "match": "cad", "samples": [3600, 3600], "ranges": [[60, 100], [120, 200]]}
+      ]
+    },
+    {
+      "id": "nmea_gnss",
+      "data": ["nmea/gnss_receiver.nmea"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [1190, 1205],
+      "checks": [
+        {"label": "latitude", "match": "\\blat", "samples": [1200, 1200], "ranges": [[61.47, 61.53]]},
+        {"label": "longitude", "match": "\\blon|\\blng", "samples": [1200, 1200], "ranges": [[23.75, 23.84]]},
+        {"label": "altitude", "match": "\\balt|\\bele", "samples": [1200, 1200], "ranges": [[80, 140]]},
+        {"label": "speed", "match": "speed|sog|velocity", "samples": [1200, 1200], "ranges": [[3, 8], [1.5, 4.2], [5.4, 15]]},
+        {"label": "satellites", "match": "sat", "samples": [1200, 1200], "ranges": [[6, 12]]}
+      ]
+    },
+    {
+      "id": "binary_c_header",
+      "data": ["binary/c_header/motion_logger.lgr"],
+      "spec": ["binary/c_header/logger_format.h"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [599, 601],
+      "metadata": ["MX-20-118842"],
+      "checks": [
+        {"label": "five or more 50 Hz series", "samples": [30000, 30000], "at_least": 5},
+        {"label": "acceleration z", "match": "z", "samples": [30000, 30000], "ranges": [[800, 1500], [0.8, 1.5], [7.8, 14.8]]},
+        {"label": "temperature", "match": "temp", "samples": [30000, 30000], "ranges": [[21.9, 24.6]]},
+        {"label": "air pressure", "match": "press|baro", "samples": [30000, 30000], "ranges": [[100700, 100810], [1007, 1008.2], [100.7, 100.82]]}
+      ]
+    },
+    {
+      "id": "binary_markdown_spec",
+      "data": ["binary/markdown_spec/chest_strap.tlv"],
+      "spec": ["binary/markdown_spec/tlv_protocol.md"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [1795, 1801],
+      "checks": [
+        {"label": "heart rate, 9 damaged frames skipped", "match": "heart|\\bhr\\b|bpm", "samples": [1791, 1791], "ranges": [[60, 220]]},
+        {"label": "latitude", "match": "\\blat", "samples": [1800, 1800], "ranges": [[61.47, 61.53]]},
+        {"label": "longitude", "match": "\\blon|\\blng", "samples": [1800, 1800], "ranges": [[23.75, 23.84]]},
+        {"label": "altitude", "match": "\\balt|\\bele", "samples": [1800, 1800], "ranges": [[80, 140]]},
+        {"label": "battery", "match": "batt|volt", "samples": [60, 60], "ranges": [[3600, 4100], [3.6, 4.1]]}
+      ]
+    },
+    {
+      "id": "binary_python_spec",
+      "data": ["binary/python_spec/weather_mast.dat"],
+      "spec": ["binary/python_spec/baro_format.py"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [2700, 2706],
+      "metadata": ["Mast 3"],
+      "checks": [
+        {"label": "air pressure", "match": "press|baro", "samples": [67600, 67600], "ranges": [[100600, 101320], [1006, 1013.2], [100.6, 101.32]]},
+        {"label": "temperature", "match": "temp", "samples": [67600, 67600], "ranges": [[14.5, 17.5], [287.6, 290.7]]}
+      ]
+    },
+    {
+      "id": "binary_cpp_header",
+      "data": ["binary/cpp_header/ride.pwr"],
+      "spec": ["binary/cpp_header/power_meter.hpp"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [3595, 3605],
+      "checks": [
+        {"label": "torque", "match": "torque", "samples": [14429, 14429], "ranges": [[0, 36]]},
+        {"label": "cadence", "match": "cad", "samples": [14429, 14429], "ranges": [[0, 110]]},
+        {"label": "power", "match": "power|watt", "samples": [14429, 14429], "ranges": [[0, 500]]}
+      ]
+    },
+    {
+      "id": "binary_no_spec",
+      "data": ["binary/no_spec/fridge_logger.bin"],
+      "duration": [14380, 14400],
+      "checks": [
+        {"label": "two or more series of 1440 rows", "samples": [1440, 1440], "at_least": 2},
+        {"label": "a temperature-like series", "samples": [1440, 1440], "ranges": [[0, 8]]},
+        {"label": "a humidity-like series", "samples": [1440, 1440], "ranges": [[65, 100]]}
+      ]
+    },
+    {
+      "id": "big_csv_imu_1h",
+      "big": true,
+      "data": ["big/imu_200hz_1h.csv"],
+      "duration": [3599, 3601],
+      "checks": [
+        {"label": "six 200 Hz series", "samples": [720000, 720000], "at_least": 6}
+      ]
+    },
+    {
+      "id": "big_json_run_6h",
+      "big": true,
+      "data": ["big/run_session_6h.json"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [21590, 21605],
+      "metadata": ["TP5-118-2093"],
+      "checks": [
+        {"label": "heart rate", "match": "heart|\\bhr\\b|pulse", "samples": [21600, 21600], "ranges": [[60, 220]]},
+        {"label": "latitude", "match": "\\blat", "samples": [21600, 21600], "ranges": [[61.35, 61.65]]}
+      ]
+    },
+    {
+      "id": "big_gpx_hike_2_segments",
+      "big": true,
+      "data": ["big/long_hike_2_segments.gpx"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [29990, 30005],
+      "checks": [
+        {"label": "latitude", "match": "\\blat", "samples": [28800, 28800], "ranges": [[61.35, 61.65]]},
+        {"label": "heart rate", "match": "heart|\\bhr\\b|pulse", "samples": [28800, 28800], "ranges": [[60, 220]]}
+      ]
+    },
+    {
+      "id": "big_binary_c_header_1khz",
+      "big": true,
+      "data": ["big/motion_logger_1khz.lgr"],
+      "spec": ["binary/c_header/logger_format.h"],
+      "start": ["2026-05-14T07:30"],
+      "duration": [2399, 2401],
+      "checks": [
+        {"label": "five or more 1 kHz series", "samples": [2400000, 2400000], "at_least": 5}
+      ]
+    }
+  ]
+}

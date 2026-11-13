@@ -486,6 +486,9 @@ Tips:
   "column 3 is pressure in mbar". They go to the AI with the file.
 - Drop several files at once and LODGaZilla asks whether they belong in one folder
   or one folder each.
+- Have a description of the format, such as a document or a C header? Drop it with the
+  data file, into one folder. The AI uses it, and it stays in the folder without an H5
+  file of its own.
 - The play button turns into a stop button while Magic drop runs. Stopping, or a
   failure, removes the new folder.
 
@@ -707,6 +710,30 @@ check what the AI found. The small files are in Git. To make the big ones (about
 in `tests/AI_demodata/big/`, ignored by Git) or to make all of them again, run
 `python tools/create_ai_demodata.py`; it takes about 20 seconds. Add `--no-big` to skip
 the big files, or `--output <folder>` to write them somewhere else.
+
+The **live AI tests** run Magic drop and Create plugin on these files with the real
+Claude and Codex, and check each result against the files' true contents
+(`tests/AI_demodata/cases.json`): the series found, their sample counts and value
+ranges, the start time, the duration and the metadata. They send the files to Anthropic
+and OpenAI and spend tokens, so they are not part of the test suite; run them only
+deliberately:
+
+```
+python tools/run_ai_tests.py --list                    # the cases
+python tools/run_ai_tests.py --case csv_bike_power     # one case, both providers and modes
+python tools/run_ai_tests.py --provider codex --mode magic
+python tools/run_ai_tests.py                           # everything but the big files
+python tools/run_ai_tests.py --big --jobs 3            # everything, three runs at a time
+```
+
+Before starting, it shows the number of runs and Claude's maximum cost (Claude's cost
+limit in Settings, per agent run) and asks to confirm; `--yes` skips the question. Each
+run takes up to the AI time limit (15 minutes by default); a full run of 15 cases is 60
+runs. `--web` lets the agents read web pages; by default they don't, so results stay
+comparable. The results, each agent's transcript and `report.md` go to
+`logs/ai_tests/<time>/`. A run is **pass** when every check passes, **partial** when some
+do, **fail** when none do, and **error** when no H5 file was made. Ctrl+C stops the
+running agents and writes the report so far.
 
 ### Starting for testing
 

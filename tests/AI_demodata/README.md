@@ -13,6 +13,12 @@ python tools/create_ai_demodata.py --no-big   # without big/
 The files under `big/` (about 80 MB) are ignored by Git; run the script to make them. The
 unit tests don't use these files.
 
+`cases.json` holds the same true contents in a form a program can check: the live AI
+tests (`python tools/run_ai_tests.py`, see the main README's **Tests**) run Magic drop
+and Create plugin on each case with Claude and Codex and score the H5 results against it.
+They spend tokens, so they run only when asked. When you change the generator, update
+`cases.json` too.
+
 All recordings start at 2026-05-14 07:30:00 UTC unless the table says otherwise.
 
 ## Text formats

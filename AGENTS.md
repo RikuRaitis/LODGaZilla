@@ -262,6 +262,15 @@ An H5 file supplies data series; it is not a separate tree item type.
   (`tests/test_demo_dataset.py` with short simulated runs, `tests/test_demo_data_app.py`
   with a fake generator). Run the real generator only when changing it, and then first
   with `--no-video --long-hours 0` (about a minute).
+- **Run the live AI tests only when the user asks.** `tools/run_ai_tests.py` runs the
+  real Claude and Codex agents through Magic drop and Create plugin on every file in
+  `tests/AI_demodata/` and scores the H5 results against `tests/AI_demodata/cases.json`.
+  The files are sent to Anthropic and OpenAI, and a full run spends tokens (Claude up
+  to its cost limit per agent run) and hours. Never run it to verify a change, and
+  never pass `--yes` on your own; when asked, run only the cases, providers and modes
+  asked for. The normal suite checks only the case file and the scoring
+  (`tests/test_ai_live_checks.py`). When the test data changes, update `cases.json` from
+  the true contents in the same change.
 - **Version deliberately.** `APP_VERSION` in `src/version.py` is the only place the
   version is written; it follows Semantic Versioning (`1.0.0-beta.1`, `1.0.0`). Raise
   it only when making a release, as in `docs/Releasing.md`; note user-visible changes

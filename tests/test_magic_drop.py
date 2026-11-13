@@ -273,8 +273,8 @@ class MagicDropTests(unittest.TestCase):
         fake.write_text(script, encoding="utf-8")
         return dataclasses.replace(provider, magic_drop_command=lambda *_args, **_options: [sys.executable, str(fake)])
 
-    def _job(self, script: str, provider=CLAUDE, **options) -> tuple[MagicDropJob, list, list]:
-        job = MagicDropJob(Path("agent"), [self.source], self.data, drafts_root=self.root / "drafts",
+    def _job(self, script: str, provider=CLAUDE, files=None, **options) -> tuple[MagicDropJob, list, list]:
+        job = MagicDropJob(Path("agent"), files or [self.source], self.data, drafts_root=self.root / "drafts",
                            provider=self.fake_provider(script, provider), **options)
         events, finished = [], []
         job.event.connect(lambda kind, text: events.append((kind, text)))
@@ -297,6 +297,19 @@ class MagicDropTests(unittest.TestCase):
         self.assertIn(("tool", "Write importer.py"), events)
         self.assertIn(("text", "Done: 2 series. (cost $0.12)"), events)
         self.assertEqual(sum(text.startswith("A CSV") for _kind, text in events), 1)
+
+    def test_a_format_description_dropped_with_the_data_is_kept_but_not_imported(self):
+        spec = self.root / "incoming" / "format.md"
+        spec.write_text("# Weather log\nColumns: time in s, temperature in C, pressure in hPa.\n", encoding="utf-8")
+        prompt = magic_drop.agent_prompt([self.source, spec])
+        self.assertIn("describe the format", prompt)
+        _job, events, finished = self._job(FAKE_CLAUDE, files=[self.source, spec])
+        succeeded, message, folder = finished[0]
+        self.assertTrue(succeeded, message)
+        self.assertIn("1 H5 file", message)
+        self.assertTrue((folder / "format.md").is_file())
+        self.assertFalse((folder / "format.h5").exists())
+        self.assertIn(("status", "format.md: not imported; the parser does not read it."), events)
 
     def test_codex_job_reads_agents_md_and_creates_the_folder(self):
         _job, events, finished = self._job(FAKE_CODEX, CODEX)

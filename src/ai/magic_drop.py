@@ -193,6 +193,9 @@ def agent_prompt(files: list[Path], hints: str = "", instructions_file: str = "C
     """The task for the agent; the rules are in the draft's instructions file."""
     lines = [f"Write the importer for these data files, following {instructions_file} in this folder:"]
     lines += [f"- {path} ({path.stat().st_size:,} bytes)" for path in files]
+    if len(files) > 1:
+        lines += ["", "Some of them may describe the format instead of holding data, such as a document or "
+                  "source code: use them, and let the parser accept only the data files."]
     if hints.strip():
         lines += ["", "The user said about the files:", hints.strip()]
     return "\n".join(lines)

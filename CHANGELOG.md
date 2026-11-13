@@ -26,6 +26,8 @@ All notable changes to LODGaZilla are listed here. The format follows
   them without AI and nothing is sent; afterwards it asks whether to keep the result,
   improve that plugin with the AI or create a new plugin. When the AI imports the files
   and finds them close to an installed plugin's format, it suggests updating that plugin.
+- Magic drop accepts a format description, such as a document or source code, dropped
+  together with the data: the AI uses it, and it is kept without an H5 file of its own.
 
 ### Changed
 
