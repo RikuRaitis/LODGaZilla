@@ -140,7 +140,7 @@
       "id": "binary_markdown_spec",
       "data": ["binary/markdown_spec/chest_strap.tlv"],
       "spec": ["binary/markdown_spec/tlv_protocol.md"],
-      "start": ["2026-05-14T07:30"],
+      "start": ["2026-05-14T07:30", "2026-05-14T07:29:59"],
       "duration": [1795, 1801],
       "checks": [
         {"label": "heart rate, 9 damaged frames skipped", "match": "heart|\\bhr\\b|bpm", "samples": [1791, 1791], "ranges": [[60, 220]]},
