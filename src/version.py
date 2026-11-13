@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 # The released version; raise it for each release (docs/Releasing.md).
-APP_VERSION = "1.0.0-beta.2"
+APP_VERSION = "1.0.0-beta.3"
 
 # Semantic Versioning 2.0.0, without build metadata: 1.2.3, 1.0.0-beta.1, 1.0.0-rc.2.
 VERSION_PATTERN = re.compile(

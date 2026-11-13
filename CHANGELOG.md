@@ -6,6 +6,8 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-11-13
+
 ### Security
 
 - The AI consent question and the README now say plainly what the AI can do on your
@@ -28,11 +30,13 @@ All notable changes to LODGaZilla are listed here. The format follows
   and finds them close to an installed plugin's format, it suggests updating that plugin.
 - Magic drop accepts a format description, such as a document or source code, dropped
   together with the data: the AI uses it, and it is kept without an H5 file of its own.
+- For developers: synthetic test files in many formats (`tests/AI_demodata`, made by
+  `tools/create_ai_demodata.py`) and live AI tests of Magic drop and Create plugin with
+  Claude and Codex (`tools/run_ai_tests.py`, run only on purpose: they spend tokens).
 
 ### Changed
 
 - The video card's Mute button sits next to the Volume slider.
-
 - Workspaces no longer save the Plot navigator buttons (linking, legends, card controls,
   time axis, snapping); they keep your own preferences. Older workspaces still open.
 - While cards are open, Open workspace, Open recent workspace and closing the window ask
