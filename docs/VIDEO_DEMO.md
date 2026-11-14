@@ -13,7 +13,7 @@ voice comes from Clipchamp.
 | Part | Scenes | What you see |
 | --- | --- | --- |
 | Opening card | – | Black, then the logo and the tagline "Every file format, billions of points, one timeline." |
-| Overview | 1–6 | The main window full of cards; the Navigator by date and a double-click; dragging data into a card, both markers and a values box; a video playing in sync; zooming from hours to single samples; Magic drop with a real AI run (sped up, with a badge saying so) |
+| Overview | 1–6 | The main window full of cards; the Navigator by date and a double-click; dragging data into a card, both markers and a values box; a video playing in sync; zooming from hours to single samples, slowing down as it closes in so the points appear gradually; Magic drop with a real AI run (sped up, with a badge saying so) |
 | Title | – | "A closer look at the cards" |
 | A closer look | 7–21 | Fifteen shots, below |
 | End card | – | The logo, "Free and open source" and the GitHub address |
@@ -25,7 +25,7 @@ The closer look, in order (scene numbers are `record.py`'s):
 | 7 | Navigator: Sample loss and Clipping highlights; add a metadata key, delete it, group by `runner`, filter by `sport` |
 | 8 | Line card: zoom to the shaded clipping and sample loss at 29 s, pan, Points / Lines / Auto |
 | 17 | Values box details: click to pin, select the statistics, Ctrl+C |
-| 9 | Multi-series: select a trace, move its lane, scale it, drop a video as a filmstrip |
+| 9 | Multi-series: drop a video as a filmstrip first (its frames render meanwhile), then select a trace, move its lane, scale it |
 | 18 | Card drop selector: hold a series between cards, pick Sample interval |
 | 10 | Time offset: the foot pod's speed lines up with the watch's after −1.7 s |
 | 19 | Plot navigator bars: drag sideways (offset), up (reorder), trim an end, reset |
@@ -47,7 +47,14 @@ python tools/create_demo_dataset.py           # the demo data, if it isn't there
 python tools/demo_video/record.py             # all 21 scenes; or --scenes 3 6
 python tools/demo_video/edit.py               # the videos, with the Zira draft voice
 python tools/demo_video/edit.py --voice narration.wav   # with the final voice
+python tools/demo_video/preview.py            # each scene playable for review; or scene3 scene6
 ```
+
+**Reviewing scenes** (`preview.py`, seconds). Players guess the raw `scene<N>.h264`
+streams' speed (VLC plays them too fast). `preview.py` copies them, without re-encoding,
+into `build/demo_video/preview/scene<N>.mp4` with their recorded frame times, so they
+play at real speed and the player's clock matches the scene's `events.json` times. The
+cursor is drawn only by `edit.py`.
 
 **Recording** (`record.py`, about 15 minutes plus two AI runs). It starts LODGaZilla in
 a window whose contents are 1920 × 1080 screen pixels and plays each scene: set up off
@@ -75,7 +82,7 @@ mouse or keyboard meanwhile, and the screen must stay unlocked. Its progress goe
   `plugin/demo_motion_logger`, is deleted after the take.
 - **Map tiles** load from the internet; the take needs a connection.
 
-**Editing** (`edit.py`, about 10 minutes) writes to `build/demo_video/` (ignored by Git):
+**Editing** (`edit.py`, about 5 minutes: both videos in one pass, each frame decoded and painted once) writes to `build/demo_video/` (ignored by Git):
 
 - `lodgazilla_demo.mp4`: subtitles burned in, for players that start muted.
 - `lodgazilla_demo_clean.mp4`: no burned-in subtitles, for sites that use the `.srt`.
@@ -105,7 +112,7 @@ look's shots by how long each line takes to say.
 8. Sample loss and clipping stand out at a glance. Add your own metadata, then group and filter by it.
 9. Line cards shade sample loss and clipping. Pan, zoom, and switch to points.
 10. Click a values box to pin its details, then copy the numbers.
-11. Each series gets its own lane to move and scale; videos join as filmstrips.
+11. Videos join as filmstrips, and each series gets its own lane to move and scale.
 12. Hold a series between cards, and pick the card type it fits.
 13. Clocks disagree? Shift a series until it lines up.
 14. Drag a card's bar to shift, reorder or trim it.
@@ -126,11 +133,14 @@ times stay the same; a final line longer than the Zira one may run into the next
 
 ## Music
 
-`edit.py` generates the music in code, so no licence applies: soft pad chords, a bass
-note, a light pulse at 100 beats a minute and an arpeggio. It swells in with the opening
-card, pulses through the overview, accents the chapter title, is lighter through the
-closer look and resolves on the end card. It sits about 24 dB below full scale and drops
-another 12 dB under each narration line.
+`edit.py` generates the music in code, so no licence applies: soft pad chords
+(A minor, F, C, G), a bass note, a pulse at 100 beats a minute, an arpeggio and a melody
+of quarter notes over the chords (`MELODY`). The opening card starts with the full beat
+and an impact as the logo appears, and a second as the tagline appears; the end card's
+logo gets one too. It pulses through the overview, accents the chapter title, carries on
+nearly as strong through the closer look and resolves on the end card. It peaks about
+15 dB below full scale and drops another 8 dB under each narration line, but only 4 dB
+under the opening and end cards' lines.
 
 `--music track.wav` uses a chosen track instead, with the same ducking and fades; use
 only a track whose licence allows use in a published video, keep a copy of that licence,

@@ -435,11 +435,13 @@ class Director:
             self.rest(0.2)
             self.mouse.key("ctrl", True)
             self.rest(0.15)
-            # Down to about 50 ms, where the 1000 Hz samples show as separate points.
-            self.mouse.wheel(72, 6.5)
+            # Down to about 50 ms, where the 1000 Hz samples show as separate points. Fast
+            # through the hours, then slowing: the last 40x, where Auto adds the points (from
+            # 2000 samples in view) and they spread apart, takes about half the time.
+            self.mouse.wheel(72, 7.0, slow_down=6.0)
             self.rest(0.15)
             self.mouse.key("ctrl", False)
-            self.rest(2.2)
+            self.rest(2.0)
         self.record("scene5", actions)
 
     def scene6(self) -> None:
@@ -751,6 +753,13 @@ class Director:
             return self.wait_for(lambda: self.gui(compute), f"trace {name}")
 
         def actions():
+            # The video first: its filmstrip's frames render while the traces are moved and scaled.
+            self.label("Drop a video · filmstrip")
+            self.mouse.move(*self.item_point(*media, "chase_cam_4k.mp4"))
+            self.rest(0.15)
+            self.mouse.drag(*self.point(card.legend), seconds=1.0, hold=0.6)
+            self.wait_for(lambda: self.gui(lambda: len(card.series_plot.filmstrips) >= 1), "the filmstrip")
+            self.rest(1.5)
             self.label("Click · select a trace")
             self.click_at(trace_point("Activity/Cadence", 20))
             self.rest(0.7)
@@ -764,12 +773,7 @@ class Director:
             self.mouse.key("ctrl", True)
             self.mouse.wheel(4, 0.8)
             self.mouse.key("ctrl", False)
-            self.rest(0.6)
-            self.label("Drop a video · filmstrip")
-            self.mouse.move(*self.item_point(*media, "chase_cam_4k.mp4"))
-            self.rest(0.15)
-            self.mouse.drag(*self.point(card.legend), seconds=1.0, hold=0.6)
-            self.rest(2.2)
+            self.rest(1.8)
         self.record("scene9", actions)
 
     def scene10(self) -> None:

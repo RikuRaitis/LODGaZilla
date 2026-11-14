@@ -30,6 +30,10 @@ is "what actually happened at 12:04:31?", the synced video answers it.
 
 ![LODGaZilla with the demo data open](docs/images/main_window.png)
 
+**See it in action** (2 min 50 s on YouTube):
+
+[![LODGaZilla demo video](https://img.youtube.com/vi/xR2_yrjDPYI/maxresdefault.jpg)](https://youtu.be/xR2_yrjDPYI)
+
 ## Getting started
 
 ### 1. Install Git

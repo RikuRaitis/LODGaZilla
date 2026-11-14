@@ -164,10 +164,16 @@ class Mouse:
             self._log("type", text=character)
             time.sleep(seconds_per_character)
 
-    def wheel(self, notches: int, seconds: float) -> None:
-        """Turn the wheel ``notches`` steps (positive away from the user) over ``seconds``."""
+    def wheel(self, notches: int, seconds: float, slow_down: float = 1.0) -> None:
+        """Turn the wheel ``notches`` steps (positive away from the user) over ``seconds``.
+
+        ``slow_down`` > 1 makes the steps' interval grow evenly by that factor from the first
+        step to the last, so a zoom slows as it closes in."""
         count = abs(notches)
-        for _ in range(count):
+        ratio = slow_down ** (1 / max(1, count - 1))
+        weights = [ratio ** index for index in range(count)]
+        scale = seconds / max(1e-9, sum(weights))
+        for weight in weights:
             self._send(MOUSEEVENTF_WHEEL, 120 if notches > 0 else -120)
             self._log("wheel", delta=1 if notches > 0 else -1)
-            time.sleep(seconds / max(1, count))
+            time.sleep(weight * scale)

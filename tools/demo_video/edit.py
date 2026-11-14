@@ -66,7 +66,7 @@ CHAPTER = [
     ("scene7", "Sample loss and clipping stand out at a glance. Add your own metadata, then group and filter by it."),
     ("scene8", "Line cards shade sample loss and clipping. Pan, zoom, and switch to points."),
     ("scene17", "Click a values box to pin its details, then copy the numbers."),
-    ("scene9", "Each series gets its own lane to move and scale; videos join as filmstrips."),
+    ("scene9", "Videos join as filmstrips, and each series gets its own lane to move and scale."),
     ("scene18", "Hold a series between cards, and pick the card type it fits."),
     ("scene10", "Clocks disagree? Shift a series until it lines up."),
     ("scene19", "Drag a card's bar to shift, reorder or trim it."),
@@ -477,13 +477,25 @@ def source_time(shot: Shot, seconds: float) -> float:
     return shot.pieces[-1][1]
 
 
-def render(folder: Path, output: Path, subtitles: bool, audio: np.ndarray, cues, plan, total) -> None:  # type: ignore[no-untyped-def]
-    container = av.open(str(output), "w")
-    video = container.add_stream("libx264", rate=FPS)
-    video.width, video.height, video.pix_fmt = WIDTH, HEIGHT, "yuv420p"
-    video.options = {"crf": "18", "preset": "medium"}
-    sound = container.add_stream("aac", rate=AUDIO_RATE)
-    sound.layout = "mono"
+def to_frame(image: QImage, index: int) -> av.VideoFrame:
+    array = np.frombuffer(image.constBits(), np.uint8).reshape(HEIGHT, image.bytesPerLine())[:, :WIDTH * 3]
+    frame = av.VideoFrame.from_ndarray(array.reshape(HEIGHT, WIDTH, 3).copy(), format="rgb24")
+    frame.pts = index
+    return frame
+
+
+def render(folder: Path, outputs: list[tuple[Path, bool]], audio: np.ndarray, cues, plan, total) -> None:  # type: ignore[no-untyped-def]
+    """Write each of ``outputs`` (path, burned-in subtitles) in one pass: every frame is decoded
+    and painted once, then encoded for each output, with the subtitles drawn on a copy."""
+    targets = []
+    for output, subtitles in outputs:
+        container = av.open(str(output), "w")
+        video = container.add_stream("libx264", rate=FPS)
+        video.width, video.height, video.pix_fmt = WIDTH, HEIGHT, "yuv420p"
+        video.options = {"crf": "18", "preset": "medium"}
+        sound = container.add_stream("aac", rate=AUDIO_RATE)
+        sound.layout = "mono"
+        targets.append((container, video, sound, subtitles))
     canvas = QImage(WIDTH, HEIGHT, QImage.Format.Format_RGB888)
     recordings: dict[str, Recording] = {}
     for index in range(round(total * FPS)):
@@ -525,33 +537,36 @@ def render(folder: Path, output: Path, subtitles: bool, audio: np.ndarray, cues,
             if label:
                 # Bottom left, above the subtitles: the action happens elsewhere, often top left.
                 draw_badge(painter, 40, HEIGHT - 250, label, 30)
-        if subtitles:
-            cue = next((cue for cue in cues if cue[0] <= now < cue[1]), None)
-            if cue is not None:
-                draw_subtitle(painter, cue[2], top=False)
         painter.end()
-        array = np.frombuffer(canvas.constBits(), np.uint8).reshape(HEIGHT, canvas.bytesPerLine())[:, :WIDTH * 3]
-        frame = av.VideoFrame.from_ndarray(array.reshape(HEIGHT, WIDTH, 3).copy(), format="rgb24")
-        frame.pts = index
-        for packet in video.encode(frame):
-            container.mux(packet)
+        cue = next((cue for cue in cues if cue[0] <= now < cue[1]), None)
+        for container, video, _sound, subtitles in targets:
+            image = canvas
+            if subtitles and cue is not None:
+                image = canvas.copy()
+                overlay = QPainter(image)
+                overlay.setRenderHints(QPainter.RenderHint.Antialiasing)
+                draw_subtitle(overlay, cue[2], top=False)
+                overlay.end()
+            for packet in video.encode(to_frame(image, index)):
+                container.mux(packet)
         if index % 250 == 0:
-            print(f"  {output.name}: {now:.0f} s", flush=True)
-    for packet in video.encode():
-        container.mux(packet)
+            print(f"  {now:.0f} s of {total:.0f} s", flush=True)
     samples = (np.clip(audio, -1, 1) * 32767).astype(np.int16)
     chunk = 1024
-    for offset in range(0, len(samples), chunk):
-        piece = samples[offset:offset + chunk]
-        frame = av.AudioFrame.from_ndarray(piece.reshape(1, -1), format="s16", layout="mono")
-        frame.sample_rate = AUDIO_RATE
-        frame.pts = offset
-        frame.time_base = Fraction(1, AUDIO_RATE)
-        for packet in sound.encode(frame):
+    for container, video, sound, _subtitles in targets:
+        for packet in video.encode():
             container.mux(packet)
-    for packet in sound.encode():
-        container.mux(packet)
-    container.close()
+        for offset in range(0, len(samples), chunk):
+            piece = samples[offset:offset + chunk]
+            frame = av.AudioFrame.from_ndarray(piece.reshape(1, -1), format="s16", layout="mono")
+            frame.sample_rate = AUDIO_RATE
+            frame.pts = offset
+            frame.time_base = Fraction(1, AUDIO_RATE)
+            for packet in sound.encode(frame):
+                container.mux(packet)
+        for packet in sound.encode():
+            container.mux(packet)
+        container.close()
 
 
 def zira_lines(texts) -> dict[str, np.ndarray]:  # type: ignore[no-untyped-def]
@@ -604,6 +619,12 @@ TEMPO = 100  # Beats a minute.
 # A minor, F, C, G: two bars each. (root, chord tones) in hertz.
 CHORDS = [(110.0, (220.0, 261.63, 329.63)), (87.31, (174.61, 220.0, 261.63)),
           (130.81, (261.63, 329.63, 392.0)), (98.0, (196.0, 246.94, 293.66))]
+# The melody, a quarter note a beat over each chord's two bars, in A minor.
+A4, B4, C5, D5, E5, F5, G4, G5 = 440.0, 493.88, 523.25, 587.33, 659.25, 698.46, 392.0, 783.99
+MELODY = [(A4, C5, E5, D5, C5, B4, C5, E5),   # A minor
+          (A4, C5, F5, E5, C5, A4, C5, D5),   # F
+          (G4, C5, E5, G5, E5, D5, C5, E5),   # C
+          (G4, B4, D5, G5, F5, D5, B4, D5)]   # G
 
 
 def make_music(total: float, plan: list[Shot]) -> np.ndarray:
@@ -645,35 +666,67 @@ def make_music(total: float, plan: list[Shot]) -> np.ndarray:
     arp_pitch = np.where(step == 3, tones[:, 1] * 2, arp_pitch)
     arp_phase = np.cumsum(2 * np.pi * arp_pitch / AUDIO_RATE)
     arp = (2 / np.pi) * np.arcsin(np.sin(arp_phase)) * np.exp(-eighth * 7) * 0.35
+    # The melody: a quarter-note line over each chord's two bars, a soft lead with a little vibrato.
+    in_chord = (t // beat).astype(int) % 8
+    melody_index = np.where(on_end, 2, chord_index)
+    pitch = np.array(MELODY)[melody_index, in_chord] * (1 + 0.004 * np.sin(2 * np.pi * 5.5 * t))
+    lead_phase = np.cumsum(2 * np.pi * pitch / AUDIO_RATE)
+    lead = (np.sin(lead_phase) + 0.3 * np.sin(2 * lead_phase) + 0.12 * np.sin(3 * lead_phase)) / 1.4
+    lead *= (1 - np.exp(-in_beat * 60)) * (0.35 + 0.65 * np.exp(-in_beat * 3))
 
     def window(start: float, stop: float, fade: float = 1.0) -> np.ndarray:
         return np.clip(np.minimum((t - start) / fade, (stop - t) / fade), 0, 1)
 
-    opening = window(0.0, sections["opening"][1] + 0.5, 1.6)
+    # The opening comes in at once, with the full beat, so the logo lands with weight.
+    opening = window(0.0, sections["opening"][1] + 0.5, 0.25)
     overview = window(sections["opening"][1] - 0.3, overview_end + 0.4, 0.8)
     chapter = window(sections["title"][1] - 0.2, end_start + 0.3, 0.8)
     end_fade = np.clip((total - t) / 3.0, 0, 1) * (t >= end_start - 0.5)
-    pad_level = 0.55 * opening + 0.45 * overview + 0.45 * chapter + 0.65 * end_fade
-    pulse_level = 0.55 * overview + 0.3 * chapter
-    arp_level = 0.5 * overview + 0.3 * chapter + 0.25 * end_fade
-    music = (pad * pad_level + bass * 0.5 * (overview + chapter + end_fade)
-             + kick * 0.45 * pulse_level + hat * pulse_level + arp * arp_level)
+    pad_level = 0.6 * opening + 0.45 * overview + 0.45 * chapter + 0.7 * end_fade
+    pulse_level = 0.85 * opening + 0.55 * overview + 0.5 * chapter + 0.5 * end_fade
+    arp_level = 0.55 * opening + 0.5 * overview + 0.4 * chapter + 0.3 * end_fade
+    lead_level = 0.6 * opening + 0.4 * overview + 0.35 * chapter + 0.55 * end_fade
+    music = (pad * pad_level + bass * 0.6 * (1.3 * opening + overview + chapter + end_fade)
+             + kick * 0.5 * pulse_level + hat * pulse_level + arp * arp_level + lead * lead_level)
+
+    def hit(at: float, low: float, bright: tuple[float, ...], weight: float) -> np.ndarray:
+        """An impact: a falling low boom, a noise burst and a bright chord stab, from ``at``."""
+        since = np.clip(t - at, 0, None)
+        after = t >= at
+        boom = np.sin(2 * np.pi * low * since * (1 + 3 * np.exp(-since * 20))) * np.exp(-since * 3)
+        burst = noise * np.exp(-since * 14) * 0.25
+        stab = sum(np.sin(2 * np.pi * tone * t) for tone in bright) / len(bright) * np.exp(-since * 1.4)
+        return (boom + burst + stab * 0.8) * after * weight
+
+    # Impacts as the logo appears and as the tagline appears, and on the end card's logo.
+    opening_start = sections["opening"][0]
+    music += hit(opening_start + 0.25, 45, (220.0, 329.63, 440.0, 523.25), 1.0)
+    music += hit(opening_start + 0.9, 55, (440.0, 523.25, 659.25), 0.6)
+    music += hit(end_start, 45, (261.63, 329.63, 392.0, 523.25), 0.8)
     # One accent on the chapter title: a bright chord that fades.
     title_start = sections["title"][0]
     since = np.clip(t - title_start, 0, None)
     accent = (np.sin(2 * np.pi * 523.25 * t) + np.sin(2 * np.pi * 659.25 * t) + np.sin(2 * np.pi * 783.99 * t)) / 3
-    music += accent * np.exp(-since * 1.6) * (t >= title_start) * 0.35
+    music += accent * np.exp(-since * 1.6) * (t >= title_start) * 0.45
+    music = np.tanh(music * 1.2)  # Soft saturation: the hits stand out without one peak setting the level.
     return (music / max(1e-9, np.max(np.abs(music)))).astype(np.float32)
 
 
-def duck(music: np.ndarray, narration, level_db: float = -24.0, under_db: float = -12.0) -> np.ndarray:  # type: ignore[no-untyped-def]
-    """The music at ``level_db`` (peak), lowered by ``under_db`` while a narration line plays."""
+def duck(music: np.ndarray, narration, level_db: float = -15.0, under_db: float = -8.0,
+         card_under_db: float = -4.0) -> np.ndarray:  # type: ignore[no-untyped-def]
+    """The music at ``level_db`` (peak), lowered by ``under_db`` while a narration line plays, and
+    only by ``card_under_db`` under the opening and end cards' lines (the first and last)."""
     gain = np.ones(len(music))
-    for start, end, _text in narration:
-        gain[int(max(0, start - 0.15) * AUDIO_RATE):int((end + 0.25) * AUDIO_RATE)] = 10 ** (under_db / 20)
+    last = len(narration) - 1
+    for index, (start, end, _text) in enumerate(narration):
+        under = card_under_db if index in (0, last) else under_db
+        gain[int(max(0, start - 0.15) * AUDIO_RATE):int((end + 0.25) * AUDIO_RATE)] = 10 ** (under / 20)
     # Smooth the gain changes over about 0.3 s.
-    kernel = np.ones(int(0.3 * AUDIO_RATE)) / int(0.3 * AUDIO_RATE)
-    gain = np.convolve(gain, kernel, mode="same")
+    # A moving average from a running sum: np.convolve with this long kernel takes minutes.
+    width = int(0.3 * AUDIO_RATE)
+    padded = np.concatenate([np.full(width // 2, gain[0]), gain, np.full(width - width // 2, gain[-1])])
+    sums = np.concatenate([[0.0], np.cumsum(padded)])
+    gain = (sums[width:width + len(gain)] - sums[:len(gain)]) / width
     return music * gain * 10 ** (level_db / 20)
 
 
@@ -723,9 +776,9 @@ def main() -> int:
     # The script for the final voice (Clipchamp): one line per paragraph.
     lines = [text for _start, _end, text in narration]
     (folder / "narration.txt").write_text("\n\n".join(lines) + "\n", encoding="utf-8")
-    for name, subtitles in (("lodgazilla_demo.mp4", True), ("lodgazilla_demo_clean.mp4", False)):
-        print(f"Rendering {name}")
-        render(folder, folder / name, subtitles, audio, cues, plan, total)
+    print("Rendering lodgazilla_demo.mp4 and lodgazilla_demo_clean.mp4")
+    render(folder, [(folder / "lodgazilla_demo.mp4", True), (folder / "lodgazilla_demo_clean.mp4", False)],
+           audio, cues, plan, total)
     print("Done:", folder)
     return 0
 
