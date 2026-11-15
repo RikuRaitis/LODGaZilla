@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -18,6 +19,9 @@ from src.plugins.repositories import Candidate
 
 class PluginUpdates(QObject):
     changed = Signal()
+    # A check makes a few requests per repository, each limited to 20 seconds; an
+    # install clones one repository. Past this the worker is stuck: stop it and say so.
+    TIME_LIMIT_SECONDS = {"check": 120.0, "install": 600.0}
 
     def __init__(self, parent=None, root=PLUGIN_ROOT):
         super().__init__(parent)
@@ -28,6 +32,7 @@ class PluginUpdates(QObject):
         self.busy = False
         self.process = self.tree = self.results = None
         self.operation = ""
+        self.deadline = 0.0
         for request in pending_requests(self.root):
             try:
                 candidate = Candidate(**json.loads(request.read_text(encoding="utf-8"))["candidate"])
@@ -62,6 +67,7 @@ class PluginUpdates(QObject):
                                        args=(gate, self.results, operation, payload, str(self.root)))
         try:
             self.tree = start_process_tree(self.process, gate)
+            self.deadline = time.monotonic() + self.TIME_LIMIT_SECONDS[operation]
             self.timer.start()
         except (OSError, RuntimeError) as error:
             self.message = f"Could not start plugin operation: {error}"
@@ -72,10 +78,15 @@ class PluginUpdates(QObject):
         try:
             success, result = self.results.get_nowait()
         except queue.Empty:
-            if self.process.is_alive():
+            if self.process.is_alive() and time.monotonic() < self.deadline:
                 return
-            # A terminated worker cannot produce another result.
-            success, result = False, "Plugin worker stopped before completing the operation."
+            if self.process.is_alive():
+                limit = int(self.TIME_LIMIT_SECONDS[self.operation])
+                success, result = False, (f"Plugin {self.operation} did not finish within {limit} seconds "
+                                          "and was stopped. Try again with Check now.")
+            else:
+                # A terminated worker cannot produce another result.
+                success, result = False, "Plugin worker stopped before completing the operation."
         if not success:
             self.message = str(result)
         elif self.operation == "check":

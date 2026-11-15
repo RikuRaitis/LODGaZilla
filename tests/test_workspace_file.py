@@ -386,7 +386,7 @@ class WorkspaceMenuTests(unittest.TestCase):
         self.assertNotIn("plot_navigator", json.loads(workspace_file.read_text(encoding="utf-8")))
         self.assertTrue(window.plot_workspace.link_markers)
         self.assertTrue(window.plot_workspace.legends_shown)
-        self.assertTrue(window.plot_navigator.card_controls_button.isChecked())
+        self.assertTrue(window.plot_workspace.card_controls_shown)
         self.assertEqual(load_lodgazilla_settings(settings)["recent_workspaces"],
                          [str(workspace_file.resolve())])
         # Saving the Settings dialog keeps the list.

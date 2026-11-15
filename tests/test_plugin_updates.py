@@ -90,6 +90,98 @@ class DiscoveryTests(unittest.TestCase):
                 api.get("https://attacker.example/next")
         opener.assert_not_called()
 
+    def test_api_verifies_certificates_with_the_system_trust_store(self):
+        import ssl
+        import truststore
+        self.assertIsInstance(repositories.tls_context(), truststore.SSLContext)
+        with mock.patch.dict("sys.modules", {"truststore": None}):
+            context = repositories.tls_context()
+        self.assertIsInstance(context, ssl.SSLContext)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+
+    def test_api_names_certificate_failures(self):
+        import ssl
+        from urllib.error import URLError
+        with mock.patch.object(repositories, "authorization", return_value=""):
+            api = repositories.Api("github.com")
+        failure = ssl.SSLCertVerificationError(1, "certificate verify failed")
+        failure.verify_message = "unable to get issuer certificate"
+        with mock.patch.object(repositories, "build_opener") as opener:
+            opener.return_value.open.side_effect = URLError(failure)
+            with self.assertRaisesRegex(ValueError, "certificate.*unable to get issuer certificate"):
+                api.get("/users/owner/repos")
+
+    def test_command_timeout_stops_children_that_hold_the_output_pipe(self):
+        # Git's Windows launcher starts the real Git, which kept a prompt and the
+        # pipe alive after the launcher was killed: the check then waited for ever.
+        import sys
+        child = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"
+        started = time.monotonic()
+        with self.assertRaisesRegex(ValueError, "timed out"):
+            repositories.command([sys.executable, "-c", child], timeout=2)
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_git_commands_never_prompt(self):
+        with mock.patch.object(repositories, "popen_in_tree") as popen, \
+                mock.patch.dict(os.environ, {"GIT_ASKPASS": "editor-askpass.sh"}):
+            process = popen.return_value[0]
+            process.communicate.return_value = ("", "")
+            process.returncode = 0
+            popen.return_value = (process, None)
+            repositories.command(["git", "credential", "fill"], input="host=bitbucket.org\n\n")
+        arguments, options = popen.call_args.args[0], popen.call_args.kwargs
+        self.assertEqual(arguments[:5], ["git", "-c", "core.askPass=", "-c", "credential.interactive=never"])
+        self.assertEqual(arguments[5:], ["credential", "fill"])
+        self.assertEqual(options["env"]["GIT_ASKPASS"], "")
+        self.assertEqual(options["env"]["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_sign_in_saves_the_credential_managers_answer(self):
+        answer = "protocol=https\nhost=bitbucket.org\nusername=user\npassword=token"
+        with mock.patch.object(repositories, "command", return_value=answer) as command:
+            repositories.sign_in("bitbucket.org")
+        fill, approve = command.call_args_list
+        self.assertEqual(fill.args[0], ["git", "credential", "fill"])
+        self.assertTrue(fill.kwargs["interactive"])
+        self.assertEqual(approve.args[0], ["git", "credential", "approve"])
+        self.assertTrue(approve.kwargs["input"].startswith(answer))
+        self.assertNotIn("interactive", approve.kwargs)
+
+    def test_sign_in_again_forgets_the_old_sign_in_and_cancel_is_an_error(self):
+        with mock.patch.object(repositories, "command", side_effect=["", ValueError("git failed")]) as command:
+            with self.assertRaisesRegex(ValueError, "cancelled"):
+                repositories.sign_in("bitbucket.org", replace=True)
+        self.assertEqual(command.call_args_list[0].args[0], ["git", "credential", "reject"])
+        with mock.patch.object(repositories, "command", return_value="protocol=https\nhost=bitbucket.org\n"):
+            with self.assertRaisesRegex(ValueError, "cancelled"):
+                repositories.sign_in("bitbucket.org")
+
+    def test_git_prompts_are_allowed_only_for_sign_in(self):
+        with mock.patch.object(repositories, "popen_in_tree") as popen:
+            process = mock.Mock(returncode=0)
+            process.communicate.return_value = ("", "")
+            popen.return_value = (process, None)
+            repositories.command(["git", "credential", "fill"], interactive=True)
+        self.assertIn("credential.interactive=auto", popen.call_args.args[0])
+        self.assertEqual(popen.call_args.kwargs["env"]["GCM_INTERACTIVE"], "auto")
+        self.assertEqual(popen.call_args.kwargs["env"]["GIT_ASKPASS"], "")
+
+    def test_bitbucket_oauth_sign_in_is_retried_as_bearer_token(self):
+        from urllib.error import HTTPError
+        basic = "Basic " + base64.b64encode(b"user:oauth-token").decode()
+        with mock.patch.object(repositories, "authorization", return_value=basic):
+            api = repositories.Api("bitbucket.org")
+        sent = []
+
+        def get(path):
+            sent.append(api.auth)
+            if api.auth.startswith("Basic"):
+                raise HTTPError(path, 401, "Unauthorized", {}, None)
+            return {"values": []}
+        with mock.patch.object(api, "_get", side_effect=get):
+            self.assertEqual(api.get("/repositories/team"), {"values": []})
+            self.assertEqual(api.get("/repositories/team"), {"values": []})
+        self.assertEqual(sent, [basic, "Bearer oauth-token", "Bearer oauth-token"])
+
     def test_api_pagination_reads_all_pages(self):
         with mock.patch.object(repositories, "authorization", return_value=""):
             api = repositories.Api("github.com")
@@ -253,6 +345,86 @@ class PluginSettingsTests(unittest.TestCase):
             self.assertFalse(controller.busy)
             self.assertEqual(len(controller.errors), 1)
             self.assertIsNone(controller.process)
+
+    def test_bitbucket_sign_in_is_shown_only_for_a_bitbucket_source(self):
+        from src.gui.settings_widget import SettingsEditorWidget
+        from src.jobs.repository_sign_in import RepositorySignIn
+        from src.plugins.updates import PluginUpdates
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(RepositorySignIn, "check") as check, \
+                mock.patch.object(RepositorySignIn, "sign_in") as sign_in:
+            root = Path(temp)
+            controller = PluginUpdates(root=root / "plugin")
+            self.addCleanup(controller.shutdown)
+            editor = SettingsEditorWidget(root / "settings.json", plugin_updates=controller)
+            self.addCleanup(editor.close)
+            row = editor.bitbucket_sign_in_row_widget
+            editor.plugin_sources_edit.setPlainText("https://github.com/owner")
+            self.assertTrue(row.isHidden())
+            check.assert_not_called()
+            editor.plugin_sources_edit.setPlainText("https://github.com/owner\nhttps://bitbucket.org/team")
+            self.assertFalse(row.isHidden())
+            check.assert_called_once()
+            editor.bitbucket_sign_in.checked.emit(False)
+            self.assertEqual(editor.bitbucket_sign_in_button.text(), "Sign in to Bitbucket")
+            editor.bitbucket_sign_in_button.click()
+            sign_in.assert_called_once_with(replace=False)
+            with mock.patch.object(controller, "check") as plugin_check:
+                editor.bitbucket_sign_in.finished.emit("")
+            plugin_check.assert_called_once_with(["https://github.com/owner", "https://bitbucket.org/team"])
+            self.assertEqual(editor.bitbucket_sign_in_button.text(), "Sign in again")
+            editor.plugin_sources_edit.setPlainText("https://github.com/owner")
+            self.assertTrue(row.isHidden())
+
+    def test_sign_in_result_reaches_the_gui_thread_and_is_dropped_after_its_owner(self):
+        import threading
+        from src.jobs import repository_sign_in
+        from src.jobs.repository_sign_in import RepositorySignIn
+        release = threading.Event()
+
+        def slow_sign_in(host, replace=False):
+            release.wait(10)
+        with mock.patch.object(repository_sign_in, "sign_in", side_effect=slow_sign_in):
+            job = RepositorySignIn("bitbucket.org")
+            results = []
+            job.finished.connect(results.append)
+            release.set()
+            job.sign_in()
+            deadline = time.monotonic() + 10
+            while not results and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(0.01)
+            self.assertEqual(results, [""])
+            self.assertFalse(job.busy)
+            # Closing Settings during a sign-in: the late result must not reach the deleted job.
+            release.clear()
+            job.sign_in()
+            from shiboken6 import Shiboken
+            Shiboken.delete(job)
+            release.set()
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(0.01)
+            self.assertEqual(results, [""])
+
+    def test_stuck_worker_is_stopped_at_the_time_limit(self):
+        from src.plugins.updates import PluginUpdates
+        with tempfile.TemporaryDirectory() as temp:
+            controller = PluginUpdates(root=Path(temp))
+            self.addCleanup(controller.shutdown)
+            controller.operation, controller.busy = "check", True
+            controller.results = mock.Mock()
+            controller.results.get_nowait.side_effect = __import__("queue").Empty
+            controller.process = mock.Mock(pid=None)
+            controller.process.is_alive.return_value = True
+            controller.deadline = time.monotonic() + 60
+            controller.poll()
+            self.assertTrue(controller.busy)
+            controller.deadline = time.monotonic() - 1
+            controller.poll()
+            self.assertFalse(controller.busy)
+            self.assertIn("did not finish within 120 seconds", controller.message)
 
 
 class CheckoutMoveTests(unittest.TestCase):

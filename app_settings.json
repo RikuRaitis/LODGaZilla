@@ -1,7 +1,7 @@
 {
   "navigator_controls": {
     "align_columns_of_different_type": false,
-    "hide_irrelevant_series": true,
+    "hide_irrelevant_series": false,
     "recent_folders": []
   },
   "appearance": {
@@ -48,14 +48,14 @@
     },
     "link_plot_x_axes": true,
     "link_plot_time_format": true,
-    "link_markers": false,
-    "snap_vertical_marker_to_nearest_point": false,
-    "time_axis_display": "none",
+    "link_markers": true,
+    "snap_vertical_marker_to_nearest_point": true,
     "marker_info_display": "active",
+    "time_axis_display": "none",
     "show_legends": false,
-    "show_card_controls": true,
+    "show_card_controls": false,
     "show_plot_navigator_time_row": true,
-    "plot_navigator_expanded": false,
+    "plot_navigator_expanded": true,
     "ai_panel_expanded": true,
     "internal_log_expanded": false,
     "internal_log_expanded_height": 261,
@@ -85,6 +85,9 @@
     ],
     "check_at_startup": true
   },
+  "default_info_metadata": {
+    "keys": []
+  },
   "navigator_diagnostics": {
     "order": [
       "sample_loss",
@@ -110,10 +113,6 @@
     "lod_target_buckets": 2000,
     "lod_bucket_growth": 4
   },
-  "tree_columns": {
-    "shared_widths": {},
-    "profiles": {}
-  },
   "ai": {
     "claude_path": "",
     "codex_path": "",
@@ -123,5 +122,9 @@
     "codex_web_access": true,
     "max_budget_usd": 2.0,
     "time_limit_minutes": 15
+  },
+  "tree_columns": {
+    "shared_widths": {},
+    "profiles": {}
   }
 }

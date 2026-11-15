@@ -266,7 +266,7 @@ class NavigatorSettingsIntegrationTests(unittest.TestCase):
         self.assertEqual(
             settings,
             NavigatorControlSettings(
-                hide_irrelevant_series=False,
+                hide_irrelevant_series=True,  # off by default; the click turned it on
                 recent_folders=(str(data_folder.resolve()),),
             ),
         )

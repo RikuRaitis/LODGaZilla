@@ -209,6 +209,9 @@ and pins candidates to a default-branch commit. GitHub discovery includes both
 public owner repositories and private repositories accessible to the authenticated
 user. Authentication comes from Git's credential helper or the documented token
 environment variables; credentials are never stored in settings or pending requests.
+Git never prompts during a check. With a Bitbucket source, Settings > Plugins offers a
+sign-in that lets Git Credential Manager show its own sign-in once and saves the result with
+`git credential approve`; a Bitbucket OAuth token from it is sent as a Bearer token.
 API reference: [GitHub repositories](https://docs.github.com/en/rest/repos/repos),
 [GitHub contents](https://docs.github.com/en/rest/repos/contents),
 [Bitbucket repositories](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-repositories/),

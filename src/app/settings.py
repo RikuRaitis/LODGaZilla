@@ -96,16 +96,16 @@ DEFAULT_LODGAZILLA_SETTINGS: dict[str, Any] = {
     "default_plot_heights": {key: default for key, (_, default, _) in PLOT_HEIGHT_SETTINGS.items()},
     "link_plot_x_axes": True,
     "link_plot_time_format": True,
-    "link_markers": False,
-    "snap_vertical_marker_to_nearest_point": False,
+    "link_markers": True,
+    "snap_vertical_marker_to_nearest_point": True,
     "marker_info_display": "active",
     # Time axis on every time card, only on the bottom one, or on none.
     "time_axis_display": "none",
     # The Plot navigator's Legends and Card controls buttons.
     "show_legends": False,
-    "show_card_controls": True,
+    "show_card_controls": False,
     "show_plot_navigator_time_row": True,
-    "plot_navigator_expanded": False,
+    "plot_navigator_expanded": True,
     # The AI panel below the Navigator is open (at its minimum height) or one row.
     "ai_panel_expanded": True,
     "internal_log_expanded": False,
@@ -140,7 +140,8 @@ DEFAULT_NAVIGATOR_DIAGNOSTICS_SETTINGS: dict[str, Any] = {
     "clipping": {"enabled": True, "color": "#8a4d00", "bold": True, "italic": False},
 }
 DEFAULT_INFO_METADATA_SETTINGS: dict[str, Any] = {
-    "keys": ["diver", "session", "place", "device location"],
+    # None by default; each user adds their own in Settings.
+    "keys": [],
 }
 DEFAULT_AI_SETTINGS: dict[str, Any] = {
     # The Claude Code CLI; empty finds it on PATH or in the VS Code extension.
@@ -172,7 +173,7 @@ _CHANGED_CALLBACKS: dict[Path, Callable[[], None]] = {}
 @dataclass(frozen=True)
 class NavigatorControlSettings:
     align_columns_of_different_type: bool = False
-    hide_irrelevant_series: bool = True
+    hide_irrelevant_series: bool = False
     recent_folders: tuple[str, ...] = ()
 
 
@@ -180,7 +181,7 @@ def default_app_settings_data() -> dict[str, Any]:
     return {
         NAVIGATOR_CONTROLS_SECTION: {
             "align_columns_of_different_type": False,
-            "hide_irrelevant_series": True,
+            "hide_irrelevant_series": False,
             "recent_folders": [],
         },
         APPEARANCE_SECTION: {"theme": "os"},
@@ -528,9 +529,9 @@ def sanitize_lodgazilla_settings(raw_settings: dict[str, Any]) -> dict[str, Any]
         ),
         "link_plot_x_axes": bool(raw_settings.get("link_plot_x_axes", True)),
         "link_plot_time_format": bool(raw_settings.get("link_plot_time_format", True)),
-        "link_markers": bool(raw_settings.get("link_markers", False)),
+        "link_markers": bool(raw_settings.get("link_markers", True)),
         "snap_vertical_marker_to_nearest_point": bool(
-            raw_settings.get("snap_vertical_marker_to_nearest_point", False)
+            raw_settings.get("snap_vertical_marker_to_nearest_point", True)
         ),
         "marker_info_display": str(raw_settings.get("marker_info_display", "active"))
         if str(raw_settings.get("marker_info_display", "active")) in {"off", "active", "all"}
@@ -539,11 +540,11 @@ def sanitize_lodgazilla_settings(raw_settings: dict[str, Any]) -> dict[str, Any]
         if str(raw_settings.get("time_axis_display", "none")) in TIME_AXIS_DISPLAY_MODES
         else "none",
         "show_legends": bool(raw_settings.get("show_legends", False)),
-        "show_card_controls": bool(raw_settings.get("show_card_controls", True)),
+        "show_card_controls": bool(raw_settings.get("show_card_controls", False)),
         "show_plot_navigator_time_row": bool(
             raw_settings.get("show_plot_navigator_time_row", True)
         ),
-        "plot_navigator_expanded": bool(raw_settings.get("plot_navigator_expanded", False)),
+        "plot_navigator_expanded": bool(raw_settings.get("plot_navigator_expanded", True)),
         "ai_panel_expanded": bool(raw_settings.get("ai_panel_expanded", True)),
         "internal_log_expanded": bool(raw_settings.get("internal_log_expanded", False)),
         "internal_log_expanded_height": bounded_int(
@@ -619,7 +620,7 @@ def load_navigator_control_settings(
         align_columns_of_different_type=bool(
             raw_settings.get("align_columns_of_different_type", False)
         ),
-        hide_irrelevant_series=bool(raw_settings.get("hide_irrelevant_series", True)),
+        hide_irrelevant_series=bool(raw_settings.get("hide_irrelevant_series", False)),
         recent_folders=tuple(sanitize_recent_folders(raw_settings.get("recent_folders", []))),
     )
 

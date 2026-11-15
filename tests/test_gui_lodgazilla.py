@@ -215,7 +215,7 @@ class PlotWorkspaceTests(unittest.TestCase):
             path = Path(directory) / "settings.json"
             defaults = load_lodgazilla_settings(path)
             self.assertEqual((defaults["link_markers"], defaults["snap_vertical_marker_to_nearest_point"],
-                              defaults["marker_info_display"]), (False, False, "active"))
+                              defaults["marker_info_display"]), (True, True, "active"))
             plot = sanitize_plot_settings({"first_marker_color": "red", "second_marker_color": "#00FF00",
                                            "marker_width": 40})
             self.assertEqual((plot["first_marker_color"], plot["second_marker_color"], plot["marker_width"]),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from PySide6.QtCore import QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QColor
@@ -58,6 +59,7 @@ from src.gui.theme import apply_theme, load_theme
 from src.plugins.manager import discover_plugins
 from src.plugins.installation import pending_requests, pending_status
 from src.plugins.updates import PluginUpdates
+from src.jobs.repository_sign_in import RepositorySignIn
 
 TAB_TITLES = ("General", "Navigator", "Plot navigator", "Plot", "Plugins", "HDF5 Cache")
 DEFAULT_METADATA_HELP = (
@@ -364,12 +366,11 @@ class SettingsEditorWidget(QWidget):
         self.plugin_sources_edit.setFixedHeight(70)
         self.plugin_sources_edit.setToolTip("GitHub account and Bitbucket workspace URLs, one per line")
         form.addRow("Plugin sources", self.plugin_sources_edit)
+        form.addRow(self.bitbucket_sign_in_row())
         self.plugin_startup_check = QCheckBox("Check for new plugins and updates at startup")
         form.addRow(self.plugin_startup_check)
         self.plugin_check_button = QPushButton("Check now")
-        self.plugin_check_button.clicked.connect(lambda: self.plugin_updates.check(
-            [line.strip() for line in self.plugin_sources_edit.toPlainText().splitlines() if line.strip()]
-        ))
+        self.plugin_check_button.clicked.connect(self.check_plugin_sources)
         form.addRow(self.plugin_check_button)
         layout.addLayout(form)
         note = QLabel("Only use sources you trust. Private repositories use your Git credentials. "
@@ -393,6 +394,67 @@ class SettingsEditorWidget(QWidget):
         self.plugin_updates.changed.connect(self.refresh_plugin_rows)
         self.refresh_plugin_rows()
         return group
+
+    def plugin_sources(self) -> list[str]:
+        return [line.strip() for line in self.plugin_sources_edit.toPlainText().splitlines() if line.strip()]
+
+    def check_plugin_sources(self) -> None:
+        self.plugin_updates.check(self.plugin_sources())
+
+    def bitbucket_sign_in_row(self) -> QWidget:
+        """Bitbucket sign-in, shown only while a Bitbucket workspace is a plugin source."""
+        self.bitbucket_sign_in = RepositorySignIn("bitbucket.org", self)
+        self.bitbucket_signed_in: bool | None = None  # None: not checked yet
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        self.bitbucket_sign_in_button = QPushButton("Sign in to Bitbucket")
+        self.bitbucket_sign_in_button.clicked.connect(self.start_bitbucket_sign_in)
+        self.bitbucket_sign_in_status = QLabel()
+        self.bitbucket_sign_in_status.setWordWrap(True)
+        row_layout.addWidget(self.bitbucket_sign_in_button)
+        row_layout.addWidget(self.bitbucket_sign_in_status, 1)
+        self.bitbucket_sign_in_row_widget = row
+        self.bitbucket_sign_in.checked.connect(self.show_bitbucket_signed_in)
+        self.bitbucket_sign_in.finished.connect(self.finish_bitbucket_sign_in)
+        self.plugin_sources_edit.textChanged.connect(self.update_bitbucket_sign_in_row)
+        self.update_bitbucket_sign_in_row()
+        return row
+
+    def has_bitbucket_source(self) -> bool:
+        return any(urlsplit(source).netloc.lower() == "bitbucket.org" for source in self.plugin_sources())
+
+    def update_bitbucket_sign_in_row(self) -> None:
+        shown = self.has_bitbucket_source()
+        self.bitbucket_sign_in_row_widget.setVisible(shown)
+        if shown and self.bitbucket_signed_in is None and not self.bitbucket_sign_in.busy:
+            self.bitbucket_sign_in_status.setText("Checking Bitbucket sign-in…")
+            self.bitbucket_sign_in_button.setEnabled(False)
+            self.bitbucket_sign_in.check()
+
+    def show_bitbucket_signed_in(self, signed_in: bool) -> None:
+        self.bitbucket_signed_in = signed_in
+        self.bitbucket_sign_in_button.setEnabled(True)
+        self.bitbucket_sign_in_button.setText("Sign in again" if signed_in else "Sign in to Bitbucket")
+        self.bitbucket_sign_in_status.setText(
+            "Signed in to Bitbucket." if signed_in else
+            "Not signed in: only public Bitbucket plugins are found.")
+
+    def start_bitbucket_sign_in(self) -> None:
+        self.bitbucket_sign_in_button.setEnabled(False)
+        self.bitbucket_sign_in_status.setText("Finish signing in in the window or browser page that opens…")
+        self.bitbucket_sign_in.sign_in(replace=bool(self.bitbucket_signed_in))
+
+    def finish_bitbucket_sign_in(self, error: str) -> None:
+        if error:
+            self.bitbucket_signed_in = None
+            self.bitbucket_sign_in_button.setEnabled(True)
+            self.bitbucket_sign_in_button.setText("Sign in to Bitbucket")
+            self.bitbucket_sign_in_status.setText(error + ".")
+            return
+        self.show_bitbucket_signed_in(True)
+        # The private plugins can be found now.
+        self.check_plugin_sources()
 
     def refresh_plugin_rows(self):
         enabled = {key: checkbox.isChecked() for key, checkbox in self.plugin_checkboxes.items()}

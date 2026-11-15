@@ -163,6 +163,13 @@ class AppSettingsTests(unittest.TestCase):
             ),
         )
 
+    def test_new_settings_have_no_default_metadata_keys(self):
+        from src.app.settings import load_default_info_metadata_settings
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "settings.json"
+            path.write_text("{}", encoding="utf-8")
+            self.assertEqual(load_default_info_metadata_settings(path)["keys"], [])
+
     def test_committed_settings_are_the_code_defaults(self):
         # AGENTS.md: the committed app_settings.json uses the code defaults and never holds
         # machine- or user-specific values (which are left out, or empty).

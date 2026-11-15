@@ -576,7 +576,13 @@ publishes plugins. LODGaZilla lists the `LODGaZilla-*` repositories it finds the
 starts; new plugins start disabled, so enable them in Settings afterwards. A plugin you add to
 the `plugin` folder yourself, or make with Create plugin, can be enabled at once.
 
-LODGaZilla never stores passwords or tokens. Only install plugins you trust: a plugin
+Private plugins need a sign-in. With a Bitbucket workspace among the sources, **Sign in to
+Bitbucket** appears below them: it opens Git Credential Manager's sign-in once, and the
+check then runs again and finds the private plugins. Later checks use the saved sign-in.
+For private GitHub repositories, LODGaZilla uses the sign-in Git already has.
+
+LODGaZilla never stores passwords or tokens; Git Credential Manager keeps the sign-in in
+the operating system's credential store. Only install plugins you trust: a plugin
 runs Python code with your permissions.
 
 ### Where plugin actions appear

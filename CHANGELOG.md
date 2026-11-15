@@ -6,10 +6,31 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Sign in to Bitbucket** in Settings > Plugins, shown when a Bitbucket workspace is a
+  plugin source: one sign-in through Git Credential Manager, after which the check finds
+  the workspace's private plugins.
+
+### Changed
+
+- New settings have no default metadata fields; the previous built-in ones (diver,
+  session, place, device location) are gone. Existing settings keep their own.
+- New defaults: Markers linked and snapping to the nearest point on, the Plot navigator
+  open, card Header controls hidden, and Hide irrelevant series off.
+
 ### Fixed
 
 - `LODGaZilla.bat` starts LODGaZilla from any folder, so a shortcut with another start
   folder works instead of failing with "No module named src".
+- The plugin update check verifies GitHub and Bitbucket certificates with the operating
+  system's trust store (new dependency `truststore`), so it no longer fails now and then
+  with "Cannot reach repository API" when Python lacks a root certificate. A certificate
+  failure is now reported as one.
+- The plugin update check no longer hangs, showing no plugins at all, when LODGaZilla is
+  started from a VS Code terminal and a source needs a sign-in that isn't saved. Git no
+  longer asks for a user name, a timed-out Git command is stopped with all its
+  processes, and a check that takes longer than two minutes is stopped and reported.
 
 ## [1.0.0-beta.3] - 2026-11-13
 

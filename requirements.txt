@@ -5,3 +5,4 @@ pyqtgraph>=0.14
 av>=18.0
 PyOpenGL>=3.1.7
 packaging>=23
+truststore>=0.10
