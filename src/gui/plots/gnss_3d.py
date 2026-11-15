@@ -706,8 +706,9 @@ function whenGroundReady(callback){{
   else groundWaiters.push(callback);
 }}
 function useTrackOcclusion(){{
-  // Terrain and buildings hide the track behind them while the map shows.
-  return viewSettings.mapOpacity>0;
+  // Terrain and buildings hide the track behind them while the map is opaque. The
+  // track is then drawn into the map's canvas, which fades with the map below 100%.
+  return viewSettings.mapOpacity>=1;
 }}
 function pointHeight(track,i){{
   const factor=viewSettings.altitudeExaggeration;
@@ -876,13 +877,12 @@ function setMapOpacity(opacity){{
   // 0 hides the map and its terrain; the route stays.
   viewSettings.mapOpacity=opacity;
   if(!mapReady)return;
-  const paintKeys={{fill:'fill-opacity',line:'line-opacity',symbol:'text-opacity',circle:'circle-opacity',raster:'raster-opacity',background:'background-opacity','fill-extrusion':'fill-extrusion-opacity',heatmap:'heatmap-opacity'}};
+  // The map fades as one image. Fading each layer showed the layers below it and the
+  // terrain tiles' edge walls (skirts) through the ground.
+  map.getCanvas().style.opacity=String(opacity);
   map.getStyle().layers.forEach(layer=>{{
     if(layer.id==='gnss-3d-route')return;
     try{{map.setLayoutProperty(layer.id,'visibility',opacity>0?'visible':'none')}}catch(_e){{}}
-    const key=paintKeys[layer.type];
-    if(!key)return;
-    try{{map.setPaintProperty(layer.id,key,opacity)}}catch(_e){{}}
   }});
   applyTerrain();
   updateRoute();

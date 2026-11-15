@@ -74,6 +74,7 @@ const maplibregl = {
     }
     setLayoutProperty(id, key, value) {this.layout[key]=value; this.layoutById[id]=value;}
     setPaintProperty(id, key, value) {this.paint[key]=value;}
+    getCanvas() {return this.canvas||(this.canvas={style:{}});}
     addSource(id, source) {
       if (this.sources[id]) throw new Error('Duplicate terrain source');
       this.sources[id]=source;
@@ -333,7 +334,7 @@ class Gnss3DControlsTests(unittest.TestCase):
         self.assertIsNone(self.js("map.terrain"))
         self.assertFalse(self.js("map.overlay.props.interleaved"))
         self.assertEqual(self.js("map.layout.visibility"), "none")
-        self.assertEqual(self.js("map.paint['fill-opacity']"), 0)
+        self.assertEqual(self.js("map.getCanvas().style.opacity"), "0")
 
     def test_map_opacity_zero_hides_map_and_terrain_without_resetting_track_or_camera(self):
         self.load_map()
@@ -353,9 +354,16 @@ class Gnss3DControlsTests(unittest.TestCase):
             self.assertEqual(self.js("routeCoordinates().map(p=>p[2])"), [-100, -125, -137.5])
             self.widget.map_opacity.setValue(40)
             self.assertEqual(self.js("map.layout.visibility"), "visible")
-            self.assertEqual(self.js("map.paint['fill-opacity']"), 0.4)
-            self.assertTrue(self.js("map.overlay.props.interleaved"))
+            # The map fades as one image; its layers keep the style's own opacities.
+            self.assertEqual(self.js("map.getCanvas().style.opacity"), "0.4")
+            self.assertEqual(self.js("Object.keys(map.paint).length"), 0)
+            # A faded map's canvas would fade the track too, so it is drawn on top.
+            self.assertFalse(self.js("map.overlay.props.interleaved"))
             self.assertEqual(self.js("map.terrain.exaggeration"), 2.5)
+            self.assertEqual(self.js("map.controls.length"), 1)
+            self.widget.map_opacity.setValue(100)
+            self.assertEqual(self.js("map.getCanvas().style.opacity"), "1")
+            self.assertTrue(self.js("map.overlay.props.interleaved"))
             self.assertEqual(self.js("map.controls.length"), 1)
         self.assertEqual(self.js("map.fitCount"), 1)
 

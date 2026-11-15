@@ -22,6 +22,9 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Fixed
 
+- 3D Map: a map opacity below 100% no longer shows the terrain tiles' edge walls and the
+  map's layers through each other; the map fades as one image. Below 100% the track is
+  drawn over the map, so hills no longer hide it.
 - `LODGaZilla.bat` starts LODGaZilla from any folder, so a shortcut with another start
   folder works instead of failing with "No module named src".
 - The plugin update check verifies GitHub and Bitbucket certificates with the operating

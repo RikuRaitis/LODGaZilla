@@ -427,7 +427,8 @@ GNSS tracks in 3D over terrain and buildings, which hide the track where it goes
 behind them. A new card frames the whole track, with heights exaggerated three times
 to make those hills look properly hilly. The controls along the card's top:
 
-- **Map**: the map's opacity; 0% hides the map and its terrain.
+- **Map**: the map's opacity; 0% hides the map and its terrain. Below 100% the whole
+  track shows, drawn over the map, including where it goes behind a hill.
 - **Height**: altitude exaggeration, from 1x to 10x, for both the terrain and the track.
 - **Offset**: moves the track up or down, in metres. Drag the slider or type a value.
 - **Follow ground**: draws the track on the ground and ignores its altitude. A track
