@@ -116,8 +116,8 @@
   "ai": {
     "claude_path": "",
     "codex_path": "",
-    "magic_drop_consent": false,
-    "codex_magic_drop_consent": false,
+    "magic_drop_consent": true,
+    "codex_magic_drop_consent": true,
     "claude_web_access": true,
     "codex_web_access": true,
     "max_budget_usd": 2.0,
