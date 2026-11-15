@@ -330,6 +330,11 @@ class AppSettingsTests(unittest.TestCase):
             editor = SettingsEditorWidget(path)
             self.addCleanup(editor.close)
             self.assertEqual(tuple(editor.tabs.tabText(i) for i in range(editor.tabs.count())), TAB_TITLES)
+            # The AI settings are on their own tab, not on General.
+            ai_tab = editor.tabs.widget(TAB_TITLES.index("AI"))
+            general_tab = editor.tabs.widget(TAB_TITLES.index("General"))
+            self.assertTrue(ai_tab.isAncestorOf(editor.ai_budget_spin))
+            self.assertFalse(general_tab.isAncestorOf(editor.ai_budget_spin))
             editor.plot_navigator_color_buttons["frequency"].set_color("#010203")
             editor.save()
             lodgazilla = load_lodgazilla_settings(path)

@@ -61,7 +61,7 @@ from src.plugins.installation import pending_requests, pending_status
 from src.plugins.updates import PluginUpdates
 from src.jobs.repository_sign_in import RepositorySignIn
 
-TAB_TITLES = ("General", "Navigator", "Plot navigator", "Plot", "Plugins", "HDF5 Cache")
+TAB_TITLES = ("General", "Navigator", "Plot navigator", "Plot", "Plugins", "AI", "HDF5 Cache")
 DEFAULT_METADATA_HELP = (
     "Metadata keys offered on every data folder, one per line, for example diver or place. "
     "Each appears as an editable entry under the folder's Info row and can be used in Group by, "
@@ -198,12 +198,13 @@ class SettingsEditorWidget(QWidget):
         self.tabs = QTabWidget(self)
         for title, groups in (
             ("General", (self.appearance_group(), self.default_info_metadata_group(), self.application_group(),
-                         self.ai_group(), self.demo_data_group())),
+                         self.demo_data_group())),
             ("Navigator", (self.navigator_group(), *self.navigator_diagnostics_groups())),
             ("Plot navigator", (self.plot_navigator_group(), self.plot_navigator_colors_group())),
             ("Plot", (self.markers_group(), self.series_colors_group(), self.plot_group(),
                       self.plot_heights_group())),
             ("Plugins", (self.plugins_group(),)),
+            ("AI", (self.ai_group(),)),
             ("HDF5 Cache", (self.hdf5_group(),)),
         ):
             self.tabs.addTab(scrolling_page(groups), title)

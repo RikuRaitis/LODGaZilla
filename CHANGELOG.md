@@ -18,6 +18,7 @@ All notable changes to LODGaZilla are listed here. The format follows
   session, place, device location) are gone. Existing settings keep their own.
 - New defaults: Markers linked and snapping to the nearest point on, the Plot navigator
   open, card Header controls hidden, and Hide irrelevant series off.
+- The AI settings have their own **AI** tab in Settings, after Plugins.
 
 ### Fixed
 

@@ -505,7 +505,7 @@ files may be sent to it (Claude to Anthropic, Codex to OpenAI). Don't drop files
 personal data, such as the location or heart rate of real people, unless you are
 allowed to share them. The answers, whether each tool may read web pages, the cost
 limit (Claude only, default $2 per drop or question) and the time limit (15 minutes)
-are in **Settings > General > AI**.
+are in **Settings > AI**.
 
 #### What the AI can do on your computer
 
