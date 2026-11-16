@@ -118,7 +118,8 @@ from src.data.navigator_data import read_h5_navigator_data
 from src.gui.plots.navigator import PlotNavigatorEntry, PlotNavigatorWidget
 from src.gui.plots.markers import SECOND_MARKER, set_marker_style, set_selection_style, set_sync_marker_color
 from src.gui.plots.base import set_series_colors
-from src.gui.plots.legend import PlotLegendWidget, set_legends_shown
+from src.gui.plots.legend import PlotLegendWidget, set_legend_width_percent, set_legends_shown
+from src.gui.plots.series_hover import set_series_name_hover_delay
 from src.app.internal_log import InternalLogger, InternalLogPanel, NativeStderrLogCapture
 from src.gui.ai.panel import CREATE_PLUGIN, NOT_CONNECTED_REPLY, AIPanel
 from src.gui.about_dialog import AboutDialog
@@ -454,7 +455,6 @@ class PlotWorkspace(QScrollArea):
         self.legends_shown = True
         # Legends read a module-wide flag; a new workspace starts it from its own state.
         set_legends_shown(self.legends_shown)
-        self.card_controls_shown = True
         self._synchronizing_vertical_marker = False
         self._global_marker_timestamp: float | None = None
         self._global_second_marker_timestamp: float | None = None
@@ -644,14 +644,19 @@ class PlotWorkspace(QScrollArea):
         plot.height_resize_requested.connect(self.resize_plot)
         plot.wheel_scrolled.connect(self.scroll_workspace)
         plot.time_offset_changed.connect(self.on_time_offset_changed)
-        plot.set_header_controls_shown(self.card_controls_shown)
         if isinstance(plot, TIME_CARD_TYPES):
             install_offset_x_link(plot.plot_view_box())
+            # The plot area also changes without a layout change: a workspace scroll bar
+            # appearing, or a wider Y axis. The Plot navigator and Timeline rows follow it.
+            plot.plot_view_box().sigResized.connect(self._plot_area_resized)
         self.splitter.add_card(plot, self.default_plot_heights[plot_type])
         self._update_workspace_minimum_height()
         self.activate_plot(plot)
         self._emit_plot_navigator_changed()
         return plot
+
+    def _plot_area_resized(self, *_args) -> None:
+        self.plot_layout_changed.emit()
 
     def add_line_plot(self, h5_path: Path, series_name: str) -> PlotBaseWidget:
         """Always create a regular time-series plot, including GNSS values."""
@@ -1228,12 +1233,6 @@ class PlotWorkspace(QScrollArea):
             for legend in plot.findChildren(PlotLegendWidget):
                 legend.apply_legends_shown()
 
-    def set_card_controls_shown(self, shown: bool) -> None:
-        """Show or hide the buttons in every card's Drag strip, including cards opened later."""
-        self.card_controls_shown = bool(shown)
-        for plot in self.plots():
-            plot.set_header_controls_shown(self.card_controls_shown)
-
     def update_time_axis_visibility(self) -> None:
         """Show the time axis on every time card, only on the lowest one, or on none."""
         time_cards = [plot for plot in self.plots()
@@ -1288,14 +1287,20 @@ class PlotWorkspace(QScrollArea):
                 plot.reload_plot_settings()
 
     def apply_marker_settings(self, plot_settings: dict[str, object]) -> None:
-        """Apply marker colors and width and the values box opacity to open cards."""
+        """Apply marker colors and width, the values box opacity, the Legend width and the
+        series name delay to open cards."""
         set_marker_style(str(plot_settings["first_marker_color"]), str(plot_settings["second_marker_color"]),
                          int(plot_settings["marker_width"]), int(plot_settings["marker_opacity_percent"]))
         set_selection_style(str(plot_settings["selection_color"]), int(plot_settings["selection_opacity_percent"]))
         set_sync_marker_color(str(plot_settings["sync_marker_color"]))
         set_value_box_opacity(int(plot_settings["values_box_opacity_percent"]))
         set_series_colors(plot_settings["series_colors"])
+        set_legend_width_percent(int(plot_settings["legend_width_percent"]))
+        set_series_name_hover_delay(int(plot_settings["series_name_hover_delay_ms"]))
         for plot in self.plots():
+            for legend in plot.findChildren(PlotLegendWidget):
+                if legend.isVisible():
+                    legend.reposition()
             if isinstance(plot, TWO_MARKER_CARD_TYPES):
                 plot.apply_marker_style()
             elif isinstance(plot, VideoPlotWidget):
@@ -2104,6 +2109,7 @@ class LODGaZillaWindow(QMainWindow):
         self._plot_navigator_alignment_timer.setInterval(50)
         self._plot_navigator_alignment_timer.timeout.connect(self.align_plot_navigator_to_plot_area)
         self.plot_workspace.plot_layout_changed.connect(self.schedule_plot_navigator_alignment)
+        self.plot_navigator.canvas_resized.connect(self.schedule_plot_navigator_alignment)
         self.plot_navigator.expanded_changed.connect(self.on_plot_navigator_expanded_changed)
         self.plot_navigator.plot_activated.connect(self.plot_workspace.activate_plot)
         self.plot_workspace.active_plot_changed.connect(self.plot_navigator.set_active_plot)
@@ -2124,7 +2130,6 @@ class LODGaZillaWindow(QMainWindow):
         self.plot_navigator.marker_info_display_changed.connect(self.set_marker_info_display)
         self.plot_navigator.time_axis_display_changed.connect(self.set_time_axis_display)
         self.plot_navigator.legends_visibility_changed.connect(self.set_legends_shown)
-        self.plot_navigator.card_controls_visibility_changed.connect(self.set_card_controls_shown)
         self.plot_navigator.snap_to_nearest_changed.connect(self.set_snap_to_nearest)
         self.plot_navigator.marker_link_changed.connect(self.set_markers_linked)
         self.plot_navigator.plot_views_link_changed.connect(self.set_plot_views_linked)
@@ -3652,20 +3657,17 @@ class LODGaZillaWindow(QMainWindow):
         self._plot_navigator_alignment_timer.start()
 
     def align_plot_navigator_to_plot_area(self) -> None:
-        """Use a line plot's real ViewBox edges, including dynamic Y-axis width."""
-        line_plot = next(
-            (
-                plot
-                for plot in self.plot_workspace.plots()
-                if isinstance(plot, LinePlotWidget)
-            ),
-            None,
-        )
-        if not isinstance(line_plot, LinePlotWidget) or not self.plot_navigator.canvas.isVisible():
+        """Use the first time card's real ViewBox edges, including dynamic Y-axis width,
+        so the Plot navigator's full range spans exactly the cards' plot area."""
+        time_card = next((plot for plot in self.plot_workspace.plots() if isinstance(plot, TIME_CARD_TYPES)), None)
+        if time_card is None or not self.plot_navigator.canvas.isVisible():
             return
         try:
-            plot_widget = line_plot.series_plot.plot_widget
-            bounds = line_plot.plot_view_box().sceneBoundingRect()
+            view_box = time_card.plot_view_box()
+            plot_widget = view_box.getViewWidget()
+            if plot_widget is None:
+                return
+            bounds = view_box.sceneBoundingRect()
             left_local = plot_widget.mapFromScene(bounds.topLeft())
             right_local = plot_widget.mapFromScene(bounds.topRight())
             left_global = plot_widget.mapToGlobal(QPoint(left_local.x(), 0))
@@ -3817,9 +3819,7 @@ class LODGaZillaWindow(QMainWindow):
         self.plot_workspace.set_marker_info_display(str(self.lodgazilla_settings["marker_info_display"]))
         self.plot_workspace.set_time_axis_display(str(self.lodgazilla_settings["time_axis_display"]))
         self.plot_workspace.set_legends_shown(bool(self.lodgazilla_settings["show_legends"]))
-        self.plot_workspace.set_card_controls_shown(bool(self.lodgazilla_settings["show_card_controls"]))
         self.plot_navigator.set_legends_shown(bool(self.lodgazilla_settings["show_legends"]))
-        self.plot_navigator.set_card_controls_shown(bool(self.lodgazilla_settings["show_card_controls"]))
         self.plot_navigator.set_icon_size(int(self.lodgazilla_settings["plot_navigator_icon_size"]))
         self.plot_navigator.set_colors(dict(self.lodgazilla_settings["plot_navigator_colors"]))
         self.plot_navigator.set_show_time_row(bool(self.lodgazilla_settings["show_plot_navigator_time_row"]))
@@ -3893,12 +3893,6 @@ class LODGaZillaWindow(QMainWindow):
     def set_legends_shown(self, shown: bool) -> None:
         if self._update_lodgazilla_settings(lambda settings: settings.__setitem__("show_legends", bool(shown))):
             self.plot_workspace.set_legends_shown(bool(shown))
-
-    def set_card_controls_shown(self, shown: bool) -> None:
-        if self._update_lodgazilla_settings(
-            lambda settings: settings.__setitem__("show_card_controls", bool(shown))
-        ):
-            self.plot_workspace.set_card_controls_shown(bool(shown))
 
     def set_snap_to_nearest(self, enabled: bool) -> None:
         if self._update_lodgazilla_settings(

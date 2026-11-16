@@ -410,7 +410,7 @@ class MultiSeriesPlot(SeriesPlotWidget):
         if (lane is not None and not self._series_entries and len(self.filmstrips) == 1 and info.duration > 0
                 and not self.view_restored):
             # A card opened from a video alone shows the whole video.
-            self.plot_item.vb.setXRange(lane.start, lane.start + info.duration, padding=0.02)
+            self.plot_item.vb.setXRange(lane.start, lane.start + info.duration, padding=0)
         self.filmstrips_changed.emit()
         # The aspect ratio sets the frame slots, so request frames for the new slots.
         self._refresh_filmstrips()
@@ -734,6 +734,14 @@ class MultiSeriesPlot(SeriesPlotWidget):
             center = view_center + compression * (self._collective_centers[key] - view_center)
             self.transforms[key] = (gain, center - midpoint * gain)
         self.apply_transforms()
+
+    def series_name_at(self, position):
+        """The name of the trace, lane or filmstrip under a canvas position, for the hover name."""
+        key = self.hit_series(self.plot_widget.mapToScene(position))
+        if key is None:
+            return None
+        lane = next((lane for lane in self.filmstrips if lane.key == key), None)
+        return lane.path.name if lane is not None else series_legend_name(*key)
 
     def hit_series(self, point):
         """Hit-test displayed segments in pixels, independent of each Y scale."""

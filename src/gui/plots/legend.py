@@ -6,15 +6,18 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QObject, QPoint, QRect, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QRect, QTimer, Qt, Signal
 from shiboken6 import isValid
 from PySide6.QtGui import QColor, QDrag, QPainter, QPen, QPixmap, QPolygon
-from PySide6.QtWidgets import QColorDialog, QFrame, QHBoxLayout, QLabel, QMenu, QScrollArea, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QColorDialog, QFrame, QHBoxLayout, QLabel, QMenu, QScrollArea, QSizePolicy, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from src.data.plot_policy import SELECTION_MIME_TYPE
+from src.gui.elide import middle_elide_text
 from src.gui.plots.base import SERIES_MIME_TYPE, PlotBaseWidget, series_legend_name
 from src.gui.plots.data_drop import exec_data_drag
 from src.gui.plots.legend_groups import GROUP_MIME_TYPE
+from src.gui.plots.series_hover import install_series_name_hover
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,24 @@ def set_legends_shown(shown: bool) -> None:
     """Show or hide legends created from now on; open ones follow `apply_legends_shown`."""
     global _LEGENDS_SHOWN
     _LEGENDS_SHOWN = bool(shown)
+
+
+# Every Legend is this share of its card's width, from the Settings dialog; longer names
+# are shortened in the middle with "...", like the data folder field.
+LEGEND_WIDTH_PERCENT = [25]
+LEGEND_MINIMUM_WIDTH = 80
+# Space between a Legend and its card's right edge, in pixels.
+LEGEND_RIGHT_MARGIN = 4
+
+
+def set_legend_width_percent(percent: int) -> None:
+    """Use this Legend width; open legends follow on their next `reposition`."""
+    LEGEND_WIDTH_PERCENT[0] = max(10, min(60, int(percent)))
+
+
+def legend_width(card_width: int) -> int:
+    """The Legend width for a card this wide, in pixels."""
+    return max(LEGEND_MINIMUM_WIDTH, round(card_width * LEGEND_WIDTH_PERCENT[0] / 100))
 
 
 class PlotLegendWidget(QFrame):
@@ -95,6 +116,13 @@ class PlotLegendWidget(QFrame):
         self.layout.setContentsMargins(5, 4, 5, 4)
         self.layout.setSpacing(2)
         self.hide()
+        # The width follows the card's width, so follow the overlay's resizes.
+        overlay_parent.installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:  # type: ignore[no-untyped-def]
+        if watched is self.overlay_parent and event.type() == QEvent.Type.Resize and self.isVisible():
+            self.reposition()
+        return super().eventFilter(watched, event)
 
     def setVisible(self, visible: bool) -> None:  # noqa: N802 - Qt override
         # Cards show or hide their legend as their series change; the Legends button overrides that.
@@ -318,21 +346,43 @@ class PlotLegendWidget(QFrame):
         self._headers.clear()
         self.group_headers.clear()
 
+    def card_width(self) -> int:
+        """The width of the card this legend belongs to."""
+        card = self.overlay_parent
+        while card is not None and not isinstance(card, PlotBaseWidget):
+            card = card.parentWidget()
+        return (card or self.overlay_parent).width()
+
     def reposition(self) -> None:
         if not self.rows:
             return
+        # The same share of the card's width on every card; names that do not fit are elided.
+        width = min(legend_width(self.card_width()), max(LEGEND_MINIMUM_WIDTH, self.overlay_parent.width() - 8))
         if self._scroll is not None:
             self.layout.activate()
             size = self.layout.sizeHint()
-            self._content.setMinimumSize(self.layout.minimumSize())
+            self._content.setMinimumHeight(self.layout.minimumSize().height())
             available = max(40, self.overlay_parent.height() - self.top_offset - 4)
-            self.setFixedSize(min(size.width() + 22, max(80, self.overlay_parent.width() - 38)),
-                              min(size.height() + 2, available))
+            self.setFixedSize(width, min(size.height() + 2, available))
         else:
-            self.adjustSize()
+            self.layout.activate()
+            self.setFixedSize(width, self.layout.sizeHint().height())
         y = max(4, min(self.top_offset, self.overlay_parent.height() - self.height() - 4))
-        self.move(max(4, self.overlay_parent.width() - self.width() - 30), y)
+        self.move(self._right_aligned_x(), y)
         self.raise_()
+
+    def _right_aligned_x(self) -> int:
+        """At the card's right edge, with a small margin, on every card."""
+        card = self.overlay_parent
+        while card is not None and not isinstance(card, PlotBaseWidget):
+            card = card.parentWidget()
+        overlay_right = self.overlay_parent.width()
+        margin = LEGEND_RIGHT_MARGIN
+        if card is not None:
+            # The card's frame already keeps the overlay a few pixels from its edge.
+            card_right = self.overlay_parent.mapFrom(card, QPoint(card.width(), 0)).x()
+            margin = max(0, LEGEND_RIGHT_MARGIN - max(0, card_right - overlay_right))
+        return max(4, overlay_right - self.width() - margin)
 
 
 def _swap_cursor():
@@ -393,8 +443,15 @@ class _LegendLabel(QLabel):
     component_requested = Signal(int, str)
 
     def __init__(self, entry: LegendEntry, parent: QWidget) -> None:
-        super().__init__(entry.text, parent)
+        super().__init__(parent)
+        self._full_text = ""
+        # The row gets the legend's width; a name that does not fit is shortened in the middle.
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(8)
+        self.setText(entry.text)
         self.entry = entry
+        # Resting the pointer on a row shows its whole name, also when it is shortened.
+        install_series_name_hover(self, lambda _position: self.hover_name())
         self.source_plot = parent
         while self.source_plot is not None and not isinstance(self.source_plot, PlotBaseWidget):
             self.source_plot = self.source_plot.parentWidget()
@@ -405,6 +462,34 @@ class _LegendLabel(QLabel):
             self.setStyleSheet("font-style: italic; color: palette(mid); border: none;")
         if entry.draggable:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt override
+        self._full_text = str(text)
+        self._show_elided_text()
+
+    def full_text(self) -> str:
+        """The row's whole name, also when it is shown shortened."""
+        return self._full_text
+
+    def hover_name(self) -> str | None:
+        """The row's whole name; an empty axis row has none."""
+        entry = self.entry
+        if entry.replaceable and entry.source is None and entry.group_sources is None:
+            return None
+        return entry.text or None
+
+    def is_elided(self) -> bool:
+        return super().text() != self._full_text
+
+    def _show_elided_text(self) -> None:
+        width = self.contentsRect().width()
+        shown = middle_elide_text(self._full_text, self.fontMetrics(), width) if width > 0 else self._full_text
+        if shown != super().text():
+            super().setText(shown)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        self._show_elided_text()
 
     def contextMenuEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if self.entry.group_sources is not None:

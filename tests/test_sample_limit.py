@@ -96,12 +96,13 @@ class SampleLimitSelectorTests(unittest.TestCase):
                     self.addCleanup(card.deleteLater)
                     card.resize(700, 300)
                     card.show()
+                    card.set_header_controls_shown(True)
                     self.app.processEvents()
                     combo = card.sample_limit_combo
                     self.assertEqual(card.sample_limit, default)
                     self.assertEqual(combo.currentData(), default)
                     # The Offset and Help buttons sit next to Close; the selector comes next.
-                    self.assertEqual(card.offset_button.geometry().right() + 2, card.close_button.x() - 1)
+                    self.assertEqual(card.offset_button.geometry().right() + 2, card.controls_button.x() - 1)
                     self.assertEqual(card.help_button.geometry().right() + 2, card.offset_button.x() - 1)
                     self.assertEqual(combo.geometry().right() + 2, card.help_button.x() - 1)
                     if card_type is XYZPlotWidget:
@@ -182,6 +183,7 @@ class SampleLimitSelectorTests(unittest.TestCase):
         card.header_controls.append(right)
         card.resize(600, 200)
         card.show()
+        card.set_header_controls_shown(True)
         self.app.processEvents()
         center = card.close_button.geometry().center().y()
         self.assertEqual(left.x(), 8)

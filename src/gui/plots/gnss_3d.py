@@ -32,7 +32,8 @@ from src.gui.plots.icons import plot_control_icon
 from src.gui.plots.theme import apply_map_background, canvas_background, palette_overlay_stylesheet
 from src.gui.plots.base import PlotBaseWidget, series_legend_name
 from src.gui.plots.legend import PlotLegendWidget
-from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup
+from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup, group_display_name
+from src.gui.plots.series_hover import HIT_TOLERANCE_PIXELS, SeriesNameHover
 from src.data.xyz import AxisSource, interpolated_values
 from src.jobs.plot_groups import GroupedPlotLoadCoordinator
 from src.data.h5_series import _navigator_series_names
@@ -176,6 +177,9 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.bridge = Gnss3DBridge(self)
         self.channel.registerObject("gnssBridge", self.bridge)
         self.map_view.page().setWebChannel(self.channel)
+        # Each drawn track's sources; the page names the track under a resting pointer.
+        self._track_names: list[str] = []
+        self._name_hover = SeriesNameHover(self.map_view, self._track_name_at)
         self.bridge.point_selected.connect(lambda timestamp: self._place_marker_from_view(FIRST_MARKER, timestamp))
         self.bridge.second_point_selected.connect(
             lambda timestamp: self._place_marker_from_view(SECOND_MARKER, timestamp))
@@ -261,7 +265,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         for container in groups:
             container.setStyleSheet(palette_overlay_stylesheet())
             container.adjustSize()
-        # Hidden and shown with the other header controls (the Plot navigator's Card controls button).
+        # Hidden and shown with the other header controls (the card's Card controls button).
         self.header_left_controls.extend(groups)
         self.map_opacity.valueChanged.connect(self._set_map_opacity)
         self.follow_ground.toggled.connect(self._set_follow_ground)
@@ -378,11 +382,13 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.update_sample_coverage(results)
         fit = not self._track_data
         self._track_data = []
+        self._track_names = []
         for index, track in enumerate(results):
             if isinstance(track, dict):
                 color = self.grouped_series.groups[index].color.lstrip("#")
                 track["color"] = [int(color[offset:offset + 2], 16) for offset in (0, 2, 4)]
                 self._track_data.append(track)
+                self._track_names.append(group_display_name(self.grouped_series.groups[index]))
         self._update_legend_labels()
         if self._map_page_loaded:
             self._push_tracks(fit)
@@ -483,6 +489,9 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self._map_page_failed = not success
         if success:
             apply_map_background(self)
+            # Pointer events reach the page's input widget, which exists once it has loaded.
+            if self.map_view.focusProxy() is not None:
+                self._name_hover.watch(self.map_view.focusProxy())
             self._push_tracks(True)
             self.map_stack.setCurrentWidget(self.map_view)
             self._set_map_opacity(self.map_opacity.value())
@@ -495,6 +504,16 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
             self._refresh_value_box_positions()
         else:
             self.loading.setText("Could not load 3D map")
+
+    def _track_name_at(self, position, done) -> None:  # type: ignore[no-untyped-def]
+        if not self._map_page_loaded:
+            done(None)
+            return
+        names = list(self._track_names)
+        self.map_view.page().runJavaScript(
+            f"trackAt({position.x()},{position.y()},{HIT_TOLERANCE_PIXELS})",
+            lambda index: done(names[int(index)] if isinstance(index, (int, float)) and 0 <= index < len(names)
+                               else None))
 
     def _set_map_opacity(self, value: int) -> None:
         """Fade only MapLibre layers; the deck.gl GNSS route stays opaque. 0% hides the map."""
@@ -780,6 +799,25 @@ function screenPoint(p){{
   const q=map.project([p[0],p[1]]);return [q.x,q.y];
 }}
 function markerScreenPositions(t){{return tracks.map(track=>{{const i=nearestIndex(track,t);return i<0?null:screenPoint(trackPoint(track,i))}})}}
+// The track drawn within tol pixels of a view point, or -1; for the hover name.
+function trackAt(x,y,tol){{
+  let best=tol*tol,found=-1;
+  tracks.forEach((track,index)=>{{
+    let prev=null;
+    for(let i=0;i<track.coordinates.length;i++){{
+      const q=screenPoint(trackPoint(track,i));
+      let d=(q[0]-x)**2+(q[1]-y)**2;
+      if(prev&&viewSettings.drawStyle!=='points'){{
+        const vx=q[0]-prev[0],vy=q[1]-prev[1],len=vx*vx+vy*vy;
+        const t=len>0?Math.max(0,Math.min(1,((x-prev[0])*vx+(y-prev[1])*vy)/len)):0;
+        d=Math.min(d,(prev[0]+t*vx-x)**2+(prev[1]+t*vy-y)**2);
+      }}
+      if(d<=best){{best=d;found=index}}
+      prev=q;
+    }}
+  }});
+  return found;
+}}
 function nearestTime(point){{
   let best=null;
   tracks.forEach(track=>(track.time||[]).forEach((t,i)=>{{

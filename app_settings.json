@@ -29,7 +29,9 @@
       "#00897b",
       "#9e9d24",
       "#757575"
-    ]
+    ],
+    "legend_width_percent": 25,
+    "series_name_hover_delay_ms": 700
   },
   "lodgazilla": {
     "navigator_width_ratio": 0.24,
@@ -53,7 +55,6 @@
     "marker_info_display": "active",
     "time_axis_display": "none",
     "show_legends": false,
-    "show_card_controls": false,
     "show_plot_navigator_time_row": true,
     "plot_navigator_expanded": true,
     "ai_panel_expanded": true,

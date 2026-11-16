@@ -83,6 +83,7 @@ class CardHeaderTests(_QtTestCase):
         self.widgets.append(card)
         card.resize(900, 300)
         card.show()
+        card.set_header_controls_shown(True)
         self.app.processEvents()
         controls = [control for control in card.header_controls if not control.isHidden()]
         row_bottom = card.close_button.geometry().bottom()

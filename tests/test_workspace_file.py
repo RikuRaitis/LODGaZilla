@@ -276,6 +276,7 @@ class CardStateTests(unittest.TestCase):
             card.set_axis_component(2, "time")
             card.view.setCameraPosition(pos=QVector3D(1, 2, 3), distance=9, elevation=10, azimuth=-30)
             card.sample_limit_combo.setCurrentIndex(card.sample_limit_combo.count() - 1)
+            card.axes_combo.setCurrentIndex(card.axes_combo.findData("corner"))
 
         with mock.patch.object(XYZPlotWidget, "view_class", CameraView):
             saved, restored, card = self.round_trip(
@@ -285,6 +286,7 @@ class CardStateTests(unittest.TestCase):
         self.assertEqual(len(card.traces), 2)
         self.assertEqual(card.grouped_series.axis(2).component, "time")
         self.assertEqual(saved["camera"]["distance"], 9)
+        self.assertEqual((saved["axes_position"], card.axes_position), ("corner", "corner"))
 
     def test_frequency_keeps_fft_settings_peak_line_and_view(self):
         def change(card):  # type: ignore[no-untyped-def]
@@ -354,7 +356,6 @@ class WorkspaceMenuTests(unittest.TestCase):
         window.navigator.group_by_combo.setCurrentText("Year")
         window.set_markers_linked(False)
         window.set_legends_shown(False)
-        window.set_card_controls_shown(False)
         workspace_file = folder / "saved.umw"
         file_bar = window.navigator.controls
         with mock.patch("src.app.lodgazilla.QFileDialog.getSaveFileName", return_value=(str(workspace_file), "")):
@@ -367,7 +368,6 @@ class WorkspaceMenuTests(unittest.TestCase):
         window.navigator.group_by_combo.setCurrentText("Year/Month")
         window.set_markers_linked(True)
         window.set_legends_shown(True)
-        window.set_card_controls_shown(True)
         # The File bar's Open recent button shows the recent list.
         self.assertIs(file_bar.recent_workspaces_button.menu(), window.recent_workspaces_menu)
         window.populate_recent_workspaces_menu()
@@ -386,7 +386,6 @@ class WorkspaceMenuTests(unittest.TestCase):
         self.assertNotIn("plot_navigator", json.loads(workspace_file.read_text(encoding="utf-8")))
         self.assertTrue(window.plot_workspace.link_markers)
         self.assertTrue(window.plot_workspace.legends_shown)
-        self.assertTrue(window.plot_workspace.card_controls_shown)
         self.assertEqual(load_lodgazilla_settings(settings)["recent_workspaces"],
                          [str(workspace_file.resolve())])
         # Saving the Settings dialog keeps the list.

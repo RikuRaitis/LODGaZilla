@@ -1,4 +1,4 @@
-"""The Plot navigator's Legends and Card controls buttons."""
+"""The Plot navigator's Legends button and each card's Card controls button."""
 import os
 import unittest
 
@@ -51,34 +51,43 @@ class CardVisibilityTests(_QtTestCase):
         workspace.set_legends_shown(True)
         self.assertFalse(card.legend.isVisible())
 
-    def test_card_controls_hide_on_every_card_and_restore_their_states(self):
+    def test_each_card_opens_its_own_controls_and_closes_them_when_inactive(self):
         workspace = self.workspace()
         path = self.make_cache()
         card = workspace.add_line_plot(path, "a")
+        other = workspace.add_line_plot(path, "b")
         self.app.processEvents()
-        controls = [card.close_button, card.help_button, card.offset_button]
-        self.assertTrue(all(control.isVisible() for control in controls))
-        card.offset_button.click()  # An open Offset editor closes with the controls.
-        workspace.set_card_controls_shown(False)
-        self.assertFalse(any(control.isVisible() for control in (card.offset_button, card.offset_editor)))
-        # Close and Help stay, with Help moved next to Close.
-        self.assertTrue(card.close_button.isVisible() and card.help_button.isVisible())
-        self.assertEqual(card.help_button.geometry().right() + 2, card.close_button.x() - 1)
-        self.assertTrue(card.drag_handle.isVisible())
-        # Controls a card shows while hidden stay hidden, and cards opened later start hidden.
-        card.offset_button.show()
-        card._layout_header_controls()
-        self.assertFalse(card.offset_button.isVisible())
-        later = workspace.add_line_plot(path, "b")
-        self.app.processEvents()
-        self.assertFalse(later.offset_button.isVisible())
-        self.assertTrue(later.close_button.isVisible() and later.help_button.isVisible())
-        workspace.set_card_controls_shown(True)
-        for plot in (card, later):
-            self.assertTrue(all(control.isVisible()
-                                for control in (plot.close_button, plot.help_button, plot.offset_button)))
-            self.assertFalse(plot.offset_editor.isVisible())
-        self.assertEqual(card.offset_button.geometry().right() + 2, card.close_button.x() - 1)
+        # Only Close and the Card controls button show by default; Help is a card control.
+        for plot in (card, other):
+            self.assertTrue(plot.close_button.isVisible() and plot.controls_button.isVisible())
+            self.assertFalse(any(control.isVisible() for control in (plot.help_button, plot.offset_button)))
+            self.assertTrue(plot.drag_handle.isVisible())
+        # Close is the rightmost button, with the Card controls button beside it.
+        self.assertEqual(card.controls_button.geometry().right() + 2, card.close_button.x() - 1)
+        # Its click makes the card active and shows its controls, Help included.
+        card.controls_button.click()
+        self.assertIs(workspace.active_plot, card)
+        self.assertTrue(card.controls_button.isChecked())
+        self.assertTrue(all(control.isVisible() for control in (card.help_button, card.offset_button)))
+        self.assertEqual(card.offset_button.geometry().right() + 2, card.controls_button.x() - 1)
+        self.assertEqual(card.help_button.geometry().right() + 2, card.offset_button.x() - 1)
+        self.assertFalse(other.offset_button.isVisible())
+        # Controls a card shows while closed stay hidden.
+        other.offset_button.show()
+        other._layout_header_controls()
+        self.assertFalse(other.offset_button.isVisible())
+        # When another card becomes active, the controls close; an open Offset editor too.
+        card.offset_button.click()
+        workspace.activate_plot(other)
+        self.assertFalse(card.controls_button.isChecked())
+        self.assertFalse(any(control.isVisible() for control in (card.offset_button, card.offset_editor,
+                                                                 card.help_button)))
+        # A second click on an open card's button closes its controls; the card stays active.
+        other.controls_button.click()
+        self.assertTrue(other.offset_button.isVisible())
+        other.controls_button.click()
+        self.assertFalse(other.offset_button.isVisible())
+        self.assertIs(workspace.active_plot, other)
 
     def test_drag_strip_is_tinted_while_the_pointer_is_over_it(self):
         from PySide6.QtCore import QEvent, QPointF
@@ -121,17 +130,16 @@ class CardVisibilityTests(_QtTestCase):
     def test_navigator_buttons_emit_and_show_saved_states_quietly(self):
         navigator = PlotNavigatorWidget()
         self.widgets.append(navigator)
-        legends, controls = [], []
+        legends = []
         navigator.legends_visibility_changed.connect(legends.append)
-        navigator.card_controls_visibility_changed.connect(controls.append)
         navigator.legends_button.click()
-        navigator.card_controls_button.click()
-        self.assertEqual((legends, controls), ([False], [False]))
+        self.assertEqual(legends, [False])
         self.assertEqual(navigator.legends_button.toolTip(), "Legends hidden")
         navigator.set_legends_shown(True)
-        navigator.set_card_controls_shown(True)
-        self.assertEqual((legends, controls), ([False], [False]))
-        self.assertEqual(navigator.card_controls_button.toolTip(), "Card controls shown")
+        self.assertEqual(legends, [False])
+        self.assertEqual(navigator.legends_button.toolTip(), "Legends shown")
+        # Card controls are per card now; the Plot navigator has no button for them.
+        self.assertFalse(hasattr(navigator, "card_controls_button"))
 
     def test_plugins_group_shows_one_icon_per_launcher_and_emits_its_plugin(self):
         navigator = PlotNavigatorWidget()

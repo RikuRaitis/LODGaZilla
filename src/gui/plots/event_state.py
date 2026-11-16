@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from src.gui.plots.interactive import InteractivePlotWidget
 from src.gui.plots.selection_info import SelectionDurationInfo
+from src.gui.plots.series_hover import install_series_name_hover, name_at_canvas_point
 from src.gui.plots.base import (
     SERIES_COLORS, PlotBaseWidget, apply_view_range_state, assign_series_colors, series_legend_name, state_entry,
     view_range_state,
@@ -285,6 +286,9 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.plot_widget.second_marker_cleared.connect(self.second_marker_cleared)
         self.plot_widget.time_axis_representation_changed.connect(self.time_axis_representation_changed)
         self.plot_item = self.plot_widget.getPlotItem()
+        # Auto-ranged time fits the data exactly, so lanes reach the plot area's edges where the
+        # Plot navigator's full range ends; the lanes' vertical range is set explicitly.
+        self.plot_item.getViewBox().setDefaultPadding(0.0)
         self.plot_item.showGrid(x=True, y=False, alpha=0.2)
         apply_plot_palette(self.plot_widget)
         self.plot_item.hideButtons()
@@ -333,6 +337,10 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.plot_item.vb.sigXRangeChanged.connect(lambda *_args: self._schedule_visible_reload())
         self.legend = EventStateLegend(self.plot_widget, self)
         self.content_layout.addWidget(self.plot_widget, stretch=1)
+        # Each lane's bars, with its series name, for the name shown while the pointer rests on one.
+        self._lane_hover_items: list[tuple[object, str]] = []
+        install_series_name_hover(self.plot_widget.viewport(),
+                                  lambda position: name_at_canvas_point(self.plot_widget, position, self._lane_hover_items))
         self.on_series_changed()
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
@@ -616,7 +624,10 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
             self._window_reload_in_progress = False
 
     def _draw_lane(self, lane, data, color, series_index):
-        self._items.extend(render_event_state_lane(self.plot_item, lane, data, color))
+        items = render_event_state_lane(self.plot_item, lane, data, color)
+        self._items.extend(items)
+        name = series_legend_name(*self.series[series_index]) if 0 <= series_index < len(self.series) else ""
+        self._lane_hover_items.extend((item, name) for item in items if isinstance(item, pg.BarGraphItem))
 
     def _legend_entries(self) -> list[tuple[str, str, int, str | None]]:
         entries: list[tuple[str, str, int, str | None]] = []
@@ -628,6 +639,7 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
         for item in self._items:
             self.plot_item.removeItem(item)
         self._items.clear()
+        self._lane_hover_items = []
 
     def _clear_lane_axis_labels(self) -> None:
         for label in self._lane_axis_labels:

@@ -164,6 +164,11 @@ class SettingsEditorWidget(QWidget):
         # Default colors for new series, tracks and lanes, in the order they are used.
         self.series_color_buttons = [ColorButton(f"Series {number}") for number in range(1, 7)]
         self.values_box_opacity_spin = integer_spinbox(0, 100, " %")
+        self.legend_width_spin = integer_spinbox(10, 60, " %")
+        self.legend_width_spin.setToolTip("Legend width as a share of the card width")
+        self.series_name_hover_delay_spin = integer_spinbox(100, 5_000, " ms")
+        self.series_name_hover_delay_spin.setSingleStep(100)
+        self.series_name_hover_delay_spin.setToolTip("Pointer rest time before a series name is shown")
         self.default_plot_height_spins = {
             key: integer_spinbox(minimum, 2_000, " px")
             for key, (_, _, minimum) in PLOT_HEIGHT_SETTINGS.items()
@@ -335,6 +340,8 @@ class SettingsEditorWidget(QWidget):
     def plot_group(self) -> QGroupBox:
         group, layout = form_group("Cards")
         layout.addRow("Same time format on all time cards", self.link_plot_time_format_checkbox)
+        layout.addRow("Legend width", self.legend_width_spin)
+        layout.addRow("Series name delay", self.series_name_hover_delay_spin)
         layout.addRow("Minimum warning band width", self.minimum_diagnostic_width_pixels_spin)
         layout.addRow("Multi-series: selected trace width", self.multi_selected_line_width_spin)
         layout.addRow("Multi-series: lane height", self.multi_series_lane_height_spin)
@@ -570,6 +577,8 @@ class SettingsEditorWidget(QWidget):
         self.sync_marker_color_button.set_color(str(plot_settings["sync_marker_color"]))
         self.selection_opacity_spin.setValue(int(plot_settings["selection_opacity_percent"]))
         self.values_box_opacity_spin.setValue(int(plot_settings["values_box_opacity_percent"]))
+        self.legend_width_spin.setValue(int(plot_settings["legend_width_percent"]))
+        self.series_name_hover_delay_spin.setValue(int(plot_settings["series_name_hover_delay_ms"]))
         colors = plot_settings["series_colors"]
         for index, button in enumerate(self.series_color_buttons):
             if index < len(colors):
@@ -678,6 +687,8 @@ class SettingsEditorWidget(QWidget):
             "selection_opacity_percent": self.selection_opacity_spin.value(),
             "values_box_opacity_percent": self.values_box_opacity_spin.value(),
             "series_colors": [button.color() for button in self.series_color_buttons],
+            "legend_width_percent": self.legend_width_spin.value(),
+            "series_name_hover_delay_ms": self.series_name_hover_delay_spin.value(),
         })
         data[LODGAZILLA_SECTION] = sanitize_lodgazilla_settings({
             **section_mapping(data, LODGAZILLA_SECTION),

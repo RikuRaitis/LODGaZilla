@@ -75,6 +75,10 @@ DEFAULT_PLOT_SETTINGS: dict[str, Any] = {
     # Background opacity of the per-series values boxes.
     "values_box_opacity_percent": 70,
     "series_colors": list(SERIES_COLOR_DEFAULTS),
+    # Width of every card's Legend, as a percentage of the card width; longer names end in "...".
+    "legend_width_percent": 25,
+    # How long the pointer rests on a series before its name is shown, in milliseconds.
+    "series_name_hover_delay_ms": 700,
 }
 # Card key: (settings label, default height, minimum height), in pixels.
 PLOT_HEIGHT_SETTINGS: dict[str, tuple[str, int, int]] = {
@@ -101,9 +105,8 @@ DEFAULT_LODGAZILLA_SETTINGS: dict[str, Any] = {
     "marker_info_display": "active",
     # Time axis on every time card, only on the bottom one, or on none.
     "time_axis_display": "none",
-    # The Plot navigator's Legends and Card controls buttons.
+    # The Plot navigator's Legends button.
     "show_legends": False,
-    "show_card_controls": False,
     "show_plot_navigator_time_row": True,
     "plot_navigator_expanded": True,
     # The AI panel below the Navigator is open (at its minimum height) or one row.
@@ -471,6 +474,8 @@ def sanitize_plot_settings(raw_settings: dict[str, Any]) -> dict[str, Any]:
         "sync_marker_color": color_setting(raw_settings.get("sync_marker_color"), "#8e49e6"),
         "values_box_opacity_percent": bounded_int(raw_settings.get("values_box_opacity_percent"), 0, 100, 70),
         "series_colors": series_color_setting(raw_settings.get("series_colors")),
+        "legend_width_percent": bounded_int(raw_settings.get("legend_width_percent"), 10, 60, 25),
+        "series_name_hover_delay_ms": bounded_int(raw_settings.get("series_name_hover_delay_ms"), 100, 5_000, 700),
     }
 
 
@@ -540,7 +545,6 @@ def sanitize_lodgazilla_settings(raw_settings: dict[str, Any]) -> dict[str, Any]
         if str(raw_settings.get("time_axis_display", "none")) in TIME_AXIS_DISPLAY_MODES
         else "none",
         "show_legends": bool(raw_settings.get("show_legends", False)),
-        "show_card_controls": bool(raw_settings.get("show_card_controls", False)),
         "show_plot_navigator_time_row": bool(
             raw_settings.get("show_plot_navigator_time_row", True)
         ),

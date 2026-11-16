@@ -14,6 +14,8 @@ COMMON = (
                         "a Video card dropped on a Multi-series card's legend adds its video as a filmstrip."),
     ("Bottom edge: drag", "Change the card's height."),
     ("Click", "Make this the active card."),
+    ("Click the card controls icon", "Make this the active card and show its controls, this help among them; "
+                                     "they hide when another card becomes active."),
     ("Click the clock icon", "Set the card's time offset; it only moves what the card shows. Not on image cards."),
     ("Wheel", "Scroll the plot workspace."),
 )
@@ -49,6 +51,16 @@ _GROUP_LEGEND = (
     ("Right-click a legend axis row", "Plot the source's values or its time."),
     ("Click a group color", "Change the group color."),
 )
+_NAMES = (
+    ("Rest the pointer on a series or legend row", "Show the series' whole name; it hides as soon as the pointer "
+                                                   "moves. Set the delay in Settings, Plot."),
+)
+_FREQUENCY_LEGEND = (
+    ("Drag the legend row", "Move the series to another card."),
+    ("Right-click the legend row", "Remove the series and close the card."),
+    ("Click the legend color", "Change the strongest-frequency line color."),
+    ("Drop a series on the legend", "Show that series instead."),
+)
 _POINT_MARKERS = (
     ("Left-click", "Place the red first marker on the nearest point."),
     ("Right-click", "Place the green second marker on the nearest point. The stretch between the markers is "
@@ -56,12 +68,12 @@ _POINT_MARKERS = (
 )
 
 MOUSE_HELP = {
-    "line": _TIME + _Y_AXIS + _VALUES + _LEGEND,
-    "interval": _TIME + _Y_AXIS + _VALUES + _LEGEND,
-    "event": _TIME + _VALUES + _LEGEND,
+    "line": _TIME + _Y_AXIS + _VALUES + _LEGEND + _NAMES,
+    "interval": _TIME + _Y_AXIS + _VALUES + _LEGEND + _NAMES,
+    "event": _TIME + _VALUES + _LEGEND + _NAMES,
     "frequency": _TIME + _Y_AXIS + (
         ("FFT settings button", "Change the FFT window, scale and strongest-frequency line."),
-    ) + _VALUES + _LEGEND,
+    ) + _VALUES + _FREQUENCY_LEGEND + _NAMES,
     "multi": (
         ("Left-click a trace", "Select it and place the red first marker."),
         ("Drag a trace up or down", "Move that series' lane."),
@@ -71,20 +83,21 @@ MOUSE_HELP = {
         ("Ctrl+wheel over the left axis", "Scale the selected series, or all numeric series if none is selected."),
     ) + tuple(row for row in _TIME if row[0] != "Left-click") + (
         ("Drag a filmstrip legend row", "Move the video to another Multi-series card."),
-    ) + _VALUES + _LEGEND,
+    ) + _VALUES + _LEGEND + _NAMES,
     "xy": _POINT_MARKERS + (
         ("Double-click (left / right)", "Remove the first / second marker."),
         ("Drag the plot", "Pan."),
         ("Right-drag the plot", "Zoom each axis."),
         ("Ctrl+wheel over the plot", "Zoom."),
-    ) + _VALUES + _GROUP_LEGEND,
+    ) + _VALUES + _GROUP_LEGEND + _NAMES,
     "xyz": _POINT_MARKERS + (
         ("Double-click (left / right)", "Remove the first / second marker."),
         ("Drag the view", "Rotate the camera."),
         ("Ctrl+drag the view", "Pan the camera."),
         ("Ctrl+wheel over the view", "Zoom the camera."),
         ("Reset camera button", "Return to the initial view."),
-    ) + _VALUES + _GROUP_LEGEND,
+        ("Axes selector", "Draw the axes through 0, 0, 0, or along the corner of the data box."),
+    ) + _VALUES + _GROUP_LEGEND + _NAMES,
     "gnss": _POINT_MARKERS + (
         ("Double-click", "Remove the first marker."),
         ("Right-click twice quickly", "Remove the second marker."),
@@ -92,14 +105,14 @@ MOUSE_HELP = {
         ("Shift+drag the map", "Zoom to the dragged box."),
         ("Ctrl+wheel over the map", "Zoom."),
         ("Street / Satellite", "Change the map type."),
-    ) + _VALUES + _GROUP_LEGEND,
+    ) + _VALUES + _GROUP_LEGEND + _NAMES,
     "gnss_3d": _POINT_MARKERS + (
         ("Double-click", "Remove the first marker."),
         ("Right-click twice quickly", "Remove the second marker."),
         ("Drag the map", "Pan."),
         ("Right-drag the map", "Tilt and rotate; drag upward to tilt toward the ground."),
         ("Ctrl+wheel over the map", "Zoom."),
-    ) + _VALUES + _GROUP_LEGEND,
+    ) + _VALUES + _GROUP_LEGEND + _NAMES,
     "video": (
         ("Drag the video (360°)", "Look around."),
         ("Ctrl+drag the video", "Roll the view."),

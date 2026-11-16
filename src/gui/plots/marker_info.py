@@ -18,6 +18,9 @@ class MarkerInfoEntry:
     color: str
     value: str
     details: tuple[str, ...]
+    # The series' whole name, such as "run1/Speed", for the values box details; empty
+    # when the box's series names it (see `value_boxes.full_series_name`).
+    full_name: str = ""
 
 
 class MarkerInfoBox(QTextBrowser):

@@ -5,7 +5,7 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QVector3D
-from PySide6.QtWidgets import QApplication, QToolButton
+from PySide6.QtWidgets import QApplication, QComboBox, QToolButton
 
 from src.data.xyz import XYZ_MAXIMUM_POINTS, AxisSource, XYZData
 from src.gui.plots.base import PlotBaseWidget
@@ -13,12 +13,33 @@ from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.icons import plot_control_icon
 from src.gui.plots.theme import canvas_background
 from src.gui.plots.legend import PlotLegendWidget
+from src.gui.plots.legend_groups import group_display_name
+from src.gui.plots.series_hover import HIT_TOLERANCE_PIXELS, distance_squared, install_series_name_hover
 from src.gui.plots.marker_info import MarkerInfoEntry
 from src.gui.plots.markers import (
     FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.jobs.xyz import XYZLoadCoordinator
+
+
+# Where the 3D plot draws its axes: through the data's 0, 0, 0, or along the box's minimum corner.
+AXES_ORIGIN = "origin"
+AXES_CORNER = "corner"
+AXES_POSITIONS = {AXES_ORIGIN: "Axes at 0, 0, 0", AXES_CORNER: "Axes at corner"}
+
+
+def axes_origin(low, high, position: str):  # type: ignore[no-untyped-def]
+    """Scene position, in the -1..1 box, where the three axes meet.
+
+    At the origin, a 0 outside an axis' data range is held at the nearest box edge,
+    so the axes stay with the data.
+    """
+    if position != AXES_ORIGIN:
+        return np.full(3, -1.0)
+    low, high = np.asarray(low, dtype=float), np.asarray(high, dtype=float)
+    scale = np.where(high > low, (high - low) / 2, 1.0)
+    return np.clip((0.0 - (low + high) / 2) / scale, -1.0, 1.0)
 
 
 def axis_tick_label(axis_name: str, low: float, high: float, fraction: float) -> str:
@@ -132,6 +153,18 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self.reset_button.setIcon(plot_control_icon(self, "reset-camera"))
         self.reset_button.clicked.connect(self.reset_camera)
         self.header_controls.append(self.reset_button)
+        self.axes_position = AXES_ORIGIN
+        self.axes_combo = QComboBox(self)
+        self.axes_combo.setAccessibleName("Axes position")
+        self.axes_combo.setToolTip("Axes position")
+        for position, title in AXES_POSITIONS.items():
+            self.axes_combo.addItem(title, position)
+        self.axes_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.axes_combo.setFixedHeight(self.close_button.height() - 2)
+        self.axes_combo.adjustSize()
+        self.axes_combo.currentIndexChanged.connect(
+            lambda index: self.set_axes_position(self.axes_combo.itemData(index)))
+        self.header_controls.append(self.axes_combo)
         self.view = self.view_class(self)
         self.view.setMinimumHeight(100)
         self.view.scroll_requested.connect(self.wheel_scrolled)
@@ -142,8 +175,23 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self.content_layout.addWidget(self.view, 1)
         self.legend = PlotLegendWidget(self.view)
         self.legend.set_group_model(self.grouped_series)
+        # A trace's sources are named while the pointer rests on it.
+        install_series_name_hover(self.view, self.series_name_at)
         self.reset_camera()
         self.add_trace((x_entry, y_entry, z_entry))
+
+    def series_name_at(self, position):
+        """The trace drawn under a view position, named by its sources, for the hover name."""
+        best, found = HIT_TOLERANCE_PIXELS ** 2, None
+        for trace, positions in zip(self.traces, self._scene_positions):
+            if positions is None or not len(positions):
+                continue
+            pixels = self.view.project(positions)
+            distance = distance_squared((pixels[:, 0], pixels[:, 1]), position.x(), position.y(),
+                                        lines=self.draw_style != "points")
+            if distance <= best:
+                best, found = distance, group_display_name(trace)
+        return found
 
     def add_trace(self, entries):
         if len(entries) != 3:
@@ -242,27 +290,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
                 self._add_item(gl.GLScatterPlotItem(pos=positions[valid].astype(np.float32), color=color,
                                                     size=4 if self.draw_style == "points" else 3, pxMode=True,
                                                     glOptions="opaque"))
-        text_color = self.palette().text().color()
-        font = QFont(self.font())
-        font.setPointSize(9)
-        minimums = []
-        for axis_index, axis_name in enumerate("XYZ"):
-            start, end = np.full(3, -1.0), np.full(3, -1.0)
-            end[axis_index] = 1.0
-            self._add_item(gl.GLLinePlotItem(pos=np.array([start, end]), color=pg.glColor(text_color), width=1, glOptions="opaque"))
-            for fraction in (0, 0.5, 1):
-                label = axis_tick_label(axis_name, low[axis_index], high[axis_index], fraction)
-                if fraction == 0:
-                    minimums.append(label)
-                    continue
-                pos = start.copy()
-                pos[axis_index] = -1 + 2 * fraction
-                pos[(axis_index + 1) % 3] -= 0.16
-                self._add_item(gl.GLTextItem(pos=pos, text=label, color=text_color, font=font))
-        # The three axes start at one corner: one label lists their minimums, where three would overlap.
-        # Just above the corner, clear of the X and Y labels beside and below it.
-        self._add_item(gl.GLTextItem(pos=np.array([-1.0, -1.0, -0.84]), text="  ".join(minimums),
-                                     color=text_color, font=font))
+        self._draw_axes(low, high)
         self._update_legend()
         # New scene positions: the marker items are made again for them.
         self._clear_marker_items()
@@ -270,6 +298,44 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         for index in (FIRST_MARKER, SECOND_MARKER):
             if self._value_box_times[index] is not None:
                 self.show_marker_data(self._value_box_times[index], index)
+
+    def _draw_axes(self, low, high):  # type: ignore[no-untyped-def]
+        """Each axis spans the data's range through the point the Axes position selector chooses."""
+        text_color = self.palette().text().color()
+        font = QFont(self.font())
+        font.setPointSize(9)
+        origin = axes_origin(low, high, self.axes_position)
+        corner = self.axes_position != AXES_ORIGIN
+        minimums = []
+        for axis_index, axis_name in enumerate("XYZ"):
+            start, end = origin.copy(), origin.copy()
+            start[axis_index], end[axis_index] = -1.0, 1.0
+            self._add_item(gl.GLLinePlotItem(pos=np.array([start, end]), color=pg.glColor(text_color), width=1, glOptions="opaque"))
+            for fraction in (0, 0.5, 1):
+                label = axis_tick_label(axis_name, low[axis_index], high[axis_index], fraction)
+                if fraction == 0 and corner:
+                    minimums.append(label)
+                    continue
+                pos = start.copy()
+                pos[axis_index] = -1 + 2 * fraction
+                pos[(axis_index + 1) % 3] -= 0.16
+                self._add_item(gl.GLTextItem(pos=pos, text=label, color=text_color, font=font))
+        if corner:
+            # The three axes start at one corner: one label lists their minimums, where three would overlap.
+            # Just above the corner, clear of the X and Y labels beside and below it.
+            self._add_item(gl.GLTextItem(pos=np.array([-1.0, -1.0, -0.84]), text="  ".join(minimums),
+                                         color=text_color, font=font))
+
+    def set_axes_position(self, position: str) -> None:
+        """Draw the axes through 0, 0, 0 (`AXES_ORIGIN`) or along the box's corner (`AXES_CORNER`)."""
+        if position not in AXES_POSITIONS:
+            return
+        self.axes_combo.blockSignals(True)
+        self.axes_combo.setCurrentIndex(self.axes_combo.findData(position))
+        self.axes_combo.blockSignals(False)
+        if position != self.axes_position:
+            self.axes_position = position
+            self._render()
 
     def apply_draw_style(self, style: str) -> None:
         self._render()
@@ -396,6 +462,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
                 ", ".join(f"{value:.6g}" for value in values),
                 tuple(f"{label or axis}: {value:.9g}" for axis, label, value in zip("XYZ", result.labels, values))
                 + (f"Time: {float(result.time[point]):.6f} s", "Nearest drawn point"),
+                full_name=group_display_name(self.traces[trace_index]),
             )
             items.append(ValueBoxItem(
                 _trace_key(self.traces[trace_index]), entry, None,
@@ -450,12 +517,13 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
     def workspace_state(self):
         opts = self.view.opts
         center = opts["center"]
-        return {**super().workspace_state(), "camera": {
+        return {**super().workspace_state(), "axes_position": self.axes_position, "camera": {
             "center": [center.x(), center.y(), center.z()], "distance": opts["distance"],
             "elevation": opts["elevation"], "azimuth": opts["azimuth"], "fov": opts["fov"]}}
 
     def restore_workspace_state(self, state):
         super().restore_workspace_state(state)
+        self.set_axes_position(str(state.get("axes_position", AXES_ORIGIN)))
         camera = state.get("camera")
         try:
             self.view.opts["fov"] = float(camera["fov"])

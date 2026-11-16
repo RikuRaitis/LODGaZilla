@@ -11,6 +11,14 @@ All notable changes to LODGaZilla are listed here. The format follows
 - **Sign in to Bitbucket** in Settings > Plugins, shown when a Bitbucket workspace is a
   plugin source: one sign-in through Git Credential Manager, after which the check finds
   the workspace's private plugins.
+- Each card has its own **card controls** button, left of Close: it makes the card active
+  and shows its header controls, Help included; they hide when another card becomes active.
+- Resting the pointer on a series, in the plot or its legend, shows the series' whole name
+  until the pointer moves. The delay is **Series name delay** in Settings > Plot.
+- The values box details start with the series' whole name.
+- The Frequency card names its series in a legend, like other cards.
+- 3D plot: an axes dropdown draws the axes through 0, 0, 0 (the new default) or along
+  the corner of the data, as before.
 
 ### Changed
 
@@ -19,9 +27,17 @@ All notable changes to LODGaZilla are listed here. The format follows
 - New defaults: Markers linked and snapping to the nearest point on, the Plot navigator
   open, card Header controls hidden, and Hide irrelevant series off.
 - The AI settings have their own **AI** tab in Settings, after Plugins.
+- Every legend is the same share of its card's width, at the card's right edge;
+  long names are shortened with `...`. The width is **Legend width** in Settings > Plot
+  (25% by default).
+- The Frequency card has no title row; its plot starts right below the header.
+- Removed the Plot navigator's Card controls button; cards open their own controls.
 
 ### Fixed
 
+- The Plot navigator's full range now ends exactly at the cards' plot area edges, on the
+  right as on the left: time cards fit their data without padding, and the edges are
+  measured again when a card's plot area resizes, such as when a scroll bar appears.
 - 3D Map: a map opacity below 100% no longer shows the terrain tiles' edge walls and the
   map's layers through each other; the map fades as one image. Below 100% the track is
   drawn over the map, so hills no longer hide it.

@@ -252,8 +252,10 @@ class Screenshots:
     def set_toggles(self, *, legends: bool, card_controls: bool, plot_navigator: bool) -> None:
         navigator = self.window.plot_navigator
         navigator.legends_button.setChecked(legends)
-        navigator.card_controls_button.setChecked(card_controls)
         navigator.navigator_button.setChecked(plot_navigator)
+        # Each card's Card controls button opens its controls; open or close them on every card.
+        for card in self.window.plot_workspace.plots():
+            card.set_header_controls_shown(card_controls)
 
     def set_navigator_shown(self, shown: bool) -> None:
         """Give the Plot area the whole width, so card pictures are as wide as the window."""

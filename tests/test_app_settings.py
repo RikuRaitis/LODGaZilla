@@ -323,8 +323,7 @@ class AppSettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "app_settings.json"
             # Set with main-window buttons, not in the dialog.
-            save_settings_section(path, "lodgazilla", {"show_legends": False, "show_card_controls": False,
-                                                       "time_axis_display": "bottom"})
+            save_settings_section(path, "lodgazilla", {"show_legends": False, "time_axis_display": "bottom"})
             save_settings_section(path, "navigator_controls", {"hide_irrelevant_series": False})
             save_settings_section(path, "navigator_diagnostics", {"clipping": {"enabled": False}})
             editor = SettingsEditorWidget(path)
@@ -336,12 +335,16 @@ class AppSettingsTests(unittest.TestCase):
             self.assertTrue(ai_tab.isAncestorOf(editor.ai_budget_spin))
             self.assertFalse(general_tab.isAncestorOf(editor.ai_budget_spin))
             editor.plot_navigator_color_buttons["frequency"].set_color("#010203")
+            editor.legend_width_spin.setValue(40)
+            editor.series_name_hover_delay_spin.setValue(1200)
             editor.save()
             lodgazilla = load_lodgazilla_settings(path)
+            plot = load_plot_settings(path)
             controls = load_navigator_control_settings(path)
             diagnostics = load_navigator_diagnostics_settings(path)
-        self.assertEqual((lodgazilla["show_legends"], lodgazilla["show_card_controls"],
-                          lodgazilla["time_axis_display"]), (False, False, "bottom"))
+        self.assertEqual((lodgazilla["show_legends"], lodgazilla["time_axis_display"]), (False, "bottom"))
+        self.assertNotIn("show_card_controls", lodgazilla)
+        self.assertEqual((plot["legend_width_percent"], plot["series_name_hover_delay_ms"]), (40, 1200))
         self.assertEqual(lodgazilla["plot_navigator_colors"]["frequency"], "#010203")
         self.assertFalse(controls.hide_irrelevant_series)
         self.assertFalse(diagnostics["clipping"]["enabled"])

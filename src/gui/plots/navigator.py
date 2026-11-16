@@ -74,7 +74,8 @@ class PlotNavigatorWidget(QWidget):
     marker_link_changed = Signal(bool)
     plot_views_link_changed = Signal(bool)
     legends_visibility_changed = Signal(bool)
-    card_controls_visibility_changed = Signal(bool)
+    # The overview's width changed; its plot area margins are measured again from the cards.
+    canvas_resized = Signal()
 
     HEADER_HEIGHT = 28
     # A half-bar-height gap keeps dense plot stacks compact while retaining a
@@ -292,11 +293,6 @@ class PlotNavigatorWidget(QWidget):
             layout, "legend-shown", "legend-hidden", "Legends shown", "Legends hidden", checked=True
         )
         self.legends_button.toggled.connect(self.legends_visibility_changed.emit)
-        self.card_controls_button = self._add_toggle_button(
-            layout, "card-controls-shown", "card-controls-hidden", "Card controls shown", "Card controls hidden",
-            checked=True,
-        )
-        self.card_controls_button.toggled.connect(self.card_controls_visibility_changed.emit)
         layout.addWidget(self._info_group_gap())
         layout.addWidget(self._separator())
         layout.addWidget(self._info_group_gap())
@@ -374,9 +370,6 @@ class PlotNavigatorWidget(QWidget):
 
     def set_legends_shown(self, shown: bool) -> None:
         self._set_toggle_quietly(self.legends_button, shown)
-
-    def set_card_controls_shown(self, shown: bool) -> None:
-        self._set_toggle_quietly(self.card_controls_button, shown)
 
     def _set_toggle_quietly(self, button: QToolButton, checked: bool) -> None:
         """Show a saved state without emitting it back as a change."""
@@ -534,6 +527,10 @@ class _NavigatorCanvas(QWidget):
 
     def margins(self) -> tuple[int, int]:
         return self.navigator._plot_left_margin, self.navigator._plot_right_margin
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        self.navigator.canvas_resized.emit()
 
     def bars_bottom_y(self) -> int:
         return 9 + max(0, len(self.navigator.entries) - 1) * self.navigator.ROW_HEIGHT + self.navigator.BAR_HEIGHT

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from html import escape
+from pathlib import Path
 
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt
@@ -19,6 +20,8 @@ BOX_GAP = 2
 EDGE_MARGIN = 4
 MARKER_OFFSET = 8
 MAX_TEXT_WIDTH = 360
+# The details name the whole series, so they may be wider than a box.
+MAX_DETAILS_WIDTH = 640
 
 
 def set_value_box_opacity(percent: int) -> None:
@@ -68,15 +71,19 @@ class ValueBox(QTextBrowser):
         _fit_to_text(self)
 
     def details_html(self) -> str:
-        """The series name, its details and any selection statistics."""
+        """The series' whole name, its value and details and any selection statistics."""
         entry = self.item.entry
-        lines = [f"<b>{escape(entry.name)}: {escape(entry.value)}</b>"]
+        full_name = full_series_name(self.item)
+        lines = [f"<b>{escape(full_name)}</b>"] if full_name and full_name != entry.name else []
+        lines.append(f"<b>{escape(entry.name)}: {escape(entry.value)}</b>")
         lines += [escape(detail).replace(chr(10), "<br>") for detail in entry.details + self.extra_details]
         return f'<span style="color:{entry.color}">' + "<br>".join(lines) + "</span>"
 
     def details_text(self) -> str:
         entry = self.item.entry
-        return "\n".join((f"{entry.name}: {entry.value}",) + entry.details + self.extra_details)
+        full_name = full_series_name(self.item)
+        heading = (full_name,) if full_name and full_name != entry.name else ()
+        return "\n".join(heading + (f"{entry.name}: {entry.value}",) + entry.details + self.extra_details)
 
     def apply_style(self) -> None:
         self.setStyleSheet(_background_style(self.layer.canvas))
@@ -142,7 +149,7 @@ class ValueDetails(QTextBrowser):
             return
         self.setHtml(box.details_html())
         self.setStyleSheet(_background_style(self.layer.canvas, opaque=True, border=self.pinned))
-        _fit_to_text(self)
+        _fit_to_text(self, MAX_DETAILS_WIDTH)
         canvas = self.layer.canvas
         left = box.x() + box.width() + BOX_GAP
         if left + self.width() > canvas.width() - EDGE_MARGIN:
@@ -183,11 +190,23 @@ def _configure_text_view(view: QTextBrowser) -> None:
     view.document().setDocumentMargin(1)
 
 
-def _fit_to_text(view: QTextBrowser) -> None:
+def full_series_name(item: ValueBoxItem) -> str:
+    """The whole name of a box's series: the entry's own, or its (H5 path, series) key's."""
+    from src.gui.plots.base import series_legend_name
+
+    if item.entry.full_name:
+        return item.entry.full_name
+    key = item.key
+    if isinstance(key, tuple) and len(key) == 2 and isinstance(key[0], Path) and isinstance(key[1], str):
+        return series_legend_name(*key)
+    return ""
+
+
+def _fit_to_text(view: QTextBrowser, maximum_width: int = MAX_TEXT_WIDTH) -> None:
     """Size a view to its text, so a single line never wraps."""
     document = view.document()
     document.setTextWidth(-1)
-    text_width = min(MAX_TEXT_WIDTH, math.ceil(document.idealWidth()))
+    text_width = min(maximum_width, math.ceil(document.idealWidth()))
     view.setFixedSize(text_width + 2, math.ceil(document.size().height()) + 2)
 
 

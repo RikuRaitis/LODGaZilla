@@ -26,10 +26,11 @@ from src.data.h5_series import ( # noqa: F401 - re-exported for existing callers
     _visible_sample_bounds,
 )
 from src.app.settings import DEFAULT_PLOT_SETTINGS, load_plot_settings
-from src.gui.plots.base import SERIES_COLORS, assign_series_colors
+from src.gui.plots.base import SERIES_COLORS, assign_series_colors, series_legend_name
 from src.gui.plots.interactive import InteractivePlotWidget
 from src.gui.plots.diagnostic_areas import CLIPPING, SAMPLE_LOSS, DiagnosticAreas
 from src.gui.plots.selection_info import SelectionDurationInfo
+from src.gui.plots.series_hover import install_series_name_hover, name_at_canvas_point
 from src.gui.plots.theme import apply_plot_palette
 from src.gui.plots.marker_info import MarkerInfoEntry, marker_entries_from_samples
 from src.gui.plots.markers import FIRST_MARKER, SECOND_MARKER
@@ -822,6 +823,8 @@ class SeriesPlotWidget(QWidget):
         self.show_clipping_areas = True
         self.reload_plot_settings()
         self.value_boxes = ValueBoxLayer(self.plot_widget)
+        # The series name appears while the pointer rests on its line or points.
+        install_series_name_hover(self.plot_widget.viewport(), self.series_name_at)
         # The selection's Δt and statistics are in the expanded values boxes.
         self.selection_info = SelectionDurationInfo(
             self.plot_widget, self.value_boxes, lambda: self.time_axis_metadata, connect=False,
@@ -914,6 +917,29 @@ class SeriesPlotWidget(QWidget):
 
     def series_colors(self) -> list[str]:
         return [self.primary_color, *(entry.color for entry in self.additional_series)]
+
+    def _fit_time_axis_to_data(self, loaded) -> None:  # type: ignore[no-untyped-def]
+        """Show the time axis from the first to the last sample, without padding, so the
+        series reach the plot area's edges where the Plot navigator's full range ends."""
+        times = [np.asarray(data.x, dtype=float) for data in loaded if data is not None and len(data.x)]
+        times = [values[np.isfinite(values)] for values in times]
+        times = [values for values in times if len(values)]
+        if not times:
+            return
+        start, stop = min(float(values.min()) for values in times), max(float(values.max()) for values in times)
+        if stop > start:
+            self.plot_item.getViewBox().setXRange(start, stop, padding=0)
+
+    def series_name_at(self, position) -> str | None:  # type: ignore[no-untyped-def]
+        """The name of the series drawn under a canvas position, for the hover name."""
+        items = []
+        if self._series_entries:
+            name = series_legend_name(*self._series_entries[0])
+            items += [(self.curve, name), (self.markers, name)]
+        for entry in self.additional_series:
+            name = series_legend_name(entry.h5_path, entry.series_name)
+            items += [(entry.curve, name), (entry.markers, name)]
+        return name_at_canvas_point(self.plot_widget, position, items)
 
     def set_entry_colors(self, colors: dict[tuple[Path, str], str]) -> None:
         """Use these colors for the sources when they are next shown."""
@@ -1299,6 +1325,7 @@ class SeriesPlotWidget(QWidget):
                 self.plot_item.enableAutoRange()
                 self.plot_item.autoRange()
                 self.plot_item.disableAutoRange()
+                self._fit_time_axis_to_data([data, *(entry.data for entry in self.additional_series)])
             self._current_data = data
             self._update_multi_series_status(data)
             return data

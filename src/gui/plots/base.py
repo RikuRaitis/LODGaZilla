@@ -178,8 +178,9 @@ class PlotBaseWidget(QFrame):
         self.setMinimumHeight(80)
         self.setAcceptDrops(True)
         self.setProperty("activePlot", False)
-        # The Plot navigator's Card controls button hides the Drag strip's buttons; the strip still drags.
-        self._header_controls_shown = True
+        # Card controls: the header controls are hidden until the card's Card controls button
+        # opens them; they close again when the card stops being active. The strip still drags.
+        self._header_controls_shown = False
         self._suppressed_header_controls: list[QWidget] = []
 
         self.close_button = QToolButton(self)
@@ -190,10 +191,19 @@ class PlotBaseWidget(QFrame):
         self.close_button.setAutoRaise(True)
         self.close_button.setFixedSize(26, 26)
         self.close_button.clicked.connect(lambda: self.close_requested.emit(self))
+        # Left of the Close button: opens and closes this card's header controls.
+        self.controls_button = QToolButton(self)
+        self.controls_button.setCheckable(True)
+        self.controls_button.setIconSize(QSize(18, 18))
+        self.controls_button.setAccessibleName("Card controls")
+        self.controls_button.setAutoRaise(True)
+        self.controls_button.setFixedSize(self.close_button.size())
+        self.controls_button.clicked.connect(self._controls_button_clicked)
+        self._show_controls_button_state()
         self.drag_handle = PlotDragHandle(self)
         self.resize_handle = PlotHeightHandle(self)
         self.resize_handle.dragged.connect(lambda delta: self.height_resize_requested.emit(self, delta))
-        # Extra header controls, laid out right to left starting beside the Close button,
+        # Extra header controls, laid out right to left starting beside the Card controls button,
         # and left to right from the card's left edge. The rest of the strip drags the card.
         self.header_controls: list[QWidget] = []
         self.header_left_controls: list[QWidget] = []
@@ -264,8 +274,10 @@ class PlotBaseWidget(QFrame):
         button_size = self.close_button.width()
         self.drag_handle.setGeometry(3, 3, max(1, self.width() - 6), button_size + 4)
         self.close_button.setGeometry(max(0, self.width() - button_size - 5), 5, button_size, button_size)
+        self.controls_button.setGeometry(max(0, self.close_button.x() - button_size - 2), 5, button_size, button_size)
         self.drag_handle.raise_()
         self.close_button.raise_()
+        self.controls_button.raise_()
         self._layout_header_controls()
 
     def show_mouse_help(self) -> None:
@@ -290,6 +302,7 @@ class PlotBaseWidget(QFrame):
         super().changeEvent(event)
         if event.type() in {QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange} and hasattr(self, "help_button"):
             self.close_button.setIcon(plot_control_icon(self, "close"))
+            self._show_controls_button_state()
             self.help_button.setIcon(plot_control_icon(self, "help"))
             self.offset_button.setIcon(plot_control_icon(self, self._offset_icon_name))
             for style, button in getattr(self, "draw_style_buttons", {}).items():
@@ -365,17 +378,40 @@ class PlotBaseWidget(QFrame):
         self._layout_header_controls()
 
     def header_widgets(self) -> list[QWidget]:
-        """The Close button and every other control in the Drag strip's row."""
-        return [self.close_button, *self.header_controls, *self.header_left_controls]
+        """The Close and Card controls buttons and every other control in the Drag strip's row."""
+        return [self.close_button, self.controls_button, *self.header_controls, *self.header_left_controls]
+
+    @property
+    def header_controls_shown(self) -> bool:
+        return self._header_controls_shown
+
+    def _controls_button_clicked(self) -> None:
+        """Open this card's controls and make it the active card, or close them."""
+        if self._header_controls_shown:
+            self.set_header_controls_shown(False)
+            return
+        self.activated.emit(self)
+        self.set_header_controls_shown(True)
+
+    def _show_controls_button_state(self) -> None:
+        shown = getattr(self, "_header_controls_shown", False)
+        self.controls_button.setChecked(shown)
+        self.controls_button.setIcon(plot_control_icon(self, "card-controls-shown" if shown else "card-controls-hidden"))
+        tip = "Hide card controls" if shown else "Show card controls"
+        self.controls_button.setToolTip(tip)
 
     def set_header_controls_shown(self, shown: bool) -> None:
-        """Show or hide the Offset button and the card's own header controls; Close and Help stay."""
+        """Show or hide the header controls, including Offset and Help; Close and Card controls stay."""
         shown = bool(shown)
-        if shown == getattr(self, "_header_controls_shown", True):
+        if shown == getattr(self, "_header_controls_shown", False):
+            self._show_controls_button_state()
             return
         if not shown:
             self.hide_time_offset_editor()
+            if self._help_popup is not None:
+                self._help_popup.close()
         self._header_controls_shown = shown
+        self._show_controls_button_state()
         if shown:
             for control in self._suppressed_header_controls:
                 control.show()
@@ -389,18 +425,18 @@ class PlotBaseWidget(QFrame):
         self.offset_button.setVisible(self.supports_time_offset)
 
     def _layout_header_controls(self) -> None:
-        if not getattr(self, "_header_controls_shown", True):
+        if not getattr(self, "_header_controls_shown", False):
             # Controls a card shows while the header is hidden are hidden too, and return with it.
             for control in self.header_widgets():
-                if control not in (self.close_button, self.help_button) and not control.isHidden():
+                if control not in (self.close_button, self.controls_button) and not control.isHidden():
                     control.hide()
                     if control not in self._suppressed_header_controls:
                         self._suppressed_header_controls.append(control)
         button_size = self.close_button.width()
-        # Right to left from the Close button; a control that would cross the card's left edge
-        # continues on a row below, from the right, as the 3D Map's control groups do.
+        # Right to left from the Card controls button; a control that would cross the card's left
+        # edge continues on a row below, from the right, as the 3D Map's control groups do.
         row_right = self.close_button.x() + button_size
-        x, y = self.close_button.x(), self.close_button.y()
+        x, y = self.controls_button.x(), self.close_button.y()
         for control in self.header_controls:
             if control.isHidden():
                 continue
@@ -673,6 +709,9 @@ class PlotBaseWidget(QFrame):
     def set_active(self, active: bool) -> None:
         self.setProperty("activePlot", bool(active))
         self._apply_active_style()
+        if not active:
+            # A card shows its controls only while it is the active card.
+            self.set_header_controls_shown(False)
 
     def _apply_active_style(self) -> None:
         insertion_style = ""

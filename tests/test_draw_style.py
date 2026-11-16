@@ -59,13 +59,16 @@ class DrawStyleTests(unittest.TestCase):
         with mock.patch("src.jobs.plot_groups.GroupedPlotLoadCoordinator.request"):
             card = self.card(XYPlotWidget(entry, entry))
         selector = card.draw_style_selector
+        # It is a card control: hidden until the card's Card controls button opens them.
+        self.assertTrue(selector.isHidden())
+        card.set_header_controls_shown(True)
         self.assertEqual(list(card.draw_style_buttons), [DRAW_AUTO, DRAW_LINES, DRAW_POINTS])
         self.assertTrue(card.draw_style_buttons[DRAW_AUTO].isChecked())
         self.assertEqual(selector.geometry().right() + 2, card.sample_limit_combo.x() - 1)
         self.assertLessEqual(abs(selector.geometry().center().y() - card.close_button.geometry().center().y()), 1)
         for style, button in card.draw_style_buttons.items():
             self.assertFalse(button.icon().isNull(), style)
-        # The Plot navigator's Card controls button hides it with the other header controls.
+        # Closing the card controls hides it with the other header controls.
         card.set_header_controls_shown(False)
         self.assertTrue(selector.isHidden())
         card.set_header_controls_shown(True)

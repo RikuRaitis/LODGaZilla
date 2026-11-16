@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from PySide6.QtCore import QObject, Signal
 
 from src.data.xyz import AxisSource
-from src.gui.plots.base import SERIES_COLORS, first_unused_color
+from src.gui.plots.base import SERIES_COLORS, first_unused_color, series_legend_name
 
 
 GROUP_MIME_TYPE = "application/x-lodgazilla-series-group"
@@ -17,6 +17,13 @@ class SeriesGroup:
     axes: tuple[AxisSource | None, ...]
     color: str
     sources: tuple[AxisSource, ...] = ()
+
+
+def group_display_name(group: SeriesGroup) -> str:
+    """A group's sources, such as "run1/Speed / run1/Power", as its Legend rows name them."""
+    names = [series_legend_name(axis.path, axis.name) + (" [time]" if axis.component == "time" else "")
+             for axis in getattr(group, "axes", ()) if axis is not None]
+    return " / ".join(names)
 
 
 class LegendGroups(QObject):

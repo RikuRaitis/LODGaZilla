@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
 from src.gui.plots.base import PlotBaseWidget, series_from_mime
 from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.legend import PlotLegendWidget
-from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup
+from src.gui.plots.legend_groups import GROUP_COLORS, SeriesGroup, group_display_name
+from src.gui.plots.series_hover import HIT_TOLERANCE_PIXELS, SeriesNameHover
 from src.data.sampling import decimation_step
 from src.data.xyz import AxisSource, _aligned_values
 from src.jobs.plot_groups import GroupedPlotLoadCoordinator
@@ -222,6 +223,7 @@ class MapMarkersMixin(PointMarkers):
             else "Unavailable (cache has no log start time)"
         )
         latitude, longitude = float(track["lat"][sample_index]), float(track["lon"][sample_index])
+        groups = self.grouped_series.groups
         return MarkerInfoEntry(
             str(track.get("name", "GNSS")), self._track_color(track_index),
             f"{latitude:.7f}°, {longitude:.7f}°",
@@ -231,6 +233,7 @@ class MapMarkersMixin(PointMarkers):
                 f"Latitude: {latitude:.7f}°",
                 f"Longitude: {longitude:.7f}°",
             ),
+            full_name=group_display_name(groups[track_index]) if track_index < len(groups) else "",
         )
 
     def _track_color(self, track_index: int) -> str:
@@ -296,6 +299,9 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self._loading = False
         self.time_range = time_range
         self._track_data: list[dict[str, list[float]]] = []
+        # Each drawn track's sources, for the name shown while the pointer rests on it.
+        self._track_names: list[str] = []
+        self._name_hover: SeriesNameHover | None = None
         self.map_container = QWidget(self)
         self.map_container.setStyleSheet(f"background: {canvas_background(self).name()};")
         self.map_stack = QStackedLayout(self.map_container)
@@ -412,10 +418,12 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.update_sample_coverage(results)
         fit = not self._track_data
         self._track_data = []
+        self._track_names = []
         for index, track in enumerate(results):
             if isinstance(track, dict):
                 track["color"] = self.grouped_series.groups[index].color
                 self._track_data.append(track)
+                self._track_names.append(group_display_name(self.grouped_series.groups[index]))
         if self.map_view is not None:
             if self._map_ready:
                 self._push_tracks(fit)
@@ -499,7 +507,19 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.map_view.wheel_scrolled.connect(self.wheel_scrolled)
         self.map_view.loadFinished.connect(self._on_map_loaded)
         self.map_view.loadStarted.connect(lambda: setattr(self, '_map_ready', False))
+        # The page names the track under a resting pointer.
+        self._name_hover = SeriesNameHover(self.map_view, self._track_name_at)
         self._load_map()
+
+    def _track_name_at(self, position, done) -> None:  # type: ignore[no-untyped-def]
+        if self.map_view is None or not self._map_ready:
+            done(None)
+            return
+        names = list(self._track_names)
+        self.map_view.page().runJavaScript(
+            f"trackAt({position.x()},{position.y()},{HIT_TOLERANCE_PIXELS})",
+            lambda index: done(names[int(index)] if isinstance(index, (int, float)) and 0 <= index < len(names)
+                               else None))
 
     def _on_map_loaded(self, success: bool) -> None:
         if self.map_view is None:
@@ -519,6 +539,10 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self._map_ready = bool(ready)
         if self._map_ready:
             apply_map_background(self)
+            # Pointer events reach the page's input widget, which exists once it has loaded.
+            name_hover = getattr(self, "_name_hover", None)
+            if name_hover is not None and self.map_view.focusProxy() is not None:
+                name_hover.watch(self.map_view.focusProxy())
             self._push_tracks(True)
             self.map_stack.setCurrentWidget(self.map_view)
             self.legend.reposition()
@@ -774,6 +798,25 @@ let trackLayers=[];
 // "auto" and "lines" draw tracks as lines, "points" as their positions on one canvas.
 let drawStyle='auto';
 let pointRenderer=L.canvas({{padding:0.5}});
+// The track drawn within tol pixels of a container point, or -1; for the hover name.
+function trackAt(x,y,tol){{
+  let best=tol*tol,found=-1;
+  trackPoints.forEach((pts,i)=>{{
+    let prev=null;
+    for(const p of pts){{
+      let c=map.latLngToContainerPoint([p[0],p[1]]);
+      let dx=c.x-x,dy=c.y-y,d=dx*dx+dy*dy;
+      if(prev&&drawStyle!=='points'){{
+        let vx=c.x-prev.x,vy=c.y-prev.y,len=vx*vx+vy*vy;
+        let t=len>0?Math.max(0,Math.min(1,((x-prev.x)*vx+(y-prev.y)*vy)/len)):0;
+        let sx=prev.x+t*vx-x,sy=prev.y+t*vy-y;d=Math.min(d,sx*sx+sy*sy);
+      }}
+      if(d<=best){{best=d;found=i}}
+      prev=c;
+    }}
+  }});
+  return found;
+}}
 function nearest(e){{return all.reduce((a,p)=>map.distance(e.latlng,L.latLng(p[0],p[1]))<map.distance(e.latlng,L.latLng(a[0],a[1]))?p:a)}}
 function select(e,index){{if(!all.length||!bridge)return;let point=nearest(e);if(index===0)bridge.select_timestamp(point[2]);else bridge.select_second_timestamp(point[2])}}
 function setTracks(nextTracks,fit=false){{

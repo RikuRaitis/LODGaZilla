@@ -173,24 +173,27 @@ so its icon changes when you click it; the table shows each one switched on.
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/views-linked.svg"><img src="assets/plot_icons/light/views-linked.svg" width="20" alt="views linked"></picture> | Plot views linked | Zooming or panning one time card zooms and pans them all. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/info-clicked.svg"><img src="assets/plot_icons/light/info-clicked.svg" width="20" alt="info clicked"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/info-all.svg"><img src="assets/plot_icons/light/info-all.svg" width="20" alt="info all"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/info-off.svg"><img src="assets/plot_icons/light/info-off.svg" width="20" alt="info off"></picture> | Values boxes | Show values only in the card where you placed the marker, in all cards, or nowhere. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/show-sample-loss.svg"><img src="assets/plot_icons/light/show-sample-loss.svg" width="20" alt="show sample loss"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/show-clipping.svg"><img src="assets/plot_icons/light/show-clipping.svg" width="20" alt="show clipping"></picture> | Sample loss, Clipping | Show or hide those areas on the cards. |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/legend-shown.svg"><img src="assets/plot_icons/light/legend-shown.svg" width="20" alt="legend shown"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/card-controls-shown.svg"><img src="assets/plot_icons/light/card-controls-shown.svg" width="20" alt="card controls shown"></picture> | Legends, Card controls | Show or hide every card's legend and header controls, for more room. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/legend-shown.svg"><img src="assets/plot_icons/light/legend-shown.svg" width="20" alt="legend shown"></picture> | Legends | Show or hide every card's legend, for more room. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/plot-navigator-shown.svg"><img src="assets/plot_icons/light/plot-navigator-shown.svg" width="20" alt="plot navigator shown"></picture> | Plot navigator | Show or hide the timeline with the card bars. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/plugin.svg"><img src="assets/plot_icons/light/plugin.svg" width="20" alt="plugin"></picture> | Plugins | One icon per plugin with its own window; a plugin can bring its own icon. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/settings.svg"><img src="assets/plot_icons/light/settings.svg" width="20" alt="settings"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/help.svg"><img src="assets/plot_icons/light/help.svg" width="20" alt="help"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/close-all-plots.svg"><img src="assets/plot_icons/light/close-all-plots.svg" width="20" alt="close all plots"></picture> | Settings, About, Close all | Settings, **About LODGaZilla** (version, author, and a button that opens this README in your Markdown viewer), and closing every card. |
 
-**Card header** (top right of each card):
+**Card header** (top right of each card). A card shows only Close and the card controls
+button; click the card controls button to make the card active and show the rest. They
+hide again when another card becomes active.
 
 | Icon | Button | Does |
 | --- | --- | --- |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/card-controls-hidden.svg"><img src="assets/plot_icons/light/card-controls-hidden.svg" width="20" alt="card controls"></picture> | Card controls | Shows or hides this card's controls below. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/help.svg"><img src="assets/plot_icons/light/help.svg" width="20" alt="help"></picture> | Help | Lists every mouse action of this card. When in doubt, click it. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/time-offset.svg"><img src="assets/plot_icons/light/time-offset.svg" width="20" alt="time offset"></picture> | Time offset | Sets the card's [time offset](#time-offsets). Highlighted while an offset is set. |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/close.svg"><img src="assets/plot_icons/light/close.svg" width="20" alt="close"></picture> | Close | Closes the card. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/close.svg"><img src="assets/plot_icons/light/close.svg" width="20" alt="close"></picture> | Close | Closes the card. Always shown, rightmost. |
 
 Cards that draw lines add the [draw style](#lines-or-points) buttons <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-auto.svg"><img src="assets/plot_icons/light/draw-auto.svg" width="20" alt="draw auto"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-lines.svg"><img src="assets/plot_icons/light/draw-lines.svg" width="20" alt="draw lines"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-points.svg"><img src="assets/plot_icons/light/draw-points.svg" width="20" alt="draw points"></picture> (Auto, Lines, Points).
 Some cards add their own controls next to these: the [sample limit](#sample-limits)
 dropdown, the Frequency card's FFT settings <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/fft-settings.svg"><img src="assets/plot_icons/light/fft-settings.svg" width="20" alt="fft settings"></picture>, the 3D plot's reset
-camera button <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/reset-camera.svg"><img src="assets/plot_icons/light/reset-camera.svg" width="20" alt="reset camera"></picture>, the Map type (street or satellite) and the Video
+camera button <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/reset-camera.svg"><img src="assets/plot_icons/light/reset-camera.svg" width="20" alt="reset camera"></picture> and axes position, the Map type (street or satellite) and the Video
 card's preview size. The [3D Map](#3d-map) puts its map controls along the left of its
 top strip. Drag the strip at the top of a card to move it, and its bottom edge
 to resize it.
@@ -237,8 +240,12 @@ each of them.
 
 ### Legends
 
-Each card's legend lists its series:
+Each card's legend lists its series, at the card's right edge. Every legend is the
+same share of its card's width (25% by default; **Legend width** in Settings, Plot); a
+name too long for it is shortened in the middle with `...`.
 
+- Rest the pointer on a series, in the legend or in the plot itself, to see its whole
+  name; it hides as soon as the pointer moves (**Series name delay** in Settings, Plot).
 - Click a colour swatch to change the colour.
 - Drag a series to reorder it, or onto another card's legend to move it there.
 - Right-click a series to remove it from the card.
@@ -266,8 +273,9 @@ With **Markers linked**, every card shows the same markers. On X/Y, 3D plot and 
 cards a click marks the nearest point, and the selection is that stretch of the graph
 or track.
 
-A **values box** shows each series' value at a marker. Hover over it for the details;
-with a selection, they include minimum, maximum, average, median and a histogram.
+A **values box** shows each series' value at a marker. Hover over it for the details,
+which start with the series' whole name; with a selection, they include minimum,
+maximum, average, median and a histogram.
 Click a box to pin the details so you can copy them.
 
 ### The Plot navigator
@@ -320,7 +328,7 @@ with no lines between them.
 **Save workspace** (Ctrl+S) saves everything you see into a `.umw` file: the cards,
 their layout, series, zoom and settings, both markers, and the Navigator's folder,
 grouping and filter. **Open workspace** (Ctrl+O) brings it all back exactly as it was.
-The Plot navigator buttons (linking, legends, card controls, time axis) are your own
+The Plot navigator buttons (linking, legends, time axis) are your own
 preferences and are not saved in workspaces. While cards are open, opening a workspace
 or closing LODGaZilla first asks whether to save them.
 **Open recent workspace** lists the last ten. Paths are stored relative to the
@@ -392,7 +400,7 @@ values boxes show the interval statistics.
 
 ![Frequency card](docs/images/card_frequency.png)
 
-A spectrogram of one series, here the soundtrack of the demo video: time across, frequency up, colour for amplitude. The gear
+A spectrogram of one series, here the soundtrack of the demo video: time across, frequency up, colour for amplitude. Its legend names the series; drop another series on the card to show it instead. The gear
 button sets the FFT window, overlap and colour range, or an exact frequency band and
 resolution. A white line follows the strongest frequency. The card needs regularly
 sampled data; it leaves gaps rather than guessing across missing samples.
@@ -409,8 +417,10 @@ graphs.
 ![3D plot card](docs/images/card_3d_plot.png)
 
 Three series as X, Y and Z, such as the three accelerometer axes. Drag to rotate,
-**Ctrl+drag** to pan and **Ctrl+wheel** to zoom; the camera button resets the view. A
-card can hold several traces.
+**Ctrl+drag** to pan and **Ctrl+wheel** to zoom; the camera button resets the view. The
+axes meet at 0, 0, 0 by default, or, from the axes dropdown, at the corner of the data;
+when 0 is outside a series' range, its axis stays at the edge of the data. A card can
+hold several traces.
 
 ### Map
 

@@ -1,7 +1,6 @@
 """Asynchronous, in-memory spectrogram card using the shared time axis."""
 
 from dataclasses import asdict, replace
-from html import escape
 from pathlib import Path
 from threading import Event
 
@@ -18,11 +17,13 @@ from src.gui.plots.frequency_data import FrequencyData, load_frequency_data
 from src.gui.plots.frequency_settings import FrequencySettingsDialog
 from src.gui.plots.icons import plot_control_icon
 from src.gui.plots.interactive import InteractivePlotWidget
+from src.gui.plots.legend import LegendEntry, PlotLegendWidget
 from src.gui.plots.marker_info import MarkerInfoEntry
 from src.gui.plots.markers import FIRST_MARKER, SECOND_MARKER
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.gui.plots.selection_info import SelectionDurationInfo
 from src.gui.plots.series import TimeAxisMetadata, _display_time_axis_metadata
+from src.gui.plots.series_hover import install_series_name_hover
 from src.gui.plots.theme import apply_plot_palette
 
 
@@ -56,6 +57,22 @@ class FrequencyCanvas(InteractivePlotWidget):
     # Right click places the second marker; the FFT menu is on the card's header button.
     def contextMenuEvent(self, event):
         event.accept()
+
+
+class FrequencyLegend(PlotLegendWidget):
+    """The card's one series, as on other cards; its color is the strongest-frequency line's."""
+
+    def __init__(self, plot: "FrequencyPlotWidget") -> None:
+        super().__init__(plot.plot_widget)
+        self.plot = plot
+        self.color_requested.connect(lambda _key: plot.choose_peak_line_color())
+        self.remove_requested.connect(plot.remove_series_at)
+        self.move_requested.connect(plot.remove_series_at)
+
+    def show_series(self) -> None:
+        plot = self.plot
+        self.set_entries([LegendEntry(0, series_legend_name(*plot.series[0]), plot.peak_line_color, plot.series[0])]
+                         if plot.series else [])
 
 
 class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
@@ -133,13 +150,23 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.plot_widget.second_marker_placed.connect(self.second_marker_placed)
         self.plot_widget.second_marker_cleared.connect(self.second_marker_cleared)
         self.plot_widget.marker_snap_resolver = self.nearest_time
+        # The series is named in the Legend; the plot area starts right below the header row.
+        self.legend = FrequencyLegend(self)
+        install_series_name_hover(self.plot_widget.viewport(), self.series_name_at)
         self.apply_theme()
         self.on_series_changed()
+
+    def series_name_at(self, position):
+        """The series under a canvas position, inside the plot area, for the hover name."""
+        if not self.series or self.data is None:
+            return None
+        scene = self.plot_widget.mapToScene(position)
+        return series_legend_name(*self.series[0]) if self.plot_view_box().sceneBoundingRect().contains(scene) else None
 
     def on_series_changed(self):
         if not self.series:
             return
-        self.plot_item.setTitle("Frequency — " + escape(series_legend_name(*self.series[0])))
+        self.legend.show_series()
         self._initial = True
         self._reset_frequency_view = True
         self.data = None
@@ -167,6 +194,7 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.set_peak_line_visible(peak.get("visible", self.show_peak_line))
         self.peak_line_color = str(peak.get("color", self.peak_line_color))
         self.peak_line.setPen(pg.mkPen(self.peak_line_color, width=2))
+        self.legend.show_series()
         try:
             self.set_peak_line_threshold(peak.get("threshold", self.peak_line_threshold))
         except (TypeError, ValueError):
@@ -181,6 +209,10 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         # One signal per amplitude heatmap; a dropped signal replaces its source.
         self.series = [(Path(h5_path), str(series_name))]
         self.on_series_changed()
+
+    def insert_series(self, h5_path, series_name, index):
+        # A drop on the Legend replaces the source too.
+        self.add_series(h5_path, series_name)
 
     def _range_changed(self, *_args):
         if self._disposed or self._applying:
@@ -371,6 +403,7 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         if color.isValid():
             self.peak_line_color = color.name()
             self.peak_line.setPen(pg.mkPen(color, width=2))
+            self.legend.show_series()
 
     def choose_peak_line_threshold(self):
         if self.data is None:
@@ -481,6 +514,7 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
              f"FFT bin spacing: {data.sample_rate / data.window_size:.9g} Hz",
              f"FFT window: {1000 * data.window_size / data.sample_rate:.9g} ms",
              "Peak within the selected frequency band."),
+            full_name=series_legend_name(*self.series[0]) if self.series else "",
         )
         # The box sits where the strongest-frequency line crosses the marker.
         self.value_boxes.set_items(index, x_value, [ValueBoxItem("peak", entry, float(frequency))])

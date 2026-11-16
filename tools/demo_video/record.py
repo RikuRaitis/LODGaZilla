@@ -229,7 +229,6 @@ class Director:
                 self.say(f"Not restored: {problem}")
             navigator_buttons = window.plot_navigator
             navigator_buttons.legends_button.setChecked(legends)
-            navigator_buttons.card_controls_button.setChecked(True)
             navigator_buttons.navigator_button.setChecked(True)
             navigator_buttons.sample_loss_button.setChecked(True)
             navigator_buttons.clipping_button.setChecked(True)

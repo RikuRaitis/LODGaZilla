@@ -177,6 +177,7 @@ class XYZCardTests(unittest.TestCase):
         np.testing.assert_equal(card.results[0].positions, [[0, 1, 2], [1, 2, 3], [2, 3, 4]])
         self.workspace.resize(1000, 700)
         self.workspace.show()
+        card.controls_button.click()
         self.app.processEvents()
         self.assertFalse(card.reset_button.icon().isNull())
         self.assertEqual(card.reset_button.text(), "")
@@ -313,6 +314,7 @@ class XYZCardTests(unittest.TestCase):
         card._loaded([XYZData(np.arange(3.), np.array([
             [1_700_000_000., 5, 0], [1_700_000_001., 5, 1], [1_700_000_002., 5, 2],
         ]), ("Time", "Constant", "Value"), False)])
+        card.set_axes_position("corner")
         texts = [item.text for item in card.view.items if hasattr(item, "text")]
         # Each label is "<axis> <value>"; the shared corner's label lists the three minimums.
         ticks = {}

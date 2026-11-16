@@ -13,6 +13,8 @@ from src.gui.plots.base import PlotBaseWidget, apply_view_range_state, view_rang
 from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.interactive import use_full_viewport_updates
 from src.gui.plots.legend import PlotLegendWidget
+from src.gui.plots.legend_groups import group_display_name
+from src.gui.plots.series_hover import install_series_name_hover, name_at_canvas_point
 from src.data.sampling import SampledResult, decimation_step
 from src.data.h5_series import _canonical_to_native_range, _visible_sample_bounds
 from src.data.xyz import AxisSource, _aligned_values
@@ -122,6 +124,8 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
         self.value_boxes = ValueBoxLayer(self.plot_widget)
         self.apply_marker_style()
         self.plot_widget.scene().sigMouseClicked.connect(self._on_scene_click)
+        # A graph's X and Y sources are named while the pointer rests on its line or points.
+        install_series_name_hover(self.plot_widget.viewport(), self.series_name_at)
         self.content_layout.addWidget(self.plot_widget, stretch=1)
         self.legend = PlotLegendWidget(self.plot_widget)
         self.legend.set_group_model(self.grouped_series)
@@ -177,6 +181,13 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
             self._auto_range_load = False
             self.plot_item.vb.disableAutoRange()
             apply_view_range_state(self.plot_item.vb, state["view"])
+
+    def series_name_at(self, position):  # type: ignore[no-untyped-def]
+        """The graph drawn under a canvas position, named by its sources, for the hover name."""
+        items = [(item, group_display_name(group))
+                 for group, (curve, points) in zip(self.grouped_series.groups, self._graph_items)
+                 for item in (curve, points)]
+        return name_at_canvas_point(self.plot_widget, position, items)
 
     def _loaded(self, results, *, auto_range=True):
         self._loading = False
@@ -352,6 +363,7 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
             entry = MarkerInfoEntry(
                 f"{x_entry.name} / {y_entry.name}", group.color, f"{x_entry.value}, {y_entry.value}",
                 tuple(f"X {detail}" for detail in x_entry.details) + tuple(f"Y {detail}" for detail in y_entry.details),
+                full_name=group_display_name(group),
             )
             items.append(ValueBoxItem(_graph_key(group), entry, point[1], x_value=point[0]))
         self.value_boxes.set_items(index, time_value, items)
