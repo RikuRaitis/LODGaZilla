@@ -8,6 +8,17 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Added
 
+- Each folder in the Navigator has a **Source data** group listing its imports and
+  exports in three columns, Source, Output and Plugin, recorded in the folder's
+  `_info.json`. Files an enabled importer can read appear before they are imported;
+  outputs older than their source are marked outdated. Double-click a row, or right-click
+  it, to import, re-import or export it.
+- Right-clicking a folder's **Media** group offers **Attach** (video, images, audio), as
+  the folder's own menu does.
+- Plugins: an export operation can list the files it reads (`inputs`), receives the
+  files to export from a Source data row (`source_files`) and reports what it wrote with
+  `report_source_output`.
+
 - **Sign in to Bitbucket** in Settings > Plugins, shown when a Bitbucket workspace is a
   plugin source: one sign-in through Git Credential Manager, after which the check finds
   the workspace's private plugins.
@@ -22,6 +33,10 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Changed
 
+- Imports and exports start only from Source data rows. Double-clicking a folder only
+  expands it, the Folder menu no longer has the **Plugin: Generate / update H5 files**
+  and export entries, and the plugin menu for years, months and several folders is gone.
+- Removed the Navigator's **Batch** button.
 - New settings have no default metadata fields; the previous built-in ones (diver,
   session, place, device location) are gone. Existing settings keep their own.
 - New defaults: Markers linked and snapping to the nearest point on, the Plot navigator
@@ -35,6 +50,9 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Fixed
 
+- A very long log message no longer widens the main window. The collapsed Internal log
+  panel shows as much of the latest message as fits, ending in `…`; its tooltip and the
+  expanded log show all of it.
 - The Plot navigator's full range now ends exactly at the cards' plot area edges, on the
   right as on the left: time cards fit their data without padding, and the edges are
   measured again when a card's plot area resizes, such as when a scroll bar appears.

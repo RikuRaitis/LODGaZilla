@@ -107,8 +107,11 @@ from src.app.settings import (
 from src.gui.navigator.widget import (
     DataNavigatorWidget,
     ITEM_PATH_ROLE,
+    ITEM_PROGRESS_TOTAL_ROLE,
+    ITEM_SOURCE_ROLE,
     ITEM_TYPE_ROLE,
     ROW_TYPE_FOLDER,
+    ROW_TYPE_SOURCE,
     VIDEO_MIME_TYPE,
     IMAGE_MIME_TYPE,
 )
@@ -130,7 +133,12 @@ from src.gui.plots.workspace_layout import PlotDropController, PlotRow, PlotStac
 from src.gui.plots.data_drop import DataDropController
 from src.gui.settings_widget import SettingsDialog
 from src.gui.theme import apply_theme, load_theme
-from src.data.folder_info import attachment_path, is_info_file, read_info_file, video_attachment_path, write_info_file
+from src.data.folder_info import (
+    EXPORT_SOURCE_NAME, SOURCE_EXPORT, SOURCE_IMPORT, attachment_path, is_info_file, read_info_file, record_sources,
+    source_entry, video_attachment_path, write_info_file,
+)
+from src.contracts.jobs import SOURCE_FILES_PARAMETER, SOURCE_OUTPUT_EVENT
+from src.jobs.source_detection import STATE_CURRENT, STATE_OUTDATED, ExportSpec, SourceDetection
 from src.data.workspace_file import (
     UMW_FILE_FILTER, UMW_SUFFIX, WorkspaceFileError, read_workspace_file, updated_recent_workspaces,
     write_workspace_file,
@@ -161,7 +169,7 @@ from src.app.demo_data import DEMO_DATA_ROOT, DemoDataJob, demo_data_exists, dem
 from src.app.log_paths import log_path
 from src.app.graphics import configure_graphics, shutdown_web_engine
 from src.jobs.process_tree import start_process_tree
-from src.jobs.magic_drop import MagicDropJob, PluginDropJob, SignInCheck
+from src.jobs.magic_drop import DraftImportJob, MagicDropJob, PluginDropJob, SignInCheck
 from src.jobs.plugin_chat import PluginChatJob
 from src.jobs.plugin_examples import PluginExamplesJob
 from src.ai.plugin_builder import (
@@ -344,6 +352,8 @@ def run_reimport_process(
     hdf5_settings: dict[str, object] | None = None,
     cancel_event=None,
     start_event=None,
+    sources: tuple[str, ...] = (),
+    importer_id: str = "",
 ) -> None:  # type: ignore[no-untyped-def]
     """Spawn-safe cache coordinator; it creates the bounded per-file workers."""
     if start_event is not None and not start_event.wait(30):
@@ -353,7 +363,7 @@ def run_reimport_process(
             Path(data_folder_text), events, recursive=recursive,
             logger=h5_cache_logger(), process_limit=process_limit,
             enabled_plugins=enabled_plugins, hdf5_settings=hdf5_settings,
-            cancel_event=cancel_event,
+            cancel_event=cancel_event, sources=tuple(sources), importer_id=importer_id,
         )
     except Exception as error:  # noqa: BLE001 - return worker failures to the GUI queue.
         h5_cache_logger().exception("H5 cache batch failed")
@@ -2220,9 +2230,12 @@ class LODGaZillaWindow(QMainWindow):
         )
         self.navigator.series_context_menu_requested.connect(self.show_series_context_menu)
         self.navigator.series_group_context_menu_requested.connect(self.show_series_group_context_menu)
-        self.navigator.folder_import_requested.connect(self.start_folder_cache_rebuild)
+        self.navigator.media_group_context_menu_requested.connect(self.show_media_group_context_menu)
         self.navigator.folder_context_menu_requested.connect(self.show_folder_context_menu)
-        self.navigator.folders_context_menu_requested.connect(self.show_folders_context_menu)
+        self.navigator.source_activated.connect(self.activate_source)
+        self.navigator.source_context_menu_requested.connect(self.show_source_context_menu)
+        # Magic drop re-imports running in the background (DraftImportJob).
+        self._draft_imports: list = []
         self.navigator.metadata_write_failed.connect(self.on_metadata_write_failed)
         self.navigator.navigator_warning.connect(self.on_navigator_warning)
         self.navigator.loading_changed.connect(self.on_navigator_loading_changed)
@@ -2243,6 +2256,7 @@ class LODGaZillaWindow(QMainWindow):
         self.plugin_updates = PluginUpdates(self)
         self.plugin_updates.changed.connect(self.report_plugin_updates)
         QTimer.singleShot(0, self, self.check_plugin_updates_at_startup)
+        self.update_source_detection()
         startup_mark("plugin manager construction completed")
 
         # No menu bar: workspace files are on the Navigator's File bar, Settings and
@@ -2253,8 +2267,6 @@ class LODGaZillaWindow(QMainWindow):
         controls.workspace_open_requested.connect(self.open_workspace)
         controls.workspace_save_requested.connect(self.save_workspace)
         controls.workspace_save_as_requested.connect(self.save_workspace_as)
-        self.batch_menu = controls.batch_menu
-        self.batch_menu.aboutToShow.connect(self.populate_batch_menu)
         self.plot_navigator.plugin_launch_requested.connect(self.plugin_manager.launch)
         self.recent_workspaces_menu = controls.recent_workspaces_menu
         self.recent_workspaces_menu.aboutToShow.connect(self.populate_recent_workspaces_menu)
@@ -2537,6 +2549,16 @@ class LODGaZillaWindow(QMainWindow):
         if changed:
             save_settings_section(self.settings_path, PLUGINS_SECTION, {**plugin_settings, "enabled": enabled})
         self.plugin_manager.set_enabled(enabled)
+        self.update_source_detection()
+
+    def update_source_detection(self) -> None:
+        """Tell the Navigator which importers and exports find its Source data rows."""
+        self.navigator.set_source_detection(SourceDetection(
+            tuple(sorted(descriptor.plugin_id for descriptor in self.plugin_manager.enabled_importers())),
+            tuple(ExportSpec(descriptor.plugin_id, descriptor.title, operation.name, operation.inputs)
+                  for descriptor, operation in self.plugin_manager.operations("folder")
+                  if operation.kind == "export"),
+        ))
 
     def on_ai_panel_expanded_changed(self, expanded: bool) -> None:
         """Size the AI panel and remember whether it is open for the next start."""
@@ -2957,69 +2979,89 @@ class LODGaZillaWindow(QMainWindow):
         menu.setToolTipsVisible(True)
         menu.addAction("Multi-series", lambda: self.plot_folder_in_multi_widget(folder))
         menu.addSeparator()
-        attach_menu = menu.addMenu("Attach")
-        attach_menu.addAction("Video…", lambda: self.attach_video_to_folder(folder))
-        attach_menu.addAction("Images…", lambda: self.attach_images_to_folder(folder))
-        attach_menu.addAction("Audio…", lambda: self.attach_audio_to_folder(folder))
+        self.add_attach_menu(menu, folder)
         menu.addAction("Show in file manager", lambda: self.show_folder_in_file_manager(folder))
-        # Plugin actions come last, each named "Plugin: …".
-        menu.addSeparator()
-        self.add_plugin_folder_actions(menu, [folder], "folder")
+        # Imports and exports are in the folder's Source data group; plugins' own folder
+        # actions (add_folder_context_actions) come last, each named "Plugin: …".
+        separator = menu.addSeparator()
+        action_count = len(menu.actions())
         self.plugin_manager.add_folder_context_actions(menu, folder)
+        if len(menu.actions()) == action_count:
+            menu.removeAction(separator)
         menu.exec(self.navigator.tree.viewport().mapToGlobal(position))
 
-    def show_folders_context_menu(self, folders: list[Path], position) -> None:  # type: ignore[no-untyped-def]
-        """A virtual group or several selected folders: the plugin actions, run on each folder."""
+    def show_source_context_menu(self, folder: Path, row, position) -> None:  # type: ignore[no-untyped-def]
+        """A Source data row's menu: import, re-import or export it, or show its folder."""
         menu = QMenu(self)
-        menu.setToolTipsVisible(True)
-        self.add_plugin_folder_actions(menu, folders, "batch")
+        done = row.state in {STATE_CURRENT, STATE_OUTDATED}
+        if row.kind == SOURCE_IMPORT:
+            text = "Re-import" if done else "Import"
+        else:
+            text = "Export again" if done else "Export"
+        menu.addAction(text, lambda: self.run_source(folder, row))
+        menu.addSeparator()
+        menu.addAction("Show in file manager", lambda: self.show_folder_in_file_manager(folder))
         menu.exec(self.navigator.tree.viewport().mapToGlobal(position))
 
-    def add_plugin_folder_actions(self, menu: QMenu, folders: list[Path], scope: str) -> None:
-        """Add H5 generation and the plugins' declared operations for ``folders``, each folder on its own."""
-        suffix = f" ({len(folders)} folders)" if len(folders) > 1 else ""
-        generate = menu.addAction(f"Plugin: Generate / update H5 files{suffix}")
-        generate.triggered.connect(lambda: [self.start_folder_cache_rebuild(folder) for folder in folders])
-        self._require_importer(generate)
-        for descriptor, operation in self.plugin_manager.operations(scope):
-            action = menu.addAction(f"Plugin: {operation.kind.capitalize()} {operation.title}{suffix}")
-            action.setToolTip(descriptor.title)
-            action.triggered.connect(lambda _checked=False, plugin_id=descriptor.plugin_id, name=operation.name: [
-                self.plugin_manager.run_operation(plugin_id, name, folder) for folder in folders])
+    def activate_source(self, folder: Path, row) -> None:  # type: ignore[no-untyped-def]
+        """Double-click on a Source data row: import or export it; ask first when it is done."""
+        if row.state in {STATE_CURRENT, STATE_OUTDATED}:
+            action = "Import" if row.kind == SOURCE_IMPORT else "Export"
+            what = row.source if row.kind == SOURCE_IMPORT else row.output
+            answer = QMessageBox.question(
+                self, f"{action} again",
+                f"{action} {what} again with {row.plugin}?\n\nThis replaces {row.output or 'its output'}.")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.run_source(folder, row)
 
-    def _require_importer(self, action) -> None:  # type: ignore[no-untyped-def]
-        """H5 generation needs an enabled importer plugin; without one the action is disabled with a hint."""
-        if not self.plugin_manager.has_enabled_importer():
-            action.setEnabled(False)
-            action.setToolTip("Enable an importer plugin in Settings > Plugins")
-
-    def populate_batch_menu(self) -> None:
-        """The File bar's Batch menu: the plugin actions for the whole data folder."""
-        menu = self.batch_menu
-        menu.clear()
-        menu.setToolTipsVisible(True)
-        generate = menu.addAction("Plugin: Generate H5 files for all folders", self.start_data_folder_cache_batch)
-        self._require_importer(generate)
-        for descriptor, operation in self.plugin_manager.operations("batch"):
-            action = menu.addAction(f"Plugin: {operation.kind.capitalize()} {operation.title} for all folders")
-            action.setToolTip(descriptor.title)
-            action.triggered.connect(lambda _checked=False, plugin_id=descriptor.plugin_id, name=operation.name:
-                                     self.start_data_folder_operation(plugin_id, name))
-
-    def start_data_folder_operation(self, plugin_id: str, operation: str) -> None:
-        data_folder = self.navigator.data_folder()
-        if data_folder is None:
-            self.internal_logger.warning(f"Cannot run {operation}: no data folder is selected.")
+    def run_source(self, folder: Path, row) -> None:  # type: ignore[no-untyped-def]
+        """Import or export one Source data row with its plugin."""
+        folder = Path(folder)
+        if row.kind == SOURCE_IMPORT:
+            source = folder / row.source
+            if not source.is_file():
+                self.internal_logger.warning(f"Cannot import {row.source}: the file is missing from {folder}.")
+                return
+            if row.draft:
+                self.start_draft_import(Path(row.draft), source, folder / (row.output or source.with_suffix(".h5").name))
+                return
+            enabled = {descriptor.plugin_id for descriptor in self.plugin_manager.enabled_importers()}
+            if row.plugin_id and row.plugin_id not in enabled:
+                self.internal_logger.warning(
+                    f"Cannot import {row.source}: enable {row.plugin or row.plugin_id} in Settings > Plugins.")
+                return
+            if not enabled:
+                self.internal_logger.warning("Cannot import: no importer plugin is enabled.")
+                return
+            self.start_import(ImportRequest(folder.resolve(), False, 1, (row.source,), row.plugin_id))
             return
-        if self.confirm_data_folder_batch(operation, data_folder):
-            self.plugin_manager.run_operation(plugin_id, operation, data_folder, recursive=True)
+        if not self.plugin_manager.is_enabled(row.plugin_id):
+            self.internal_logger.warning(
+                f"Cannot export {row.output or row.plugin}: enable {row.plugin} in Settings > Plugins.")
+            return
+        parameters = {SOURCE_FILES_PARAMETER: [str(folder / name) for name in row.inputs]} if row.inputs else {}
+        self.plugin_manager.run_operation(row.plugin_id, row.operation, folder, parameters=parameters)
 
-    def confirm_data_folder_batch(self, action: str, data_folder: Path) -> bool:
-        """Ask before a Batch menu action runs on every folder under the data folder."""
-        answer = QMessageBox.question(
-            self, "Batch", f"Run {action} for every folder under {data_folder}?\n\n"
-            "This can take a long time on a large data folder.")
-        return answer == QMessageBox.StandardButton.Yes
+    def start_draft_import(self, draft: Path, source: Path, output: Path) -> None:
+        """Import a Magic drop file again with the parser the AI wrote for it."""
+        if not (draft / "importer.json").is_file():
+            self.internal_logger.warning(
+                f"Cannot import {source.name} again: its Magic drop parser is no longer in {draft}.")
+            return
+        job = DraftImportJob(draft, source, output, parent=self)
+        self._draft_imports.append(job)
+
+        def finished(succeeded: bool, message: str) -> None:
+            if job in self._draft_imports:
+                self._draft_imports.remove(job)
+            (self.internal_logger.info if succeeded else self.internal_logger.error)(message)
+            self.navigator.refresh_tree(rescan=True)
+            job.deleteLater()
+
+        job.finished.connect(finished)
+        self.internal_logger.info(f"Importing {source.name} again with its Magic drop parser…")
+        job.start()
 
     def refresh_plugin_launchers(self) -> None:
         """Show an icon in the Plot navigator's Plugins group for each enabled plugin with a launcher."""
@@ -3314,6 +3356,26 @@ class LODGaZillaWindow(QMainWindow):
             self._add_audio_actions(menu, folder, Path(h5_path))
         menu.exec(self.navigator.tree.viewport().mapToGlobal(position))
 
+    def add_attach_menu(self, menu: QMenu, folder: Path) -> None:
+        """The Attach submenu: link a video, images or audio to ``folder``."""
+        # Parented to the menu: a submenu from addMenu(title) is deleted with its Python
+        # wrapper when this function returns.
+        attach_menu = QMenu("Attach", menu)
+        menu.addMenu(attach_menu)
+        attach_menu.addAction("Video…", lambda: self.attach_video_to_folder(folder))
+        attach_menu.addAction("Images…", lambda: self.attach_images_to_folder(folder))
+        attach_menu.addAction("Audio…", lambda: self.attach_audio_to_folder(folder))
+
+    def show_media_group_context_menu(self, folder: Path, entries, position) -> None:  # type: ignore[no-untyped-def]
+        """A folder's Media group: plot its audio series, if any, and attach more media."""
+        menu = QMenu(self)
+        if entries:
+            populate_plot_menu(menu, self.plot_workspace,
+                               [PlotSource("series", path, name) for path, name in entries], group=True)
+            menu.addSeparator()
+        self.add_attach_menu(menu, folder)
+        menu.exec(self.navigator.tree.viewport().mapToGlobal(position))
+
     def show_series_group_context_menu(self, entries, position) -> None:
         menu = QMenu(self)
         sources = [PlotSource("series", path, name) for path, name in entries]
@@ -3326,20 +3388,6 @@ class LODGaZillaWindow(QMainWindow):
             return
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
             self.internal_logger.error(f"Could not open file manager for {folder}.")
-
-    def start_data_folder_cache_batch(self) -> None:
-        data_folder = self.navigator.data_folder()
-        if data_folder is None:
-            self.internal_logger.warning("Cannot batch-create H5 cache: no data folder is selected.")
-            return
-        if self.confirm_data_folder_batch("H5 file generation", data_folder):
-            self.start_import(data_folder, recursive=True)
-
-    def start_folder_cache_rebuild(self, folder: Path) -> None:
-        if not self.plugin_manager.has_enabled_importer():
-            self.internal_logger.warning("Cannot generate H5 cache: no importer plugin is enabled.")
-            return
-        self.start_import(folder, recursive=False)
 
     def start_import(self, folder: Path | ImportRequest | PluginJobRequest, *, recursive: bool | None = None) -> None:
         request = (folder if isinstance(folder, (ImportRequest, PluginJobRequest, MediaJobRequest))
@@ -3379,7 +3427,8 @@ class LODGaZillaWindow(QMainWindow):
         import_id = self.import_coordinator.reserve_id()
         is_plugin_job = isinstance(request, PluginJobRequest)
         is_media_job = isinstance(request, MediaJobRequest)
-        if not is_plugin_job and not is_media_job:
+        if not is_plugin_job and not is_media_job and not request.sources:
+            # A Source data row's import keeps the folder's rows; its own row shows the progress.
             self.clear_imported_children(request.folder, recursive=request.recursive)
         context = multiprocessing.get_context("spawn")
         events = context.Queue()
@@ -3399,7 +3448,7 @@ class LODGaZillaWindow(QMainWindow):
                 # receive the GUI's current values instead of rereading disk.
                 dict(self.plugin_manager.enabled),
                 load_hdf5_settings(self.settings_path),
-                cancel_event, start_event,
+                cancel_event, start_event, request.sources, request.importer_id,
             )
         process = context.Process(
             target=target, args=args,
@@ -3461,6 +3510,8 @@ class LODGaZillaWindow(QMainWindow):
                     self.update_process_eta(*event[1:])
                 elif event_type == "plugin_event" and active.plugin_id:
                     self.plugin_manager.dispatch_job_event(active.plugin_id, *event[1:])
+                elif event_type == SOURCE_OUTPUT_EVENT and active.plugin_id:
+                    self.record_export_output(active, *event[1:])
                 elif event_type == "process_finished":
                     self.finish_process_progress(*event[1:])
                 elif event_type == "message":
@@ -3527,6 +3578,25 @@ class LODGaZillaWindow(QMainWindow):
         else:
             self.internal_logger.error(f"Failed {state.operation} for {source_name}.")
 
+    def record_export_output(self, active: ActiveImport, output: str, inputs=()) -> None:  # type: ignore[no-untyped-def]
+        """An export reported a file it wrote (``report_source_output``): note it in its
+        folder's Source data."""
+        output_path = Path(output)
+        descriptor = next((item for item in self.plugin_manager.descriptors if item.plugin_id == active.plugin_id),
+                          None)
+        folder = output_path.parent
+        entry = source_entry(
+            SOURCE_EXPORT, source=EXPORT_SOURCE_NAME, output=output_path.name,
+            plugin=descriptor.title if descriptor is not None else active.plugin_id, plugin_id=active.plugin_id,
+            operation=active.operation,
+            inputs=[Path(path).name for path in inputs if Path(path).parent == folder])
+        try:
+            record_sources(folder, [entry])
+        except (OSError, ValueError, TimeoutError) as error:
+            self.internal_logger.warning(f"Could not record the export {output_path.name}: {error}")
+            return
+        self.schedule_tree_refresh_after_completed_process()
+
     def update_folder_progress(self, folder: Path, *, exclude_process_id: str | None = None) -> None:
         # Runs for every progress event: compare normalized path strings, without disk access.
         key = _path_key(folder)
@@ -3536,13 +3606,23 @@ class LODGaZillaWindow(QMainWindow):
             if process_id != exclude_process_id and _path_key(state.folder) == key
         ]
         for item in self.navigator_tree_items():
-            if item.data(0, ITEM_TYPE_ROLE) == ROW_TYPE_FOLDER and _path_key(item.data(0, ITEM_PATH_ROLE)) == key:
-                if states:
-                    completed, total, eta = combined_process_progress(states)
-                    self.navigator.set_item_progress(item, completed, total, folder.name, eta)
-                else:
-                    self.navigator.clear_item_progress(item)
-                return
+            item_type = item.data(0, ITEM_TYPE_ROLE)
+            if item_type not in {ROW_TYPE_FOLDER, ROW_TYPE_SOURCE} or _path_key(item.data(0, ITEM_PATH_ROLE)) != key:
+                continue
+            item_states = states
+            if item_type == ROW_TYPE_SOURCE:
+                # A Source data row shows the progress of its own file.
+                row = item.data(0, ITEM_SOURCE_ROLE)
+                names = {name.casefold() for name in (row.source, row.output, *row.inputs) if name}
+                item_states = [state for state in states if state[0].casefold() in names]
+                text = row.source
+            else:
+                text = folder.name
+            if item_states:
+                completed, total, eta = combined_process_progress(item_states)
+                self.navigator.set_item_progress(item, completed, total, text, eta)
+            elif item.data(0, ITEM_PROGRESS_TOTAL_ROLE) is not None:
+                self.navigator.clear_item_progress(item)
 
     def remove_process_progress(self, folder: Path, process_id: str) -> None:
         self.update_folder_progress(folder, exclude_process_id=process_id)

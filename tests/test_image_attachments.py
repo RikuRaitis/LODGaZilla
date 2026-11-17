@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, Qt, QThreadPool
+from PySide6.QtCore import QEvent, QPoint, Qt, QThreadPool
 from PySide6.QtGui import QColor, QImage
 from tests.qt_wait import qt_wait
 from PySide6.QtWidgets import QApplication, QMenu, QTreeWidgetItemIterator
@@ -98,6 +98,38 @@ class ImageAttachmentTests(unittest.TestCase):
         self.navigator.invalidate_source_snapshot()
         self.navigator.refresh_tree()
         self.assertEqual(len(self.image_rows()), 2)
+
+    def test_media_group_menu_attaches_to_its_folder(self):
+        self.attach([self.first])
+        media = self.image_rows()[0].parent()
+        self.assertEqual(media.text(0), "Media")
+        requested = []
+        self.navigator.media_group_context_menu_requested.connect(
+            lambda folder, entries, _position: requested.append((folder, entries)))
+        self.navigator.tree.scrollToItem(media)
+        self.navigator.on_context_menu_requested(self.navigator.tree.visualItemRect(media).center())
+        self.assertEqual(requested, [(self.folder.resolve(), [])])
+        # The menu offers the folder's Attach submenu, which attaches to that folder.
+        window = SimpleNamespace(plot_workspace=self.workspace, navigator=self.navigator,
+                                 attach_video_to_folder=mock.Mock(), attach_images_to_folder=mock.Mock(),
+                                 attach_audio_to_folder=mock.Mock())
+        window.add_attach_menu = lambda menu, folder: LODGaZillaWindow.add_attach_menu(window, menu, folder)
+        shown = {}
+
+        class RecordingMenu(QMenu):
+            def __init__(self, *args):
+                # The stand-in window is not a widget; keep a title and a menu parent.
+                super().__init__(*(arg for arg in args if isinstance(arg, (str, QMenu))))
+
+            def exec(self, *args):  # noqa: A003 - records instead of opening the menu
+                attach = self.actions()[0].menu()
+                shown["attach"] = [action.text() for action in attach.actions()]
+                attach.actions()[1].trigger()
+
+        with mock.patch("src.app.lodgazilla.QMenu", RecordingMenu):
+            LODGaZillaWindow.show_media_group_context_menu(window, self.folder, [], QPoint())
+        self.assertEqual(shown["attach"], ["Video…", "Images…", "Audio…"])
+        window.attach_images_to_folder.assert_called_once_with(self.folder)
 
     def test_cancel_and_failed_save_leave_links_unchanged(self):
         self.attach([])

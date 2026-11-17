@@ -16,6 +16,14 @@ from src.data.navigator_data import (
     read_h5_navigator_data,
     scan_navigator_folder,
 )
+from src.jobs.source_detection import (
+    IMPORTER_DETECTOR,
+    SourceDetection,
+    SourceRow,
+    folder_files,
+    folder_source_rows,
+    plugin_identity_from_origin,
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,11 @@ class NavigatorSourceSnapshot:
     info_signatures: dict[Path, FileSignature | None]
     h5_data: dict[Path, H5NavigatorData]
     h5_signatures: dict[Path, FileSignature | None]
+    # Each folder's Source data rows, found with ``detection``; ``source_signatures``
+    # (the folder's own modification time) decides when to look again.
+    source_rows: dict[Path, list[SourceRow]] = field(default_factory=dict)
+    source_signatures: dict[Path, FileSignature | None] = field(default_factory=dict)
+    detection: SourceDetection = field(default_factory=SourceDetection)
 
     def copy(self) -> "NavigatorSourceSnapshot":
         """Return a copy whose containers the GUI thread can keep mutating."""
@@ -46,6 +59,9 @@ class NavigatorSourceSnapshot:
             dict(self.info_signatures),
             dict(self.h5_data),
             dict(self.h5_signatures),
+            dict(self.source_rows),
+            dict(self.source_signatures),
+            self.detection,
         )
 
 
@@ -90,6 +106,7 @@ def build_navigator_snapshot(
     *,
     rescan: bool,
     cancelled: Callable[[], bool] = lambda: False,
+    detection: SourceDetection | None = None,
 ) -> NavigatorSnapshotResult:
     """Scan folders, read changed ``_info.json`` files and inspect changed H5 files.
 
@@ -162,10 +179,49 @@ def build_navigator_snapshot(
             changed = True
             h5_data[h5_path] = read_h5_navigator_data(h5_path)
 
-    snapshot = NavigatorSourceSnapshot(
-        root, folders, h5_files, folder_infos, info_signatures, h5_data, h5_signatures
+    detection = detection if detection is not None else (
+        previous.detection if previous is not None else SourceDetection())
+    source_rows, source_signatures, sources_changed = _find_source_rows(
+        folders, folder_infos, info_signatures, h5_data, previous, detection,
+        rescan=rescan, check_cancelled=check_cancelled,
     )
-    return NavigatorSnapshotResult(snapshot, changed, errors, read_ok)
+    snapshot = NavigatorSourceSnapshot(
+        root, folders, h5_files, folder_infos, info_signatures, h5_data, h5_signatures,
+        source_rows, source_signatures, detection,
+    )
+    return NavigatorSnapshotResult(snapshot, changed or sources_changed, errors, read_ok)
+
+
+def _find_source_rows(folders, folder_infos, info_signatures, h5_data, previous, detection, *,
+                      rescan, check_cancelled):  # type: ignore[no-untyped-def]
+    """Each folder's Source data rows; a folder is looked at again on a rescan, or when its
+    files, its _info.json or the enabled plugins changed."""
+    rows: dict[Path, list[SourceRow]] = {}
+    signatures: dict[Path, FileSignature | None] = {}
+    changed = False
+    reuse = previous is not None and not rescan and previous.detection == detection
+    previous_info_signatures = previous.info_signatures if previous is not None else {}
+    for folder in folders:
+        check_cancelled()
+        signature = file_signature(folder)
+        signatures[folder] = signature
+        if (reuse and folder in previous.source_rows and previous.source_signatures.get(folder) == signature
+                and previous_info_signatures.get(folder) == info_signatures.get(folder)):
+            rows[folder] = previous.source_rows[folder]
+            continue
+        found = folder_source_rows(
+            folder, folder_infos.get(folder), folder_files(folder),
+            detect_importer=lambda path: IMPORTER_DETECTOR.importer_for(path, detection.enabled_plugins),
+            h5_origin=lambda path: (h5_data.get(path.resolve()) or H5NavigatorData([], None, None)).origin,
+            plugin_titles=plugin_identity_from_origin,
+            exports=detection.exports,
+        )
+        rows[folder] = found
+        if previous is None or previous.source_rows.get(folder) != found:
+            changed = True
+    if previous is not None and set(previous.source_rows) != set(rows):
+        changed = True
+    return rows, signatures, changed
 
 
 class _SnapshotSignals(QObject):
@@ -173,18 +229,20 @@ class _SnapshotSignals(QObject):
 
 
 class _SnapshotTask(QRunnable):
-    def __init__(self, root, previous, rescan, stop_event):  # type: ignore[no-untyped-def]
+    def __init__(self, root, previous, rescan, stop_event, detection=None):  # type: ignore[no-untyped-def]
         super().__init__()
         self.root = root
         self.previous = previous
         self.rescan = rescan
         self.stop_event = stop_event
+        self.detection = detection
         self.signals = _SnapshotSignals()
 
     def run(self) -> None:
         try:
             result: object = build_navigator_snapshot(
-                self.root, self.previous, rescan=self.rescan, cancelled=self.stop_event.is_set
+                self.root, self.previous, rescan=self.rescan, cancelled=self.stop_event.is_set,
+                detection=self.detection,
             )
         except SnapshotCancelled:
             result = None
@@ -208,13 +266,14 @@ class NavigatorSnapshotJob(QObject):
         callback: Callable[["NavigatorSnapshotJob", object], None],
         *,
         rescan: bool,
+        detection: SourceDetection | None = None,
     ) -> None:
         super().__init__(parent)
         self.root = root
         self.callback = callback
         self._stop_event = threading.Event()
         self.worker = _SnapshotTask(
-            root, previous.copy() if previous is not None else None, rescan, self._stop_event
+            root, previous.copy() if previous is not None else None, rescan, self._stop_event, detection
         )
         self.worker.signals.completed.connect(self._finished)
         QThreadPool.globalInstance().start(self.worker)

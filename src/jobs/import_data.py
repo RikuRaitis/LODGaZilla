@@ -139,6 +139,20 @@ def load_import_configuration(
     )
 
 
+def importer_plugin_identity(config_path: str | Path) -> tuple[str, str]:
+    """The plugin ID and title of the importer whose ``importer.json`` is ``config_path``.
+
+    Read from the plugin's ``plugin.json``; without one (an older layout) the
+    folder name serves as both.
+    """
+    folder = Path(config_path).parent
+    try:
+        manifest = read_json_file(folder / "plugin.json")
+        return str(manifest.get("id") or folder.name), str(manifest.get("title") or folder.name)
+    except (OSError, ValueError, AttributeError):
+        return folder.name, folder.name
+
+
 def load_parser_class(parser_module_path: Path) -> type[DataParser]:
     return load_plugin_class(
         parser_module_path,

@@ -11,7 +11,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QSize, Qt, Signal
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -209,6 +209,40 @@ def _set_std_handles(stdout_handle: int, stderr_handle: int) -> None:
     kernel32.SetStdHandle(-12, ctypes.c_void_p(stderr_handle))
 
 
+class ElidedLabel(QLabel):
+    """One line of text cut with an ellipsis to the label's width.
+
+    It asks for no width of its own, so a long message never widens the window.
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setWordWrap(False)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - QLabel's own name
+        self._full_text = str(text)
+        self._update_elided_text()
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def _update_elided_text(self) -> None:
+        width = max(0, self.contentsRect().width())
+        super().setText(self.fontMetrics().elidedText(self._full_text, Qt.TextElideMode.ElideRight, width))
+
+    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().resizeEvent(event)
+        self._update_elided_text()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, super().sizeHint().height())
+
+
 class InternalLogPanel(QWidget):
     """Bounded, copy-friendly bottom log panel."""
 
@@ -236,8 +270,8 @@ class InternalLogPanel(QWidget):
         self.mini_row = QWidget(self)
         mini_layout = QHBoxLayout(self.mini_row)
         mini_layout.setContentsMargins(5, 0, 3, 0)
-        self.last_message = QLabel("Internal log", self.mini_row)
-        self.last_message.setWordWrap(False)
+        # Only as much of the latest message as fits; the tooltip has all of it.
+        self.last_message = ElidedLabel("Internal log", self.mini_row)
         self.mini_button = QToolButton(self.mini_row)
         self.mini_button.setAutoRaise(True)
         self.mini_button.setToolTip("Expand internal log")

@@ -2,7 +2,11 @@
 
 Workers receive (request, events, cancel_event). Events use the host's existing
 message, process_started/progress/eta/finished, and finished tuple protocol.
-Plugin-specific events use ('plugin_event', name, payload).
+Plugin-specific events use ('plugin_event', name, payload). An export reports each
+file it wrote with ``report_source_output``, for the folder's Source data group.
+
+A run started from a Source data row passes ``parameters["source_files"]``: the
+paths of the files to export. Without it, export what the folder holds.
 """
 from __future__ import annotations
 
@@ -24,3 +28,16 @@ class PluginJobRequest:
     entry_point: str = ""
     function: str = "run"
     parameters: dict[str, Any] = field(default_factory=dict)
+
+
+SOURCE_FILES_PARAMETER = "source_files"
+SOURCE_OUTPUT_EVENT = "source_output"
+
+
+def report_source_output(events, output: str | Path, inputs=()) -> None:  # type: ignore[no-untyped-def]
+    """Tell the host an export wrote ``output`` from ``inputs`` (the source files it read).
+
+    The host records it in the folder's Source data group, where it is marked outdated
+    when an input changes after the output was written.
+    """
+    events.put((SOURCE_OUTPUT_EVENT, str(output), [str(path) for path in inputs]))

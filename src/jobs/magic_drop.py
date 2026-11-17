@@ -80,7 +80,7 @@ class MagicDropJob(QObject):
                                                  installed_importers=self.installed_importers,
                                                  instructions_file=self.provider.instructions_file)
             self._run_agent(copies)
-            imported, rejected = 0, []
+            imported, rejected, pairs = 0, [], []
             for copy in copies:
                 self._check_cancelled()
                 self.event.emit("status", f"Importing {copy.name}…")
@@ -96,13 +96,14 @@ class MagicDropJob(QObject):
                     rejected.append((copy, error))
                     continue
                 imported += 1
+                pairs.append((copy, copy.with_suffix(".h5")))
                 self.event.emit("result", f"{copy.with_suffix('.h5').name}\n{magic_drop.summary_text(summary)}")
             if not imported:
                 raise rejected[0][1]
             for copy, _error in rejected:
                 self.event.emit("status", f"{copy.name}: not imported; the parser does not read it.")
             metadata = magic_drop.read_metadata(self.draft)
-            magic_drop.write_folder_info(self.folder, metadata, self.draft)
+            magic_drop.write_folder_info(self.folder, metadata, self.draft, pairs)
             self.finished.emit(True, f"Created {self.folder.name} with {imported} H5 file(s).", self.folder)
         except MagicDropCancelled:
             self._remove_folder()
@@ -239,5 +240,51 @@ class PluginDropJob(QObject):
             return
         try:
             self.finished.emit(folder, plugins)
+        except RuntimeError:
+            pass  # Deleted with its window meanwhile.
+
+
+class DraftImportJob(QObject):
+    """Import one file again with the Magic drop parser that first imported it.
+
+    The parser is code the AI wrote, so it runs in its own process, as in the drop
+    (``magic_drop.run_trial_import``). Its Source data record is updated when done.
+    """
+
+    # Succeeded and a closing message.
+    finished = Signal(bool, str)
+
+    def __init__(self, draft: Path, source: Path, output: Path, *, timeout_seconds: float = 600.0,
+                 parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.draft, self.source, self.output = Path(draft), Path(source), Path(output)
+        self.timeout_seconds = timeout_seconds
+        self._cancelled = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="magic-drop-reimport", daemon=True)
+        self._thread.start()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        if self._thread is not None:
+            self._thread.join(timeout)
+        return self._thread is None or not self._thread.is_alive()
+
+    def _run(self) -> None:
+        try:
+            magic_drop.run_trial_import(self.draft, self.source, self.output, timeout=self.timeout_seconds,
+                                        cancelled=self._cancelled)
+            magic_drop.record_draft_import(self.source.parent, self.source, self.output, self.draft)
+            succeeded, message = True, f"Imported {self.source.name} again with its Magic drop parser."
+        except Exception as error:  # noqa: BLE001 - reported in the Internal log panel.
+            succeeded, message = False, f"Could not import {self.source.name} again: {error}"
+        if self._cancelled.is_set():
+            return
+        try:
+            self.finished.emit(succeeded, message)
         except RuntimeError:
             pass  # Deleted with its window meanwhile.

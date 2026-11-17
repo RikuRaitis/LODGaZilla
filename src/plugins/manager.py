@@ -99,6 +99,12 @@ class PluginManager:
     def is_enabled(self, plugin_id: str) -> bool:
         return bool(self.enabled.get(plugin_id, False))
 
+    def enabled_importers(self) -> list[PluginDescriptor]:
+        """Enabled, loadable importer plugins."""
+        return [descriptor for descriptor in self.descriptors
+                if "importer" in descriptor.capabilities and self.is_enabled(descriptor.plugin_id)
+                and not descriptor.error]
+
     def has_enabled_importer(self) -> bool:
         """Whether an enabled manifest-only importer plugin is available."""
         return any(
@@ -112,21 +118,27 @@ class PluginManager:
                 if descriptor.launcher is not None and self.is_enabled(descriptor.plugin_id)]
 
     def operations(self, scope: str) -> list[tuple[PluginDescriptor, PluginOperation]]:
-        """Enabled plugins' import and export operations offered for ``scope`` ("folder" or "batch")."""
+        """Enabled plugins' import and export operations offered for ``scope`` ("folder")."""
         return [(descriptor, operation) for descriptor in self.descriptors
                 if self.is_enabled(descriptor.plugin_id)
                 for operation in descriptor.operation_specs if operation.kind and scope in operation.scopes]
 
-    def run_operation(self, plugin_id: str, operation: str, folder: Path, *, recursive: bool = False) -> None:
-        """Start a declared operation from a host menu; the plugin may add job parameters."""
+    def run_operation(self, plugin_id: str, operation: str, folder: Path, *, recursive: bool = False,
+                      parameters: dict | None = None) -> None:
+        """Start a declared operation for the host; the plugin may add job parameters.
+
+        ``parameters`` from the host, such as a Source data row's ``source_files``,
+        take precedence over the plugin's own.
+        """
         descriptor = next((item for item in self.descriptors if item.plugin_id == plugin_id), None)
         if descriptor is None or not self.is_enabled(plugin_id):
             return
-        parameters = {}
+        host_parameters, parameters = dict(parameters or {}), {}
         get_parameters = getattr(self.plugins.get(plugin_id), "operation_parameters", None)
         try:
             if callable(get_parameters):
                 parameters = dict(get_parameters(operation) or {})
+            parameters.update(host_parameters)
             ApplicationPluginServices(self.main_window, descriptor).submit_job(
                 operation, folder, recursive=recursive, parameters=parameters)
         except Exception as error:  # noqa: BLE001 - plugin boundary.

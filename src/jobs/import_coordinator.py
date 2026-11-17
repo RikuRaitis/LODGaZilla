@@ -15,6 +15,9 @@ class ImportRequest:
     folder: Path
     recursive: bool
     process_slots: int
+    # A Source data row: only these files of the folder, with this importer plugin.
+    sources: tuple[str, ...] = ()
+    importer_id: str = ""
 
 
 @dataclass

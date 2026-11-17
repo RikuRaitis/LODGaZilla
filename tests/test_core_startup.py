@@ -9,7 +9,7 @@ from unittest import mock
 from types import SimpleNamespace
 
 import h5py
-from PySide6.QtWidgets import QApplication, QMenu, QMenuBar, QMessageBox, QStatusBar
+from PySide6.QtWidgets import QApplication, QMenu, QMenuBar, QStatusBar
 from src.app.branding import APP_VERSION
 from src.app.settings import load_settings_section
 from src.app.lodgazilla import LODGaZillaWindow, parse_arguments
@@ -61,26 +61,25 @@ class CoreStartupTests(unittest.TestCase):
                 log_text = window.log_panel.entries.toPlainText()
                 self.assertIn(f"Loading data folder {folder.name}…", log_text)
                 self.assertIn(f"Loaded data folder {folder.name}", log_text)
-                # Without plugins, the plugin actions are listed last and H5 generation is disabled.
-                menu = QMenu(window)
-                window.add_plugin_folder_actions(menu, [folder, folder / "other"], "batch")
-                self.assertEqual([(action.text(), action.isEnabled()) for action in menu.actions()],
-                                 [("Plugin: Generate / update H5 files (2 folders)", False)])
-                window.batch_menu.aboutToShow.emit()
-                self.assertEqual([action.text() for action in window.batch_menu.actions()],
-                                 ["Plugin: Generate H5 files for all folders"])
                 self.assertTrue(window.plot_navigator.plugin_bar.isHidden())
-                # The Batch button sits between Refresh and Sample loss, and asks before it starts.
+                # No Batch button: the tree buttons are Refresh, the diagnostics and Hide irrelevant series.
                 controls = window.navigator.controls
+                self.assertFalse(hasattr(controls, "batch_button"))
                 row = controls.icon_row.layout()
                 buttons = [row.itemAt(index).widget() for index in range(row.count()) if row.itemAt(index).widget()]
-                self.assertEqual(buttons[:3], [controls.refresh_button, controls.batch_button,
-                                               controls.sample_loss_button])
-                for answer, started in ((QMessageBox.StandardButton.No, False), (QMessageBox.StandardButton.Yes, True)):
-                    with mock.patch("src.app.lodgazilla.QMessageBox.question", return_value=answer), \
-                            mock.patch.object(window, "start_import") as start_import:
-                        window.start_data_folder_cache_batch()
-                    self.assertEqual(start_import.called, started)
+                self.assertEqual(buttons, [controls.refresh_button, controls.sample_loss_button,
+                                           controls.clipping_button, controls.hide_irrelevant_button])
+                # The Folder menu has no plugin actions; imports and exports are in Source data.
+                shown = []
+
+                class RecordingMenu(QMenu):
+                    def exec(self, *args):  # noqa: A003 - records instead of opening the menu
+                        shown.extend(action.text() for action in self.actions())
+
+                with mock.patch("src.app.lodgazilla.QMenu", RecordingMenu):
+                    window.show_folder_context_menu(folder, window.navigator.tree.rect().center())
+                self.assertIn("Multi-series", shown)
+                self.assertFalse([text for text in shown if text.startswith("Plugin:")])
                 # Help shows the About dialog; its button opens README.md in the system's own application.
                 with mock.patch("src.app.lodgazilla.QDesktopServices.openUrl", return_value=True) as open_url:
                     window.plot_navigator.help_button.click()
@@ -148,7 +147,7 @@ class CoreStartupTests(unittest.TestCase):
             manager = mock.Mock(descriptors=[SimpleNamespace(plugin_id="new_plugin")])
             manager.refresh.return_value = []
             window = SimpleNamespace(settings_path=settings, plugin_manager=manager, plugin_updates=mock.Mock(),
-                                     internal_logger=mock.Mock())
+                                     internal_logger=mock.Mock(), update_source_detection=mock.Mock())
             LODGaZillaWindow.reload_plugin_settings(window)
             saved = json.loads(settings.read_text())["plugins"]
             self.assertEqual(saved["sources"], ["https://github.com/owner"])

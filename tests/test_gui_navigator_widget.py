@@ -62,6 +62,7 @@ from src.gui.navigator.settings import (  # noqa: E402
     COLUMN_CATEGORY_FOLDER,
     COLUMN_CATEGORY_INFO,
     COLUMN_CATEGORY_SERIES,
+    COLUMN_CATEGORY_SOURCE,
     COLUMN_DATA,
     COLUMN_INFO_PAIR_VALUE,
     COLUMN_LOG_LENGTH,
@@ -1063,7 +1064,8 @@ class NavigatorColumnProfileTests(unittest.TestCase):
         self.assertEqual(loaded.profiles[COLUMN_CATEGORY_FOLDER].widths, {COLUMN_LOG_LENGTH: 120})
         self.assertEqual(loaded.profiles[COLUMN_CATEGORY_SERIES].order, [COLUMN_DATA, COLUMN_SAMPLE_RATE])
         self.assertEqual(loaded.profiles[COLUMN_CATEGORY_SERIES].widths, {COLUMN_SAMPLE_RATE: 90})
-        self.assertEqual(set(loaded.profiles), {COLUMN_CATEGORY_FOLDER, COLUMN_CATEGORY_INFO, COLUMN_CATEGORY_SERIES})
+        self.assertEqual(set(loaded.profiles), {COLUMN_CATEGORY_FOLDER, COLUMN_CATEGORY_INFO, COLUMN_CATEGORY_SERIES,
+                                                COLUMN_CATEGORY_SOURCE})
 
 
 class NavigatorDiagnosticRowStyleTests(unittest.TestCase):

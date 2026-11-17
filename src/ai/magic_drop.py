@@ -22,7 +22,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from src.data.folder_info import read_info_file, write_info_file
+from src.data.folder_info import MAGIC_DROP_PLUGIN, SOURCE_IMPORT, read_info_file, source_entry, source_entry_key, write_info_file
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DRAFTS_ROOT = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share") / "LODGaZilla" / "magic_drop"
@@ -268,12 +268,27 @@ def read_metadata(draft: Path) -> dict[str, str]:
             if str(key).strip() and value is not None and not isinstance(value, (dict, list))}
 
 
-def write_folder_info(folder: Path, metadata: dict[str, str], draft: Path) -> Path:
-    """The folder's _info.json: the static values as read-only entries."""
+def write_folder_info(folder: Path, metadata: dict[str, str], draft: Path,
+                      imported: list[tuple[Path, Path]] = ()) -> Path:
+    """The folder's _info.json: the static values as read-only entries, and a Source data
+    record for each imported (source, H5) pair, by Magic drop with this draft."""
     info = read_info_file(folder)
     info.readonly.update(metadata)
     info.readonly["magic drop"] = draft.name
+    records = {source_entry_key(entry): entry for entry in info.sources}
+    for source, output in imported:
+        entry = source_entry(SOURCE_IMPORT, source=source.name, output=output.name, plugin=MAGIC_DROP_PLUGIN,
+                             draft=str(draft))
+        records[source_entry_key(entry)] = entry
+    info.sources = list(records.values())
     return write_info_file(folder, info)
+
+
+def record_draft_import(folder: Path, source: Path, output: Path, draft: Path) -> Path:
+    """Note a file imported again with a Magic drop parser in the folder's Source data."""
+    from src.data.folder_info import record_sources
+    return record_sources(folder, [source_entry(SOURCE_IMPORT, source=source.name, output=output.name,
+                                                plugin=MAGIC_DROP_PLUGIN, draft=str(draft))])
 
 
 def summary_text(summary: dict) -> str:

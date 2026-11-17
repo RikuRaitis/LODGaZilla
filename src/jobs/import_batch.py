@@ -11,13 +11,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.data.folder_info import is_info_file as is_folder_info_file
+from src.data.folder_info import SOURCE_IMPORT, is_info_file as is_folder_info_file, record_sources, source_entry
 from src.jobs.cache_files import is_cache_output, is_cache_temp_file
 from src.jobs.import_data import (
     DEFAULT_CONFIG_DIR,
     default_output_path,
     ensure_replaceable_cache,
     load_import_configuration,
+    importer_plugin_identity,
     load_import_configurations,
     select_importer,
     write_hdf5_cache,
@@ -60,6 +61,7 @@ class ImportJobResult:
     parse_seconds: float = 0.0
     write_seconds: float = 0.0
     total_seconds: float = 0.0
+    config_path: str = ""
 
 
 def run_reimport_batch(
@@ -72,13 +74,20 @@ def run_reimport_batch(
     enabled_plugins: dict[str, bool] | None = None,
     hdf5_settings: dict[str, Any] | None = None,
     cancel_event=None,
+    sources: tuple[str, ...] = (),
+    importer_id: str = "",
 ) -> None:  # type: ignore[no-untyped-def]
-    """Rebuild HDF5 caches under one folder using a bounded parser process pool."""
+    """Rebuild HDF5 caches under one folder using a bounded parser process pool.
+
+    ``sources`` limits the run to those files (a Source data row); ``importer_id``
+    then names the importer plugin to read them with.
+    """
 
     logger.info("Process batch started for %s (recursive=%s)", data_folder, recursive)
     remove_stale_cache_temp_files(data_folder, recursive, logger)
     jobs_by_folder = discover_import_jobs(
         data_folder, recursive, logger, enabled_plugins=enabled_plugins, hdf5_settings=hdf5_settings,
+        sources=sources, importer_id=importer_id,
     )
     job_count = sum(len(jobs) for jobs in jobs_by_folder.values())
     if _cancelled(cancel_event):
@@ -149,14 +158,23 @@ def discover_import_jobs(
     *,
     enabled_plugins: dict[str, bool] | None = None,
     hdf5_settings: dict[str, Any] | None = None,
+    sources: tuple[str, ...] = (),
+    importer_id: str = "",
 ) -> dict[Path, list[ImportJob]]:
     configurations = load_import_configurations(
         DEFAULT_CONFIG_DIR, enabled_plugins=enabled_plugins, hdf5_settings=hdf5_settings,
     )
+    if importer_id:
+        # A Source data row names its importer; another enabled one never takes its place.
+        configurations = [configuration for configuration in configurations
+                          if importer_plugin_identity(configuration.path)[0] == importer_id]
     logger.info("Loaded %s importer configuration(s)", len(configurations))
 
     jobs_by_folder: dict[Path, list[ImportJob]] = defaultdict(list)
-    source_candidates = data_folder.rglob("*") if recursive else data_folder.iterdir()
+    if sources:
+        source_candidates = (data_folder / name for name in sources)
+    else:
+        source_candidates = data_folder.rglob("*") if recursive else data_folder.iterdir()
     for source_path in source_candidates:
         if (
             not source_path.is_file()
@@ -341,6 +359,7 @@ def run_import_job(
             parse_seconds=parse_seconds,
             write_seconds=write_seconds,
             total_seconds=total_seconds,
+            config_path=job.config_path,
         )
     except Exception as error:  # noqa: BLE001 - return the failure so the batch can continue.
         emit(("process_finished", job.folder_path, worker_id, source_name, False))
@@ -388,6 +407,18 @@ class InlineProgressQueue:
         self._emit(event)
 
 
+def record_import_source(result: ImportJobResult, logger: logging.Logger) -> None:
+    """Note an imported file in its folder's Source data (``_info.json``)."""
+    source, output = Path(result.source_path), Path(result.output_path)
+    plugin_id, title = importer_plugin_identity(result.config_path) if result.config_path else ("", result.config_name)
+    try:
+        record_sources(Path(result.folder_path), [source_entry(
+            SOURCE_IMPORT, source=source.name, output=output.name, plugin=title, plugin_id=plugin_id)])
+    except (OSError, ValueError, TimeoutError) as error:
+        # The H5 file is written; only its Source data record is missing.
+        logger.warning("Could not record the source of %s: %s", output, error)
+
+
 class ImportBatchResults:
     def __init__(self) -> None:
         self.imported = 0
@@ -408,6 +439,7 @@ class ImportBatchResults:
                 result.input_megabytes / result.total_seconds if result.total_seconds else 0.0,
             )
             logger.info("Created %s", result.output_path)
+            record_import_source(result, logger)
             return
 
         self.failed += 1

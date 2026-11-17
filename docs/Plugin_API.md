@@ -113,18 +113,27 @@ developing an importer manually or with an AI agent.
 
 A UI plugin can declare `"operations": {"Example export": "worker.py:run"}`; the
 plugin then starts the job itself with `services.submit_job`. The object form
-`{"worker": "worker.py:run", "kind": "export", "title": "Example CSV", "scopes": ["folder", "batch"]}`
-also lets the host offer it:
+`{"worker": "worker.py:run", "kind": "export", "title": "Example CSV", "scopes": ["folder"], "inputs": ["*.bin"]}`
+also lets the host offer it in each folder's **Source data** group. Only `export`
+operations are offered there; an `import` operation is started by the plugin itself.
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `import` or `export`; the menu entry reads `Plugin: Export Example CSV`. |
-| `title` | The name in that entry; defaults to the operation name. |
-| `scopes` | `folder`: the folder context menu, for that folder. `batch`: the context menu of a virtual group or several selected folders (run on each folder), and the Navigator's **Batch** menu (the whole data folder, recursively, after a confirmation). |
+| `kind` | `import` or `export`. |
+| `title` | A name for the operation; defaults to the operation name. The Source data row shows the plugin's title. |
+| `scopes` | `folder`: a row in each folder's **Source data** group (exports). `batch` is still accepted but no longer offered; the Batch menu was removed. |
+| `inputs` | Optional file-name patterns of the files an export reads, such as `["*.bin"]`. A folder gets an export row when a file matches; without `inputs`, when it has H5 files. |
 
 Before a host-started job, the host calls the plugin's optional
 `operation_parameters(operation)`; the returned dictionary becomes
-`request.parameters`.
+`request.parameters`. A run started from a Source data row adds
+`request.parameters["source_files"]`: the paths of the files to export (the row's
+inputs). Without it, export what the folder holds.
+
+For each file it writes, the worker calls
+`src.contracts.jobs.report_source_output(events, output, inputs)` with the files it read.
+The host records the export in the folder's Source data (`_info.json`), with the plugin's
+title in the Plugin column, and marks it outdated when an input changes later.
 The worker is an immediate-child Python file defining
 `run(request, events, cancel_event)`. It receives a serializable `PluginJobRequest`:
 folder, recursion, process-slot budget and plugin-owned parameters. No Qt objects

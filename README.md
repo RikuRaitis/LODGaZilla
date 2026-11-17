@@ -118,9 +118,9 @@ data series there to plot it. It needs the Claude Code or Codex tool, as describ
 
 **Open a data folder.** Once you have files and plugins for them, choose the folder in
 the **Data folder** field at the top left (its dropdown starts with **[Browse…]**).
-Double-click a folder whose data files have no H5 files yet to convert it (a folder
-that holds only subfolders just expands), then double-click a data series to plot it,
-or drag it into the plot area on the right.
+Expand a folder and its **Source data** group, and double-click a file marked
+**Not imported** to convert it to H5. Then double-click a data series to plot it, or drag
+it into the plot area on the right.
 
 ## Using LODGaZilla
 
@@ -157,7 +157,6 @@ Drag the dividers between the areas to resize them.
 | Icon | Button | Does |
 | --- | --- | --- |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/refresh.svg"><img src="assets/navigator_icons/light/refresh.svg" width="20" alt="refresh"></picture> | Refresh | Reads the data folder again. |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/batch-h5.svg"><img src="assets/navigator_icons/light/batch-h5.svg" width="20" alt="batch h5"></picture> | Batch | Runs a plugin action, such as generating H5 files, on every folder in the data folder, after an "Are you sure?" |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/sample-loss.svg"><img src="assets/navigator_icons/light/sample-loss.svg" width="20" alt="sample loss"></picture> | Sample loss | Highlights series with dropped samples. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/clipping.svg"><img src="assets/navigator_icons/light/clipping.svg" width="20" alt="clipping"></picture> | Clipping | Highlights series that hit their sensor's limits. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/hide-irrelevant.svg"><img src="assets/navigator_icons/light/hide-irrelevant.svg" width="20" alt="hide irrelevant"></picture> | Hide irrelevant series | Hides series the importer marks as hidden, such as system counters. |
@@ -211,13 +210,32 @@ for:
 
 - **Multi-series**: all the folder's series in one card.
 - **Attach**: link a video, images or audio to the folder. Removing a link later never
-  deletes the file.
+  deletes the file. A folder's **Media** group has the same **Attach** menu.
 - **Show in file manager.**
-- The plugin actions, last and each starting with **Plugin:**, such as
-  **Plugin: Generate / update H5 files**.
 
-Right-click a year, a month or several selected folders to run the plugin actions on
-each of them.
+#### Source data
+
+Below Info, each folder's **Source data** group lists what was imported or exported,
+and what can be, in three columns:
+
+| Source | Output | Plugin |
+| --- | --- | --- |
+| `log_20260909_104101.bin` | `log_20260909_104101.h5` | Example binary importer |
+| `log_20260910_090000.bin` | Not imported | Example binary importer |
+| LODGaZilla | `20260909_104101.csv` | Example CSV export |
+
+- A file an enabled importer plugin can read appears as **Not imported** (dimmed), even
+  before anything is imported. Files Magic drop imported show **Magic drop** as the plugin.
+- An export appears when the folder has files it reads, as **Not exported** until it runs.
+- An output whose source changed after it was written is marked **(outdated)**; one that
+  was deleted, **(missing)**. Click **Refresh** to look again.
+- **Double-click** a row to import, re-import or export it. LODGaZilla asks first when
+  the output exists, because it is replaced. **Right-click** a row for the same action
+  and **Show in file manager**.
+
+LODGaZilla records each import and export in the folder's `_info.json` (`sources`).
+Imports and exports start only from Source data rows; there is no folder-level or
+batch conversion.
 
 ### Opening cards and dragging data
 
@@ -600,9 +618,7 @@ runs Python code with your permissions.
 
 | Where | What |
 | --- | --- |
-| Folder right-click | The plugin actions come last, each starting with **Plugin:**, for example **Plugin: Generate / update H5 files**. |
-| Right-click on a year, a month or several selected folders | The same plugin actions, run on each visible folder. |
-| **Batch** button in the Navigator | The plugin actions for every folder in the data folder. |
+| A folder's [Source data](#source-data) group | Each file an importer reads, and each export, with its plugin in the Plugin column. |
 | Plot navigator toolbar | One icon per plugin with its own window. |
 
 ## Demo data

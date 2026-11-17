@@ -238,13 +238,6 @@ class NavigatorControlsWidget(QWidget):
         self.save_workspace_button.clicked.connect(self.workspace_save_requested.emit)
         self.save_workspace_as_button = self._icon_button("Save workspace as… (Ctrl+Shift+S)")
         self.save_workspace_as_button.clicked.connect(self.workspace_save_as_requested.emit)
-        # The plugin batch actions for the whole data folder; the main window fills the
-        # menu when it is about to show.
-        self.batch_button = self._icon_button("Batch actions for the whole data folder")
-        self.batch_menu = QMenu(self.batch_button)
-        self.batch_button.setMenu(self.batch_menu)
-        self.batch_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.batch_button.setStyleSheet("QToolButton::menu-indicator { image: none; }")
         self.file_bar = QWidget()
         file_layout = QHBoxLayout(self.file_bar)
         file_layout.setContentsMargins(2, 0, 0, 2)
@@ -289,7 +282,7 @@ class NavigatorControlsWidget(QWidget):
         icon_layout.setContentsMargins(0, 4, 0, 0)
         icon_layout.setSpacing(2)
         icon_layout.addStretch(1)
-        for button in (self.refresh_button, self.batch_button, self.sample_loss_button, self.clipping_button,
+        for button in (self.refresh_button, self.sample_loss_button, self.clipping_button,
                        self.hide_irrelevant_button):
             icon_layout.addWidget(button)
         icon_layout.addStretch(1)
@@ -330,8 +323,7 @@ class NavigatorControlsWidget(QWidget):
         for button, icon in ((self.open_workspace_button, "workspace-open"),
                              (self.recent_workspaces_button, "workspace-open-recent"),
                              (self.save_workspace_button, "workspace-save"),
-                             (self.save_workspace_as_button, "workspace-save-as"),
-                             (self.batch_button, "batch-h5")):
+                             (self.save_workspace_as_button, "workspace-save-as")):
             button.setIcon(navigator_asset_icon(self, icon))
         hiding = self.hide_irrelevant_button.isChecked()
         self.hide_irrelevant_button.setIcon(

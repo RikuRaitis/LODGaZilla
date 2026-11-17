@@ -22,6 +22,9 @@ class FolderInfoData:
     # Audio H5 links: "path" (the H5), optional "source" (the original audio or
     # video file), "offset_seconds", and "video" when it is a video's soundtrack.
     audio: list[dict[str, str]] = field(default_factory=list)
+    # The Source data records: what was imported or exported, from what, by which
+    # plugin (``source_entry`` builds one; ``source_entry_key`` is its identity).
+    sources: list[dict[str, str]] = field(default_factory=list)
     _baseline: dict | None = field(default=None, repr=False, compare=False)
     _path: Path | None = field(default=None, repr=False, compare=False)
 
@@ -77,13 +80,63 @@ def normalise_info_mapping(data: object) -> FolderInfoData:
             link["path"] = link["path"].strip()
             link.setdefault("offset_seconds", "0")
             audio.append(link)
+    raw_sources = data.get("sources", [])
+    if not isinstance(raw_sources, list):
+        raise ValueError("Folder sources JSON section must contain an array.")
+    sources: dict[str, dict[str, str]] = {}
+    for entry in raw_sources:
+        record = normalise_plugin_mapping(entry)
+        if record.get("kind") in SOURCE_KINDS and record.get("output", "").strip():
+            # A later duplicate replaces an earlier one, as in a hand-edited file.
+            sources[source_entry_key(record)] = record
     # Metadata keys are identifiers rather than display text.  Treat them as
     # case-insensitive and give an editable value precedence if an old file
     # contains the same key in both sections.
     readonly = {key: value for key, value in readonly.items() if key not in editable}
     readonly.setdefault("serial number", "")
     return FolderInfoData(editable=editable, readonly=readonly, plugin=plugin, videos=videos, images=images,
-                          audio=audio)
+                          audio=audio, sources=list(sources.values()))
+
+
+SOURCE_IMPORT = "import"
+SOURCE_EXPORT = "export"
+SOURCE_KINDS = (SOURCE_IMPORT, SOURCE_EXPORT)
+# The Source column of an export: it exports the folder's data in LODGaZilla.
+EXPORT_SOURCE_NAME = "LODGaZilla"
+MAGIC_DROP_PLUGIN = "Magic drop"
+
+
+def source_entry_key(entry: dict[str, str]) -> str:
+    """A Source data record's identity: an import by its source file, an export by its output."""
+    if entry.get("kind") == SOURCE_IMPORT:
+        return f"import|{entry.get('source', '').casefold()}"
+    return f"export|{entry.get('plugin_id', '')}|{entry.get('output', '').casefold()}"
+
+
+def source_entry(kind: str, *, source: str, output: str, plugin: str, plugin_id: str = "",
+                 operation: str = "", inputs: list[str] | tuple[str, ...] = (), draft: str = "") -> dict[str, str]:
+    """One Source data record. Paths are file names in the folder; ``inputs`` (an export's
+    source files) are joined with ``|``; ``draft`` is a Magic drop's parser folder."""
+    from datetime import datetime, timezone
+    entry = {"kind": kind, "source": source, "output": output, "plugin": plugin, "plugin_id": plugin_id,
+             "updated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if operation:
+        entry["operation"] = operation
+    if inputs:
+        entry["inputs"] = "|".join(inputs)
+    if draft:
+        entry["draft"] = draft
+    return entry
+
+
+def record_sources(folder: str | Path, entries: list[dict[str, str]]) -> Path:
+    """Add or replace Source data records in a folder's ``_info.json``."""
+    info = read_info_file(folder)
+    by_key = {source_entry_key(entry): entry for entry in info.sources}
+    for entry in entries:
+        by_key[source_entry_key(entry)] = dict(entry)
+    info.sources = list(by_key.values())
+    return write_info_file(folder, info)
 
 
 def attachment_path(folder: str | Path, attachment: dict[str, str]) -> Path:
@@ -180,7 +233,7 @@ def write_info_file(folder: str | Path, data: FolderInfoData | dict[str, str]) -
 
 
 def _info_payload(data: FolderInfoData) -> dict:
-    return {name: getattr(data, name) for name in ("editable", "readonly", "plugin", "videos", "images", "audio")}
+    return {name: getattr(data, name) for name in ("editable", "readonly", "plugin", "videos", "images", "audio", "sources")}
 
 
 def _read_info(path: Path) -> FolderInfoData:
@@ -207,9 +260,11 @@ def _merge_info(before, proposed, current, field_name="metadata"):
                 result[key] = value
         return result
     if all(isinstance(value, list) for value in (before, proposed, current)):
-        # Attachment identity is its stored path. Merge offset/other field
-        # changes independently and preserve concurrent additions/removals.
-        mappings = [{entry["path"]: entry for entry in value} for value in (before, proposed, current)]
+        # Attachment identity is its stored path; a Source data record's is
+        # source_entry_key. Merge offset/other field changes independently and
+        # preserve concurrent additions/removals.
+        identity = source_entry_key if field_name.endswith(".sources") else (lambda entry: entry["path"])
+        mappings = [{identity(entry): entry for entry in value} for value in (before, proposed, current)]
         if all(len(mapping) == len(value) for mapping, value in zip(mappings, (before, proposed, current))):
             return list(_merge_info(*mappings, field_name).values())
     raise ValueError(f"{field_name} changed in another writer; refresh and retry the edit")

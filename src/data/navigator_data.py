@@ -64,6 +64,9 @@ class H5NavigatorData:
     series: list[H5Series]
     error: str | None
     time_range: tuple[float, float] | None
+    # How LODGaZilla wrote the file (the "tool", "source_file", "config_file" and
+    # "config_name" attributes), for Source data rows of folders imported before them.
+    origin: dict[str, str] = field(default_factory=dict)
 
 
 def add_default_info_keys(info_index: FolderInfoIndex, keys: Iterable[str]) -> FolderInfoIndex:
@@ -115,32 +118,6 @@ def resolved_path(path: Path) -> Path:
     return path.resolve()
 
 
-def folder_has_h5_files(folder: Path) -> bool:
-    if not folder.is_dir():
-        return False
-    return any(path.is_file() and path.suffix.lower() in {".h5", ".hdf5"} for path in folder.iterdir())
-
-
-def folder_needs_h5_generation(folder: Path) -> bool:
-    """Whether a folder holds data files of its own but no H5 files yet.
-
-    Subfolders, hidden files and the folder's own ``_info.json`` (with the lock and temp
-    files of writing it) do not count, so a parent folder such as a year folder is never
-    treated as unimported data.
-    """
-    if not folder.is_dir():
-        return False
-    info_name = f"{folder.name}_info.json"
-    has_data = False
-    for path in folder.iterdir():
-        if not path.is_file() or path.name.startswith(".") or path.name.startswith(info_name):
-            continue
-        if path.suffix.lower() in {".h5", ".hdf5"}:
-            return False
-        has_data = True
-    return has_data
-
-
 def ensure_folder_info_files(
     folders: list[Path], *, on_error: Callable[[Path, str], None] | None = None
 ) -> None:
@@ -158,6 +135,9 @@ def ensure_folder_info_files(
             continue
 
 
+ORIGIN_ATTRIBUTES = ("tool", "source_file", "config_file", "config_name")
+
+
 def read_h5_navigator_data(h5_path: Path) -> H5NavigatorData:
     """Read series and duration together, without repeatedly reopening a file."""
     try:
@@ -166,7 +146,10 @@ def read_h5_navigator_data(h5_path: Path) -> H5NavigatorData:
             # An audio file's times count from its video's start, so they say nothing
             # about when the folder's recording ran.
             audio = str(h5_file.attrs.get(MEDIA_KIND_ATTR, "")) == AUDIO_KIND
-            return H5NavigatorData(series, error, None if audio else h5_time_range_seconds_from_file(h5_file))
+            origin = {name: attribute_text(h5_file.attrs[name])
+                      for name in ORIGIN_ATTRIBUTES if name in h5_file.attrs}
+            return H5NavigatorData(series, error, None if audio else h5_time_range_seconds_from_file(h5_file),
+                                   origin)
     except (OSError, ValueError) as error:
         return H5NavigatorData([], str(error), None)
 

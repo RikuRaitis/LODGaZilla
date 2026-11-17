@@ -22,10 +22,15 @@ CUSTOM_COLUMN_PREFIX = "info:"
 COLUMN_CATEGORY_FOLDER = "folder"
 COLUMN_CATEGORY_INFO = "info"
 COLUMN_CATEGORY_SERIES = "series"
+# The Source data group's rows: the Data column (titled Source), Output and Plugin.
+COLUMN_CATEGORY_SOURCE = "source"
+COLUMN_SOURCE_OUTPUT = "output"
+COLUMN_SOURCE_PLUGIN = "plugin"
 ALL_COLUMN_CATEGORIES = {
     COLUMN_CATEGORY_FOLDER,
     COLUMN_CATEGORY_INFO,
     COLUMN_CATEGORY_SERIES,
+    COLUMN_CATEGORY_SOURCE,
 }
 ALWAYS_VISIBLE_COLUMNS = {COLUMN_DATA}
 FIXED_FIRST_COLUMN = COLUMN_DATA
@@ -84,6 +89,7 @@ def default_column_settings() -> ColumnSettings:
             COLUMN_CATEGORY_FOLDER: ColumnProfileSettings([], set(), {}),
             COLUMN_CATEGORY_INFO: ColumnProfileSettings([], set(), {}),
             COLUMN_CATEGORY_SERIES: ColumnProfileSettings([], set(), {}),
+            COLUMN_CATEGORY_SOURCE: ColumnProfileSettings([], set(), {}),
         },
         {},
     )

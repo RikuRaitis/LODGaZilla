@@ -59,8 +59,6 @@ from src.data.navigator_data import (
     folder_info_index_from_data,
     filter_folders_by_metadata,
     format_log_length,
-    folder_needs_h5_generation,
-    folder_has_h5_files,
     folder_info_group_path,
     metadata_values_for_key,
     read_h5_navigator_data,
@@ -72,9 +70,12 @@ from src.gui.navigator.settings import (
     COLUMN_CATEGORY_FOLDER,
     COLUMN_CATEGORY_INFO,
     COLUMN_CATEGORY_SERIES,
+    COLUMN_CATEGORY_SOURCE,
     COLUMN_DATA,
     COLUMN_INFO_PAIR_VALUE,
     COLUMN_LOG_LENGTH,
+    COLUMN_SOURCE_OUTPUT,
+    COLUMN_SOURCE_PLUGIN,
     CUSTOM_COLUMN_PREFIX,
     SHARED_WIDTH_COLUMNS,
     ColumnProfileSettings,
@@ -92,6 +93,14 @@ from src.jobs.navigator_snapshot import (
     build_navigator_snapshot,
     file_signature as _file_signature,
 )
+from src.jobs.source_detection import (
+    STATE_MISSING,
+    STATE_NEW,
+    STATE_OUTDATED,
+    SourceDetection,
+    SourceRow,
+)
+from src.data.folder_info import SOURCE_IMPORT
 
 
 GROUPING_NONE = "[FILTER]"
@@ -114,6 +123,8 @@ ITEM_PROGRESS_ETA_ROLE = Qt.ItemDataRole.UserRole + 11
 ITEM_VIDEO_PATH_ROLE = Qt.ItemDataRole.UserRole + 13
 ITEM_VIDEO_OFFSET_ROLE = Qt.ItemDataRole.UserRole + 14
 ITEM_IMAGE_PATH_ROLE = Qt.ItemDataRole.UserRole + 15
+# A Source data row's SourceRow (src/jobs/source_detection.py).
+ITEM_SOURCE_ROLE = Qt.ItemDataRole.UserRole + 16
 ROW_TYPE_VIRTUAL = "virtual"
 ROW_TYPE_FOLDER = "folder"
 ROW_TYPE_GROUP = "series_group"
@@ -124,6 +135,9 @@ ROW_TYPE_ERROR = "error"
 ROW_TYPE_MESSAGE = "message"
 ROW_TYPE_VIDEO = "video"
 ROW_TYPE_IMAGE = "image"
+ROW_TYPE_SOURCE_GROUP = "source_group"
+ROW_TYPE_SOURCE = "source"
+SOURCE_GROUP_NAME = "Source data"
 DEFAULT_SETTINGS_PATH = DEFAULT_APP_SETTINGS_PATH
 SETTINGS_SAVE_DEBOUNCE_MS = 350
 SETTINGS_SAVE_RETRY_MS = 1000
@@ -805,11 +819,13 @@ class DataNavigatorWidget(QWidget):
     image_activated = Signal(Path, Path)
     image_context_menu_requested = Signal(Path, Path, QPoint)
     series_context_menu_requested = Signal(Path, str, QPoint)
-    folder_import_requested = Signal(Path)
     folder_context_menu_requested = Signal(Path, QPoint)
-    # A virtual group or several selected folders: the folders shown under or selected.
-    folders_context_menu_requested = Signal(list, QPoint)
+    # A Source data row: its folder and SourceRow (src/jobs/source_detection.py).
+    source_activated = Signal(Path, object)
+    source_context_menu_requested = Signal(Path, object, QPoint)
     series_group_context_menu_requested = Signal(object, QPoint)
+    # A folder's Media group: the folder and its audio series (path, name), maybe none.
+    media_group_context_menu_requested = Signal(Path, object, QPoint)
     folder_info_changed = Signal(Path)
     metadata_write_failed = Signal(Path, str)
     navigator_warning = Signal(str)
@@ -843,6 +859,8 @@ class DataNavigatorWidget(QWidget):
         self.current_info_index = FolderInfoIndex(set(), set(), {}, {})
         self.current_series_columns = []
         self._source_snapshot: _NavigatorSourceSnapshot | None = None
+        # What the snapshot job uses to find Source data rows; set_source_detection changes it.
+        self.source_detection = SourceDetection()
         # None builds snapshots in a background job while an event loop runs
         # and synchronously otherwise (start-up before exec(), scripted tests).
         self.background_refresh: bool | None = None
@@ -1103,6 +1121,18 @@ class DataNavigatorWidget(QWidget):
         if selected_folder:
             self.set_data_folder(selected_folder)
 
+    def set_source_detection(self, detection: SourceDetection) -> None:
+        """Use these enabled importers and exports for the Source data rows, and look again."""
+        if detection == self.source_detection:
+            return
+        self.source_detection = detection
+        if self.data_folder() is not None and not self._initial_load_pending:
+            self.refresh_tree()
+
+    def source_rows(self, folder: Path) -> list[SourceRow]:
+        snapshot = self._source_snapshot
+        return list(snapshot.source_rows.get(resolved_path(folder), [])) if snapshot is not None else []
+
     def invalidate_source_snapshot(self) -> None:
         """Require a filesystem scan on the next tree refresh."""
         self._source_snapshot = None
@@ -1165,6 +1195,7 @@ class DataNavigatorWidget(QWidget):
             self._snapshot_for_root(root),
             self._on_snapshot_job_finished,
             rescan=rescan,
+            detection=self.source_detection,
         )
 
     def _on_snapshot_job_finished(self, job: NavigatorSnapshotJob, result: object) -> None:
@@ -1212,7 +1243,8 @@ class DataNavigatorWidget(QWidget):
         """Build the snapshot on the calling thread, reusing unchanged entries."""
         root = data_folder.resolve()
         startup_mark("navigator snapshot build started")
-        result = build_navigator_snapshot(root, self._snapshot_for_root(root), rescan=rescan)
+        result = build_navigator_snapshot(root, self._snapshot_for_root(root), rescan=rescan,
+                                          detection=self.source_detection)
         startup_mark(
             f"navigator snapshot build completed ({len(result.snapshot.folders)} folders, "
             f"{len(result.snapshot.h5_files)} HDF5 files)"
@@ -1497,7 +1529,7 @@ class DataNavigatorWidget(QWidget):
 
     def required_value_column_width(self) -> int:
         """Return the widest visible logical-value configuration for any row type."""
-        categories = (COLUMN_CATEGORY_FOLDER, COLUMN_CATEGORY_SERIES, COLUMN_CATEGORY_INFO)
+        categories = (COLUMN_CATEGORY_FOLDER, COLUMN_CATEGORY_SERIES, COLUMN_CATEGORY_INFO, COLUMN_CATEGORY_SOURCE)
         return max(
             (
                 sum(
@@ -1654,8 +1686,22 @@ class DataNavigatorWidget(QWidget):
                 font.setItalic(bool(style["italic"]))
                 for column_index in range(self.tree.columnCount()):
                     item.setFont(column_index, font)
+            self.apply_source_row_styles()
         finally:
             self._updating_row_highlights = previous_updating
+
+    def apply_source_row_styles(self) -> None:
+        """Source data rows not imported or exported yet are dimmed and in italics."""
+        dimmed = QBrush(self.tree.palette().color(QPalette.ColorRole.PlaceholderText))
+        for item in self.tree_items():
+            row = item.data(0, ITEM_SOURCE_ROLE)
+            if not isinstance(row, SourceRow) or row.state not in {STATE_NEW, STATE_MISSING}:
+                continue
+            self.set_row_foreground(item, dimmed)
+            font = item.font(PHYSICAL_DATA_COLUMN)
+            font.setItalic(True)
+            for column_index in range(self.tree.columnCount()):
+                item.setFont(column_index, font)
 
     def column_at(self, column_index: int, item: QTreeWidgetItem | None = None) -> TreeColumn | None:
         if column_index == PHYSICAL_DATA_COLUMN:
@@ -2391,6 +2437,12 @@ class DataNavigatorWidget(QWidget):
             detail = str(item.data(0, ITEM_VIDEO_PATH_ROLE) or "")
         elif item_type == ROW_TYPE_IMAGE:
             detail = str(item.data(0, ITEM_IMAGE_PATH_ROLE) or "")
+        elif item_type == ROW_TYPE_SOURCE:
+            row = item.data(0, ITEM_SOURCE_ROLE)
+            if isinstance(row, SourceRow):
+                # An import keeps its row when done; an export row by its output.
+                detail = (f"import|{row.source}" if row.kind == SOURCE_IMPORT
+                          else f"export|{row.plugin_id}|{row.operation}|{row.output}")
         return item_type, str(item.data(0, ITEM_PATH_ROLE) or ""), detail
 
     def item_identity_paths(self) -> dict[tuple[tuple[str, ...], ...], QTreeWidgetItem]:
@@ -2505,6 +2557,7 @@ class DataNavigatorWidget(QWidget):
             parent.addChild(item)
             info = self._folder_info_from_snapshot(folder)
             self.add_folder_info_rows(item, folder, info)
+            self.add_folder_source_rows(item, folder)
             self.add_folder_video_row(item, folder, info, series_group_nodes)
             self.add_folder_image_rows(item, folder, info, series_group_nodes)
             folder_nodes[folder] = item
@@ -2542,6 +2595,7 @@ class DataNavigatorWidget(QWidget):
             parent.addChild(item)
             info = self._folder_info_from_snapshot(folder)
             self.add_folder_info_rows(item, folder, info)
+            self.add_folder_source_rows(item, folder)
             self.add_folder_video_row(item, folder, info, series_group_nodes)
             self.add_folder_image_rows(item, folder, info, series_group_nodes)
             folder_nodes[folder] = item
@@ -2619,6 +2673,33 @@ class DataNavigatorWidget(QWidget):
             for key, value, editable in folder_info_pairs(info.editable, info.readonly):
                 info_item.addChild(self.make_detailed_info_item(folder, key, value, editable))
         info_item.addChild(self.make_detailed_info_item(folder, "", "", True, is_empty=True))
+
+    def add_folder_source_rows(self, folder_item: QTreeWidgetItem, folder: Path) -> None:
+        """The folder's Source data group: what was imported or exported, and what can be."""
+        rows = self.source_rows(folder)
+        if not rows:
+            return
+        group = self.make_item({COLUMN_DATA: SOURCE_GROUP_NAME})
+        group.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_SOURCE_GROUP)
+        group.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
+        self.reapply_item_values(group)
+        folder_item.addChild(group)
+        for row in rows:
+            group.addChild(self.make_source_item(folder, row))
+
+    def make_source_item(self, folder: Path, row: SourceRow) -> QTreeWidgetItem:
+        item = self.make_item({
+            COLUMN_DATA: row.source,
+            COLUMN_SOURCE_OUTPUT: source_output_text(row),
+            COLUMN_SOURCE_PLUGIN: row.plugin,
+        })
+        item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_SOURCE)
+        item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
+        item.setData(0, ITEM_SOURCE_ROLE, row)
+        if row.inputs:
+            item.setToolTip(0, ", ".join(row.inputs))
+        self.reapply_item_values(item)
+        return item
 
     def media_group_item(
         self, folder_item: QTreeWidgetItem, folder: Path, nodes: dict[tuple[str, ...], QTreeWidgetItem] | None
@@ -2993,16 +3074,13 @@ class DataNavigatorWidget(QWidget):
 
     def on_item_activated(self, item: QTreeWidgetItem, _column: int) -> None:
         item_type = item.data(0, ITEM_TYPE_ROLE)
-        if item_type == ROW_TYPE_FOLDER:
-            folder = Path(str(item.data(0, ITEM_PATH_ROLE)))
-            if folder_needs_h5_generation(folder):
-                self.folder_import_requested.emit(folder)
-            elif folder_has_h5_files(folder):
-                # QTreeWidget toggles expansion after emitting itemDoubleClicked.
-                # Queue this so activation consistently leaves cached folders
-                # expanded instead of also starting a destructive rebuild.
-                QTimer.singleShot(0, self, lambda: item.setExpanded(True))
-            # Otherwise, such as a parent folder, the double-click only expands or collapses it.
+        if item_type in {ROW_TYPE_FOLDER, ROW_TYPE_SOURCE_GROUP}:
+            # QTreeWidget expands or collapses it; imports and exports start from Source rows.
+            return
+        if item_type == ROW_TYPE_SOURCE:
+            row = item.data(0, ITEM_SOURCE_ROLE)
+            if isinstance(row, SourceRow):
+                self.source_activated.emit(Path(str(item.data(0, ITEM_PATH_ROLE))), row)
             return
         if item_type == ROW_TYPE_GROUP:
             # QTreeWidget handles expansion; group activation never opens plots.
@@ -3051,6 +3129,11 @@ class DataNavigatorWidget(QWidget):
         if item_type == ROW_TYPE_DETAILED_INFO:
             self.show_detailed_info_context_menu(item, position)
             return
+        if item_type == ROW_TYPE_SOURCE:
+            row = item.data(0, ITEM_SOURCE_ROLE)
+            if isinstance(row, SourceRow):
+                self.source_context_menu_requested.emit(Path(str(item.data(0, ITEM_PATH_ROLE))), row, position)
+            return
         if item_type == ROW_TYPE_SERIES:
             self.series_context_menu_requested.emit(
                 Path(str(item.data(0, ITEM_PATH_ROLE))),
@@ -3067,20 +3150,27 @@ class DataNavigatorWidget(QWidget):
                     entries.append((Path(str(child.data(0, ITEM_PATH_ROLE))),
                                     str(child.data(0, ITEM_SERIES_ROLE))))
                 pending.extend(child.child(index) for index in reversed(range(child.childCount())))
-            if entries:
+            folder = self.media_group_folder(item)
+            if folder is not None:
+                self.media_group_context_menu_requested.emit(folder, entries, position)
+            elif entries:
                 self.series_group_context_menu_requested.emit(entries, position)
             return
-        if item_type not in {ROW_TYPE_FOLDER, ROW_TYPE_VIRTUAL}:
+        if item_type != ROW_TYPE_FOLDER:
             return
         items = self.tree.selectedItems() if item in self.tree.selectedItems() else [item]
-        folders = self.folders_for_items(items)
-        if item_type == ROW_TYPE_FOLDER and len(folders) <= 1:
-            # The cache-management action must also be reachable for folders that
-            # do not yet contain a cache; otherwise a new folder has no context
-            # menu path to create its first HDF5 files.
+        # The Folder menu's actions are for one folder; several selected folders have none.
+        if len(self.folders_for_items(items)) <= 1:
             self.folder_context_menu_requested.emit(Path(str(item.data(0, ITEM_PATH_ROLE))), position)
-        elif folders:
-            self.folders_context_menu_requested.emit(folders, position)
+
+    @staticmethod
+    def media_group_folder(item: QTreeWidgetItem) -> Path | None:
+        """The folder of a folder's Media group row; None for any other row."""
+        parent = item.parent()
+        if (item.data(0, ITEM_TYPE_ROLE) != ROW_TYPE_GROUP or item.text(0) != MEDIA_GROUP or parent is None
+                or parent.data(0, ITEM_TYPE_ROLE) != ROW_TYPE_FOLDER):
+            return None
+        return Path(str(parent.data(0, ITEM_PATH_ROLE)))
 
     @staticmethod
     def folders_for_items(items: list[QTreeWidgetItem]) -> list[Path]:
@@ -3172,6 +3262,17 @@ class DataNavigatorWidget(QWidget):
         self.refresh_tree()
 
 
+def source_output_text(row: SourceRow) -> str:
+    """The Output column of a Source data row."""
+    if row.state == STATE_NEW:
+        return "Not imported" if row.kind == SOURCE_IMPORT else "Not exported"
+    if row.state == STATE_OUTDATED:
+        return f"{row.output} (outdated)"
+    if row.state == STATE_MISSING:
+        return f"{row.output} (missing)"
+    return row.output
+
+
 def info_column_id(key: str) -> str:
     return f"{CUSTOM_COLUMN_PREFIX}{normalise_info_key(key)}"
 
@@ -3226,6 +3327,13 @@ def tree_item_sort_key(item: QTreeWidgetItem) -> tuple[int, int, str]:
     item_type = str(item.data(0, ITEM_TYPE_ROLE) or "")
     if item_type == ROW_TYPE_INFO:
         return (0, 0, item.text(0).casefold())
+    if item_type == ROW_TYPE_SOURCE_GROUP:
+        return (0, 1, "")
+    if item_type == ROW_TYPE_SOURCE:
+        # Imports, then exports, each in file-name order.
+        row = item.data(0, ITEM_SOURCE_ROLE)
+        if isinstance(row, SourceRow):
+            return (1, 0 if row.kind == SOURCE_IMPORT else 1, f"{row.source.casefold()}|{row.output.casefold()}")
     if item_type == ROW_TYPE_DETAILED_INFO and bool(item.data(0, ITEM_INFO_EMPTY_ROLE)):
         return (2, 1, "")
     return (1, 1 if item.childCount() == 0 else 0, item.text(0).casefold())
@@ -3250,6 +3358,10 @@ def columns_for_category(
         )
     elif category == COLUMN_CATEGORY_INFO:
         columns.append(TreeColumn(COLUMN_INFO_PAIR_VALUE, "Value"))
+    elif category == COLUMN_CATEGORY_SOURCE:
+        columns[0] = TreeColumn(COLUMN_DATA, "Source", always_visible=True)
+        columns.append(TreeColumn(COLUMN_SOURCE_OUTPUT, "Output"))
+        columns.append(TreeColumn(COLUMN_SOURCE_PLUGIN, "Plugin"))
     return columns
 
 
@@ -3261,4 +3373,6 @@ def column_category_for_item(item: QTreeWidgetItem | None) -> str:
         return COLUMN_CATEGORY_FOLDER
     if item_type in {ROW_TYPE_INFO, ROW_TYPE_DETAILED_INFO}:
         return COLUMN_CATEGORY_INFO
+    if item_type in {ROW_TYPE_SOURCE_GROUP, ROW_TYPE_SOURCE}:
+        return COLUMN_CATEGORY_SOURCE
     return COLUMN_CATEGORY_SERIES

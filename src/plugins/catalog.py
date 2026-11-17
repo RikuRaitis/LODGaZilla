@@ -33,13 +33,17 @@ class PluginOperation:
 
     ``kind`` and ``scopes`` are empty for the plain ``"worker.py:run"`` form, which
     the plugin starts itself; the host offers only operations that declare them.
-    ``folder`` is one Navigator folder; ``batch`` several folders or the data folder.
+    ``folder`` offers an export in each folder's Source data group; ``batch`` is
+    accepted for older manifests but not offered (the Batch menu was removed).
+    ``inputs`` are file-name patterns (``*.bin``) of the files an export reads; without
+    them it reads the folder's H5 files.
     """
     name: str
     worker: str
     kind: str = ""
     title: str = ""
     scopes: tuple[str, ...] = ()
+    inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,11 @@ def validate_manifest(manifest: dict) -> str:
             title = value.get("title", name)
             if not isinstance(title, str) or not title.strip():
                 raise ValueError(f"Operation {name}: title must not be empty")
+            inputs = value.get("inputs", [])
+            if (not isinstance(inputs, list)
+                    or any(not isinstance(pattern, str) or not pattern.strip() or "/" in pattern or "\\" in pattern
+                           for pattern in inputs)):
+                raise ValueError(f"Operation {name}: inputs must list file-name patterns")
             value = value.get("worker")
         if not isinstance(value, str) or value.count(":") != 1:
             raise ValueError("Invalid operation entry point")
@@ -164,7 +173,7 @@ def parse_operations(operations: dict) -> tuple[PluginOperation, ...]:
     for name, value in operations.items():
         if isinstance(value, dict):
             specs.append(PluginOperation(name, value["worker"], value["kind"], str(value.get("title", name)),
-                                         tuple(value["scopes"])))
+                                         tuple(value["scopes"]), tuple(value.get("inputs", ()))))
         else:
             specs.append(PluginOperation(name, value))
     return tuple(specs)

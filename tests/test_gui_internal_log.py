@@ -37,6 +37,36 @@ class InternalLogPanelTests(unittest.TestCase):
             self.assertIn("message 4", panel.entries.toPlainText())
             logger.close()
 
+    def test_a_long_message_never_widens_the_panel(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger = InternalLogger(Path(temp_dir) / "log.txt")
+            self.addCleanup(logger.close)
+            panel = InternalLogPanel(logger)
+            self.addCleanup(panel.close)
+            panel.set_expanded(False)
+            panel.resize(300, panel.MINI_HEIGHT)
+            panel.show()
+            self.app.processEvents()
+            widths = (panel.minimumSizeHint().width(), panel.sizeHint().width())
+            message = "very long message " * 200
+            panel.append_message("12:00:00.000", message)
+            self.app.processEvents()
+            self.assertLessEqual((panel.minimumSizeHint().width(), panel.sizeHint().width()), widths)
+            # The collapsed row shows the start, cut to fit; the tooltip and the full text keep it all.
+            label = panel.last_message
+            self.assertTrue(label.text().startswith("12:00:00.000  very"))
+            self.assertTrue(label.text().endswith("…"))
+            self.assertLessEqual(label.fontMetrics().horizontalAdvance(label.text()), label.width())
+            self.assertEqual(label.toolTip(), message)
+            self.assertEqual(label.full_text(), f"12:00:00.000  {message.splitlines()[-1]}")
+            # A wider panel shows more of it.
+            shown = len(label.text())
+            panel.resize(600, panel.MINI_HEIGHT)
+            self.app.processEvents()
+            self.assertGreater(len(label.text()), shown)
+            panel.close()
+            logger.close()
+
 
 class NativeStderrLogCaptureTests(unittest.TestCase):
     def test_stop_ends_the_reader_and_restores_valid_standard_handles(self):
