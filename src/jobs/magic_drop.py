@@ -81,10 +81,18 @@ class MagicDropJob(QObject):
                                                  instructions_file=self.provider.instructions_file)
             self._run_agent(copies)
             imported, rejected, pairs = 0, [], []
+            covered = set()
             for copy in copies:
+                if copy.name in covered:
+                    continue
                 self._check_cancelled()
                 self.event.emit("status", f"Importing {copy.name}…")
                 try:
+                    plan = magic_drop.run_trial_import(self.draft, copy, copy.with_suffix(".h5"),
+                                                       timeout=self.trial_timeout_seconds,
+                                                       cancelled=self._cancelled, plan_only=True)
+                    covered.update(plan["inputs"])
+                    covered.update(plan.get("dependencies", ()))
                     summary = magic_drop.run_trial_import(self.draft, copy, copy.with_suffix(".h5"),
                                                           timeout=self.trial_timeout_seconds,
                                                           cancelled=self._cancelled)
@@ -96,8 +104,8 @@ class MagicDropJob(QObject):
                     rejected.append((copy, error))
                     continue
                 imported += 1
-                pairs.append((copy, copy.with_suffix(".h5")))
-                self.event.emit("result", f"{copy.with_suffix('.h5').name}\n{magic_drop.summary_text(summary)}")
+                pairs.append((copy, Path(summary["output"])))
+                self.event.emit("result", f"{Path(summary['output']).name}\n{magic_drop.summary_text(summary)}")
             if not imported:
                 raise rejected[0][1]
             for copy, _error in rejected:
@@ -218,20 +226,41 @@ class PluginDropJob(QObject):
     def _run(self) -> None:
         from src.app.settings import load_hdf5_settings
         from src.jobs.import_data import load_import_configurations, select_importer
+        from src.data.import_sets import describe_import_set
         plugins: list[tuple[str, str]] = []
         folder = None
         try:
             configurations = load_import_configurations(enabled_plugins=self.enabled_plugins,
                                                         hdf5_settings=load_hdf5_settings())
+            copies = {}
+            dependencies = set()
+            deferred = []
             for path in self.files:
-                configuration, _importer = select_importer(path, configurations)
+                try:
+                    configuration, importer = select_importer(path, configurations)
+                except ValueError:
+                    deferred.append(path.resolve())
+                    continue
+                group = describe_import_set(importer, path)
+                required = [path]
+                if group:
+                    group.check_ready(path.parent)
+                    required = [path.parent / name for name in (*group.inputs, *group.dependencies)]
+                    dependencies.update((path.parent / name).resolve() for name in group.dependencies)
+                for member in required:
+                    previous = copies.get(member.name.casefold())
+                    if previous is not None and previous.resolve() != member.resolve():
+                        raise ValueError(f"Different dropped inputs have the same name: {member.name}")
+                    copies[member.name.casefold()] = member
                 pair = (configuration.path.parent.name, configuration.name)
                 if pair not in plugins:
                     plugins.append(pair)
+            if not plugins or any(path not in dependencies for path in deferred):
+                raise ValueError("Some dropped files have no compatible importer")
             if self._detached.is_set():
                 return  # Stopped: copy nothing.
             folder = magic_drop.magic_drop_folder(self.data_folder, self.files)
-            magic_drop.copy_sources(self.files, folder)
+            magic_drop.copy_sources(list(copies.values()), folder)
         except (OSError, ValueError):
             # Some file no enabled plugin reads (or no plugin is enabled): the AI's turn.
             folder, plugins = None, []
@@ -276,9 +305,9 @@ class DraftImportJob(QObject):
 
     def _run(self) -> None:
         try:
-            magic_drop.run_trial_import(self.draft, self.source, self.output, timeout=self.timeout_seconds,
-                                        cancelled=self._cancelled)
-            magic_drop.record_draft_import(self.source.parent, self.source, self.output, self.draft)
+            summary = magic_drop.run_trial_import(self.draft, self.source, self.output, timeout=self.timeout_seconds,
+                                                  cancelled=self._cancelled)
+            magic_drop.record_draft_import(self.source.parent, self.source, Path(summary["output"]), self.draft)
             succeeded, message = True, f"Imported {self.source.name} again with its Magic drop parser."
         except Exception as error:  # noqa: BLE001 - reported in the Internal log panel.
             succeeded, message = False, f"Could not import {self.source.name} again: {error}"

@@ -79,7 +79,7 @@ class NavigatorControlsTests(unittest.TestCase):
         self.assertEqual(combo.count(), 1)
         self.assertEqual(combo.lineEdit().text(), path)
 
-    def test_tree_buttons_are_centered_below_the_fields(self):
+    def test_tree_buttons_are_at_the_right_end_of_the_file_bar(self):
         controls = NavigatorControlsWidget()
         self.addCleanup(controls.deleteLater)
         controls.resize(420, 200)
@@ -88,11 +88,17 @@ class NavigatorControlsTests(unittest.TestCase):
         buttons = [controls.refresh_button, controls.sample_loss_button, controls.clipping_button,
                    controls.hide_irrelevant_button]
         self.assertEqual(sorted(buttons, key=lambda button: button.x()), buttons)
-        left = buttons[0].mapTo(controls, buttons[0].rect().topLeft()).x()
-        right = buttons[-1].mapTo(controls, buttons[-1].rect().topRight()).x()
-        self.assertLessEqual(abs(left - (controls.width() - 1 - right)), 2)
-        self.assertGreater(buttons[0].mapTo(controls, buttons[0].rect().topLeft()).y(),
-                           controls.filter_key_combo.mapTo(controls, controls.filter_key_combo.rect().bottomLeft()).y())
+
+        def box(widget):
+            return widget.rect().translated(widget.mapTo(controls, widget.rect().topLeft()))
+
+        # The same row as the workspace buttons, which stay at its left edge.
+        workspace = box(controls.open_workspace_button)
+        self.assertTrue(all(box(button).top() == workspace.top() for button in buttons))
+        self.assertLess(workspace.left(), 10)
+        # Aligned to the right edge, above the fields.
+        self.assertGreaterEqual(box(buttons[-1]).right(), controls.width() - 10)
+        self.assertLess(box(buttons[0]).bottom(), box(controls.folder_combo).top())
 
     def test_middle_elide_text_reserves_more_space_for_path_end(self):
         path = r"C:\Users\example1\OneDrive - ExampleCo\Desktop\LOG\SensorRecordings\Data"

@@ -17,19 +17,30 @@ import h5py
 import numpy as np
 
 from src.app.settings import load_hdf5_settings
+from src.data.import_sets import describe_import_set
 from src.jobs.import_data import load_import_configuration, select_importer, write_hdf5_cache
 
 
-def trial_import(draft: Path, source: Path, output: Path) -> dict:
+def trial_import(draft: Path, source: Path, output: Path, *, plan_only: bool = False) -> dict:
     # A plugin.json names the importer's module (Magic drop drafts and Create plugin folders).
     module = None if (draft / "plugin.json").is_file() else draft / "importer.py"
     configuration = load_import_configuration(draft / "importer.json", hdf5_config=load_hdf5_settings(),
                                               parser_module_path=module)
     selected, importer = select_importer(source.resolve(), [configuration])
+    group = describe_import_set(importer, source.resolve())
+    if group:
+        output = output.parent / group.output
+    plan = {"output": str(output.resolve()),
+            "inputs": list(group.inputs) if group else [source.name],
+            "dependencies": list(group.dependencies) if group else []}
+    if plan_only:
+        return plan
+    if group:
+        group.check_ready(source.parent)
     result = importer.parse(source.resolve())
     write_hdf5_cache(output_path=output.resolve(), input_path=source.resolve(), selected_config=selected,
-                     import_result=result, replace_any=True)
-    return h5_summary(output)
+                     import_result=result, replace_any=group is None, import_set=group)
+    return {**h5_summary(output), **plan}
 
 
 def h5_summary(path: Path) -> dict:
@@ -65,12 +76,15 @@ def _time_text(seconds: float) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = argv if argv is not None else sys.argv[1:]
+    plan_only = bool(arguments and arguments[0] == "--plan")
+    if plan_only:
+        arguments = arguments[1:]
     if len(arguments) != 3:
         print("usage: python -m src.ai.trial_import <draft folder> <input file> <output.h5>", file=sys.stderr)
         return 2
     draft, source, output = (Path(item) for item in arguments)
     try:
-        summary = trial_import(draft, source, output)
+        summary = trial_import(draft, source, output, plan_only=plan_only)
     except Exception as error:  # noqa: BLE001 - report any parser failure as one line.
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
         return 1

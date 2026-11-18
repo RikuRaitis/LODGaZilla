@@ -60,11 +60,17 @@ const maplibregl = {
     // Screen position: longitude and latitude scaled, with no altitude.
     project(p) {return {x: p[0] * 100, y: p[1] * 100};}
     on(event, callback) {this.events[event]=callback;}
-    addControl(control) {this.overlay=control; this.controls.push(control);}
+    // The deck.gl overlay is the control with props; the scale bar is a ScaleControl.
+    addControl(control, position) {
+      if(control instanceof maplibregl.ScaleControl){this.scaleBar=control; control.position=position;}
+      else if(control instanceof maplibregl.AttributionControl){this.attribution=control; control.position=position;}
+      else this.overlay=control;
+      this.controls.push(control);
+    }
     removeControl(control) {
       this.controls=this.controls.filter(item=>item!==control);
       control.removed=true;
-      this.overlay=null;
+      if(control===this.scaleBar)this.scaleBar=null; else this.overlay=null;
     }
     fitBounds() {this.fitCount++;}
     getStyle() {
@@ -81,7 +87,9 @@ const maplibregl = {
     }
     setTerrain(terrain) {this.terrain=terrain;}
   },
-  LngLatBounds: class {extend() {return this;}}
+  LngLatBounds: class {extend() {return this;}},
+  ScaleControl: class {constructor(options) {this.options=options;}},
+  AttributionControl: class {constructor(options) {this.options=options;}}
 };
 const deck = {
   PathLayer: class {constructor(props) {this.props=props;}},
@@ -360,11 +368,11 @@ class Gnss3DControlsTests(unittest.TestCase):
             # A faded map's canvas would fade the track too, so it is drawn on top.
             self.assertFalse(self.js("map.overlay.props.interleaved"))
             self.assertEqual(self.js("map.terrain.exaggeration"), 2.5)
-            self.assertEqual(self.js("map.controls.length"), 1)
+            self.assertEqual(self.js("map.controls.filter(control=>control.props).length"), 1)
             self.widget.map_opacity.setValue(100)
             self.assertEqual(self.js("map.getCanvas().style.opacity"), "1")
             self.assertTrue(self.js("map.overlay.props.interleaved"))
-            self.assertEqual(self.js("map.controls.length"), 1)
+            self.assertEqual(self.js("map.controls.filter(control=>control.props).length"), 1)
         self.assertEqual(self.js("map.fitCount"), 1)
 
     def test_hidden_map_survives_loading_and_refresh(self):
@@ -374,7 +382,7 @@ class Gnss3DControlsTests(unittest.TestCase):
         self.widget.on_series_changed()
         self.load_map()
         self.assertFalse(self.js("map.overlay.props.interleaved"))
-        self.assertEqual(self.js("map.controls.length"), 1)
+        self.assertEqual(self.js("map.controls.filter(control=>control.props).length"), 1)
 
     def test_track_refresh_retains_slider_values(self):
         self.load_map()
@@ -464,6 +472,41 @@ class Gnss3DControlsTests(unittest.TestCase):
         self.assertTrue(widget.follow_ground.isChecked())
         self.assertEqual(self.js("routeCoordinates().map(p=>p[2])", widget), [GROUND_M * 3] * 3)
 
+    def test_track_canvas_stays_above_the_faded_map(self):
+        # Below 100% the track is on deck.gl's own canvas; the translucent map canvas must not cover it
+        # (checked in a real browser: without this rule a track under the terrain stays hidden until 0%).
+        from src.gui.plots.gnss_3d import _three_d_map_html
+        self.assertIn("#deckgl-overlay{z-index:1}", _three_d_map_html())
+
+    def test_scale_bar_is_shown_at_the_bottom_right_until_switched_off(self):
+        self.load_map()
+        self.assertEqual(self.js("map.scaleBar.position"), "bottom-right")
+        self.assertEqual(self.js("map.scaleBar.options.unit"), "metric")
+        # The map credit is MapLibre's small "i", at the top right, under the card's Close button.
+        self.assertEqual(self.js("map.attribution.position"), "top-right")
+        self.assertTrue(self.js("map.attribution.options.compact"))
+        self.assertFalse(self.js("map.options.attributionControl"))
+        # Placed just under the card's Close button row, with the legend below it.
+        from PySide6.QtCore import QPoint
+        from src.gui.plots.gnss import MAP_CREDIT_TOP
+        self.widget.resize(600, 400)
+        self.widget.show()
+        self.app.processEvents()
+        map_top = self.widget.map_container.mapTo(self.widget, QPoint(0, 0)).y()
+        close_bottom = self.widget.close_button.geometry().bottom() + 1
+        self.assertLessEqual(abs(map_top + MAP_CREDIT_TOP - close_bottom), 2)
+        self.assertGreater(self.widget.legend.top_offset, MAP_CREDIT_TOP)
+        self.widget.scale_bar_check.setChecked(False)
+        self.assertIsNone(self.js("map.scaleBar"))
+        self.assertFalse(self.widget.workspace_state()["map_controls"]["scale_bar"])
+        # Switched off before the page loads, it stays off; a workspace restores it.
+        widget = self.make_widget()
+        widget.restore_workspace_state({"map_controls": {"scale_bar": False}})
+        self.load_map(widget)
+        self.assertIsNone(self.js("map.scaleBar", widget))
+        widget.scale_bar_check.setChecked(True)
+        self.assertEqual(self.js("map.scaleBar.position", widget), "bottom-right")
+
     def test_workspace_restores_controls_instead_of_auto(self):
         self.widget.restore_workspace_state({"map_controls": {
             "map_opacity": 60, "altitude_factor": 4.5, "track_offset": -20.0, "follow_ground": True}})
@@ -473,7 +516,8 @@ class Gnss3DControlsTests(unittest.TestCase):
                          (60, 4.5, -20.0, True))
         self.assertEqual(self.js("viewSettings.altitudeExaggeration"), 4.5)
         self.assertEqual(self.widget.workspace_state()["map_controls"], {
-            "map_opacity": 60, "altitude_factor": 4.5, "track_offset": -20.0, "follow_ground": True})
+            "map_opacity": 60, "altitude_factor": 4.5, "track_offset": -20.0, "follow_ground": True,
+            "scale_bar": True})
         # An older workspace's hidden map becomes 0% opacity.
         self.widget.restore_workspace_state({"map_controls": {"map_visible": False, "map_opacity": 80}})
         self.assertEqual(self.widget.map_opacity.value(), 0)

@@ -81,6 +81,18 @@ class GroupedLegendTests(unittest.TestCase):
         self.app.processEvents()
         return card
 
+    def test_map_header_controls_share_one_height(self):
+        card = self.make_card("gnss")
+        card.controls_button.click()
+        self.app.processEvents()
+        # Street/Satellite and Scale bar are as tall as the Draw style buttons and Sample limit selector.
+        panels = (card.map_type, card.scale_bar_panel, card.draw_style_selector, card.sample_limit_combo)
+        self.assertTrue(all(panel.isVisible() for panel in panels))
+        self.assertEqual({panel.height() for panel in panels}, {card.close_button.height() - 2})
+        # And on one line: their centres are level.
+        centres = {panel.geometry().center().y() for panel in panels}
+        self.assertLessEqual(max(centres) - min(centres), 1)
+
     def wait_loaded(self, card):
         deadline = time.monotonic() + WAIT_SECONDS
         while time.monotonic() < deadline:

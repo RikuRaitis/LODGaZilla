@@ -276,7 +276,8 @@ class CardStateTests(unittest.TestCase):
             card.set_axis_component(2, "time")
             card.view.setCameraPosition(pos=QVector3D(1, 2, 3), distance=9, elevation=10, azimuth=-30)
             card.sample_limit_combo.setCurrentIndex(card.sample_limit_combo.count() - 1)
-            card.axes_combo.setCurrentIndex(card.axes_combo.findData("corner"))
+            card.axes_buttons["corner"].click()
+            card.set_axis_stretch([1.0, 2.5, 0.25])
 
         with mock.patch.object(XYZPlotWidget, "view_class", CameraView):
             saved, restored, card = self.round_trip(
@@ -287,15 +288,19 @@ class CardStateTests(unittest.TestCase):
         self.assertEqual(card.grouped_series.axis(2).component, "time")
         self.assertEqual(saved["camera"]["distance"], 9)
         self.assertEqual((saved["axes_position"], card.axes_position), ("corner", "corner"))
+        self.assertEqual((saved["axis_stretch"], list(card.axis_stretch)), ([1.0, 2.5, 0.25], [1.0, 2.5, 0.25]))
 
     def test_frequency_keeps_fft_settings_peak_line_and_view(self):
         def change(card):  # type: ignore[no-untyped-def]
             card.set_fft_settings(replace(card.settings, window_size=1024, window="Hamming"))
             card.set_peak_line_visible(False)
             card.set_peak_line_threshold(0.5)
+            card.set_legend_shown(False)
 
         saved, restored, card = self.round_trip(
             lambda workspace: workspace.add_frequency_plot(self.signal, "Scope/Channel A"), change)
+        # A legend hidden with the card's Legend button stays hidden.
+        self.assertEqual((saved["legend_shown"], restored["legend_shown"], card.legend_shown), (False, False, False))
         self.assertEqual(card.settings.window_size, 1024)
         self.assertEqual(card.settings.window, "Hamming")
         self.assertFalse(card.show_peak_line)
@@ -394,7 +399,18 @@ class WorkspaceMenuTests(unittest.TestCase):
         self.assertEqual(load_lodgazilla_settings(settings)["recent_workspaces"],
                          [str(workspace_file.resolve())])
 
-        # Closing the window yourself asks too; Cancel keeps it open, Save saves first.
+        # Closing the window yourself asks only with "Ask to save the workspace on exit" on (off by default).
+        self.assertFalse(window.lodgazilla_settings["ask_save_workspace_on_exit"])
+        event = mock.Mock(spontaneous=mock.Mock(return_value=True))
+        self.assertFalse(window.asks_to_save_on_close(event))
+        dialog = SettingsDialog(settings, window)
+        dialog.editor.ask_save_workspace_on_exit_checkbox.setChecked(True)
+        dialog.save_settings()
+        window.apply_settings()
+        self.assertTrue(window.lodgazilla_settings["ask_save_workspace_on_exit"])
+        self.assertTrue(window.asks_to_save_on_close(event))
+        self.assertFalse(window.asks_to_save_on_close(mock.Mock(spontaneous=mock.Mock(return_value=False))))
+        # With it on, Cancel keeps the window open, Save saves first.
         event = mock.Mock(spontaneous=mock.Mock(return_value=True))
         with mock.patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.Cancel):
             window.closeEvent(event)

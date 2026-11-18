@@ -18,11 +18,11 @@ from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
-    QDoubleSpinBox, QHBoxLayout, QLabel, QSlider, QStackedLayout, QToolButton, QWidget,
+    QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSlider, QStackedLayout, QToolButton, QWidget,
 )
 
 from src.gui.plots.gnss import (
-    MAP_MAXIMUM_POINTS, GnssBridge, MapMarkersMixin, gnss_pair_for_series, load_gnss_group, script_json,
+    MAP_CREDIT_TOP, MAP_MAXIMUM_POINTS, GnssBridge, MapMarkersMixin, gnss_pair_for_series, load_gnss_group, script_json,
 )
 from src.gui.plots.markers import (
     FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
@@ -261,6 +261,11 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         group(QLabel("Height"), self.altitude_exaggeration)
         group(QLabel("Offset"), self.track_altitude_offset, self.track_offset_input)
         group(self.follow_ground, self.auto_button, self.center_view_button)
+        # A metric scale bar at the map's bottom right, for the current zoom.
+        self.scale_bar_check = QCheckBox("Scale bar")
+        self.scale_bar_check.setChecked(True)
+        self.scale_bar_check.setToolTip("Scale bar")
+        group(self.scale_bar_check)
         self.control_groups = groups
         for container in groups:
             container.setStyleSheet(palette_overlay_stylesheet())
@@ -268,6 +273,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         # Hidden and shown with the other header controls (the card's Card controls button).
         self.header_left_controls.extend(groups)
         self.map_opacity.valueChanged.connect(self._set_map_opacity)
+        self.scale_bar_check.toggled.connect(self._set_scale_bar)
         self.follow_ground.toggled.connect(self._set_follow_ground)
         self.auto_button.clicked.connect(lambda: self.apply_auto_settings())
         self.center_view_button.clicked.connect(self.center_view)
@@ -277,7 +283,8 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         )
         self.track_offset_input.valueChanged.connect(self._set_track_altitude_offset)
         self.map_view.loadFinished.connect(self._on_loaded)
-        self.legend = PlotLegendWidget(self.map_container)
+        # Below the map credit's "i" button.
+        self.legend = PlotLegendWidget(self.map_container, top_offset=MAP_CREDIT_TOP + 28)
         self.legend.set_group_model(self.grouped_series)
         self.value_boxes = ValueBoxLayer(self.map_container)
         self.bridge.view_changed.connect(self._refresh_value_box_positions)
@@ -435,7 +442,8 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
                 "map_controls": {
                     "map_opacity": self.map_opacity.value(), "altitude_factor": self.altitude_factor,
                     "track_offset": self.track_offset_input.value(),
-                    "follow_ground": self.follow_ground.isChecked()}}
+                    "follow_ground": self.follow_ground.isChecked(),
+                    "scale_bar": self.scale_bar_check.isChecked()}}
 
     def restore_workspace_state(self, state: dict) -> None:
         controls = state.get("map_controls")
@@ -448,6 +456,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
                 self.set_altitude_factor(float(controls.get("altitude_factor", self.altitude_factor)))
                 self.track_offset_input.setValue(float(controls.get("track_offset", self.track_offset_input.value())))
                 self.follow_ground.setChecked(bool(controls.get("follow_ground", False)))
+                self.scale_bar_check.setChecked(bool(controls.get("scale_bar", True)))
             except (TypeError, ValueError):
                 pass
         view = state.get("map_view")
@@ -498,6 +507,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
             self._set_altitude_exaggeration(self.altitude_factor)
             self._set_track_altitude_offset(self.track_offset_input.value())
             self._set_follow_ground(self.follow_ground.isChecked())
+            self._set_scale_bar(self.scale_bar_check.isChecked())
             self._flush_marker()
             self._apply_auto_settings_once()
             self.legend.reposition()
@@ -514,6 +524,9 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
             f"trackAt({position.x()},{position.y()},{HIT_TOLERANCE_PIXELS})",
             lambda index: done(names[int(index)] if isinstance(index, (int, float)) and 0 <= index < len(names)
                                else None))
+
+    def _set_scale_bar(self, shown: bool) -> None:
+        self._run_map_script(f"setScaleBar({str(bool(shown)).lower()});")
 
     def _set_map_opacity(self, value: int) -> None:
         """Fade only MapLibre layers; the deck.gl GNSS route stays opaque. 0% hides the map."""
@@ -655,7 +668,11 @@ def _three_d_map_html(*, settings: dict[str, object] | None = None, background: 
     })
     return f'''<!doctype html><html><head><meta charset="utf-8">
 <link href="https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.css" rel="stylesheet">
-<style>html,body,#map{{height:100%;margin:0;background:{background}}}</style>
+<style>html,body,#map{{height:100%;margin:0;background:{background}}}
+.maplibregl-ctrl-top-right{{top:{MAP_CREDIT_TOP}px}}.maplibregl-ctrl-top-right .maplibregl-ctrl{{margin-top:0}}
+/* Below 100% opacity the track is drawn on deck.gl's own canvas, which deck.gl places among the map's
+   controls; without this the translucent map canvas is painted over it and the track disappears. */
+#deckgl-overlay{{z-index:1}}</style>
 <script src="https://unpkg.com/maplibre-gl@5.12.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/deck.gl@9.2.0/dist.min.js"></script>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
@@ -668,8 +685,18 @@ let rightPress=null,lastContextMenu=0,viewTimer=null;
 let restoreView=null;
 new QWebChannel(qt.webChannelTransport,c=>bridge=c.objects.gnssBridge);
 const viewSettings={view_settings};
-const map=new maplibregl.Map({{container:'map',style:{json.dumps(OPENFREEMAP_STYLE_URL)},center:[24.94,60.17],zoom:12,pitch:55,maxPitch:85,bearing:-18,attributionControl:true}});
+const map=new maplibregl.Map({{container:'map',style:{json.dumps(OPENFREEMAP_STYLE_URL)},center:[24.94,60.17],zoom:12,pitch:55,maxPitch:85,bearing:-18,attributionControl:false}});
+// The map data's required credit, as MapLibre's small "i", at the top right under the card's Close button.
+map.addControl(new maplibregl.AttributionControl({{compact:true}}),'top-right');
 let overlay=null, overlayInterleaved=null, terrainAdded=false, mapReady=false;
+// A metric scale bar at the bottom right; the card's Scale bar checkbox shows or hides it.
+const scaleBar=new maplibregl.ScaleControl({{unit:'metric'}});
+let scaleBarShown=false;
+function setScaleBar(shown){{
+  if(shown&&!scaleBarShown)map.addControl(scaleBar,'bottom-right');
+  else if(!shown&&scaleBarShown)map.removeControl(scaleBar);
+  scaleBarShown=shown;
+}}
 // The ground height under each track point, from the elevation tiles the terrain uses.
 const DEM_TILE_URL={json.dumps(TERRARIUM_TILE_URL)},DEM_ZOOM={DEM_ZOOM};
 let demTiles={{}},groundVersion=0,groundWaiters=[];

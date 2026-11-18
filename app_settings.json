@@ -61,6 +61,7 @@
     "internal_log_expanded": false,
     "internal_log_expanded_height": 261,
     "internal_log_maximum_lines": 5000,
+    "ask_save_workspace_on_exit": false,
     "plot_navigator_icon_size": 25,
     "card_drop_selector_delay_ms": 1000,
     "plot_navigator_colors": {

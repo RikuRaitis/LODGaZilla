@@ -195,6 +195,7 @@ class NavigatorControlsWidget(QWidget):
     workspace_open_requested = Signal()
     workspace_save_requested = Signal()
     workspace_save_as_requested = Signal()
+    settings_requested = Signal()
 
     def __init__(
         self,
@@ -238,14 +239,27 @@ class NavigatorControlsWidget(QWidget):
         self.save_workspace_button.clicked.connect(self.workspace_save_requested.emit)
         self.save_workspace_as_button = self._icon_button("Save workspace as… (Ctrl+Shift+S)")
         self.save_workspace_as_button.clicked.connect(self.workspace_save_as_requested.emit)
+        # Settings, last in the File bar's left group.
+        self.settings_button = self._icon_button("Settings")
+        self.settings_button.clicked.connect(self.settings_requested.emit)
+        # Tree actions, at the right end of the File bar.
+        self.icon_row = QWidget()
+        icon_layout = QHBoxLayout(self.icon_row)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_layout.setSpacing(2)
+        for button in (self.refresh_button, self.sample_loss_button, self.clipping_button,
+                       self.hide_irrelevant_button):
+            icon_layout.addWidget(button)
+        # The File bar: the workspace files at the left edge, the tree actions at the right.
         self.file_bar = QWidget()
         file_layout = QHBoxLayout(self.file_bar)
         file_layout.setContentsMargins(2, 0, 0, 2)
         file_layout.setSpacing(2)
         for button in (self.open_workspace_button, self.recent_workspaces_button, self.save_workspace_button,
-                       self.save_workspace_as_button):
+                       self.save_workspace_as_button, self.settings_button):
             file_layout.addWidget(button)
         file_layout.addStretch(1)
+        file_layout.addWidget(self.icon_row)
 
         self.group_by_combo = QComboBox()
         self.group_by_combo.setEditable(True)
@@ -276,24 +290,12 @@ class NavigatorControlsWidget(QWidget):
             form.addWidget(self._label(text), row, 0)
             form.addWidget(field, row, 1)
 
-        # Tree actions, centered above the tree.
-        self.icon_row = QWidget()
-        icon_layout = QHBoxLayout(self.icon_row)
-        icon_layout.setContentsMargins(0, 4, 0, 0)
-        icon_layout.setSpacing(2)
-        icon_layout.addStretch(1)
-        for button in (self.refresh_button, self.sample_loss_button, self.clipping_button,
-                       self.hide_irrelevant_button):
-            icon_layout.addWidget(button)
-        icon_layout.addStretch(1)
-
-        # An untitled frame groups the fields and the tree buttons.
+        # An untitled frame groups the fields.
         self.frame = QGroupBox()
         frame_layout = QVBoxLayout(self.frame)
-        frame_layout.setContentsMargins(6, 6, 6, 4)
+        frame_layout.setContentsMargins(6, 6, 6, 6)
         frame_layout.setSpacing(0)
         frame_layout.addWidget(self.form_widget)
-        frame_layout.addWidget(self.icon_row)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 0)
         layout.setSpacing(0)
@@ -323,7 +325,8 @@ class NavigatorControlsWidget(QWidget):
         for button, icon in ((self.open_workspace_button, "workspace-open"),
                              (self.recent_workspaces_button, "workspace-open-recent"),
                              (self.save_workspace_button, "workspace-save"),
-                             (self.save_workspace_as_button, "workspace-save-as")):
+                             (self.save_workspace_as_button, "workspace-save-as"),
+                             (self.settings_button, "settings")):
             button.setIcon(navigator_asset_icon(self, icon))
         hiding = self.hide_irrelevant_button.isChecked()
         self.hide_irrelevant_button.setIcon(

@@ -223,7 +223,7 @@ def copy_sources(files: list[Path], folder: Path) -> list[Path]:
     return copies
 
 
-def run_trial_import(draft: Path, source: Path, output: Path, *, timeout: float, cancelled=None) -> dict:
+def run_trial_import(draft: Path, source: Path, output: Path, *, timeout: float, cancelled=None, plan_only: bool = False) -> dict:
     """Run the draft's parser on ``source`` in its own process and return its summary.
 
     The parser is code the AI wrote, so it gets the agent's environment: without the Git
@@ -234,7 +234,8 @@ def run_trial_import(draft: Path, source: Path, output: Path, *, timeout: float,
     from src.ai.agent_common import agent_environment
     from src.jobs.process_tree import kill_process_tree, popen_in_tree
     process, tree = popen_in_tree(
-        [sys.executable, "-m", "src.ai.trial_import", str(draft), str(source), str(output)],
+        [sys.executable, "-m", "src.ai.trial_import", *(["--plan"] if plan_only else []),
+         str(draft), str(source), str(output)],
         cwd=REPOSITORY_ROOT, env=agent_environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
     deadline = time.monotonic() + timeout
@@ -277,8 +278,7 @@ def write_folder_info(folder: Path, metadata: dict[str, str], draft: Path,
     info.readonly["magic drop"] = draft.name
     records = {source_entry_key(entry): entry for entry in info.sources}
     for source, output in imported:
-        entry = source_entry(SOURCE_IMPORT, source=source.name, output=output.name, plugin=MAGIC_DROP_PLUGIN,
-                             draft=str(draft))
+        entry = draft_source_entry(source, output, draft)
         records[source_entry_key(entry)] = entry
     info.sources = list(records.values())
     return write_info_file(folder, info)
@@ -287,8 +287,26 @@ def write_folder_info(folder: Path, metadata: dict[str, str], draft: Path,
 def record_draft_import(folder: Path, source: Path, output: Path, draft: Path) -> Path:
     """Note a file imported again with a Magic drop parser in the folder's Source data."""
     from src.data.folder_info import record_sources
-    return record_sources(folder, [source_entry(SOURCE_IMPORT, source=source.name, output=output.name,
-                                                plugin=MAGIC_DROP_PLUGIN, draft=str(draft))])
+    return record_sources(folder, [draft_source_entry(source, output, draft)])
+
+
+def draft_source_entry(source: Path, output: Path, draft: Path) -> dict[str, str]:
+    """Keep a draft's grouped provenance when updating its folder metadata."""
+    import h5py
+    fields = {}
+    try:
+        with h5py.File(output, "r") as handle:
+            if handle.attrs.get("import_set_key"):
+                fields = {"set_key": str(handle.attrs["import_set_key"]),
+                          "inputs": tuple(json.loads(handle.attrs["source_files_json"])),
+                          "dependencies": tuple(json.loads(handle.attrs.get("source_dependencies_json", "[]")))}
+                name = str(handle.attrs["import_set_title"])
+            else:
+                name = source.name
+    except (OSError, KeyError, ValueError):
+        name = source.name
+    return source_entry(SOURCE_IMPORT, source=name, output=output.name, plugin=MAGIC_DROP_PLUGIN,
+                        draft=str(draft), **fields)
 
 
 def summary_text(summary: dict) -> str:

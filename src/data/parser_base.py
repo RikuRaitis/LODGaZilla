@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import numpy as np
+from src.data.import_sets import ImportSet
 
 
 ProgressCallback = Callable[[float], None]
@@ -95,6 +96,14 @@ class DataParser(ABC):
         progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         """Parse one source file into the common series dictionary."""
+
+    def import_set(self, input_path: str | Path) -> ImportSet | None:
+        """Optionally describe the files parsed together with this input.
+
+        ``parse`` may be called with any member and returns all series in the set.
+        Returning None preserves the single-file importer contract.
+        """
+        return None
 
     def find_series_definition(self, name: str, navigator_group: str = "") -> SeriesDefinition | None:
         exact = self._series_by_path.get((navigator_group, name))

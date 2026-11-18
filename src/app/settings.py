@@ -114,6 +114,8 @@ DEFAULT_LODGAZILLA_SETTINGS: dict[str, Any] = {
     "internal_log_expanded": False,
     "internal_log_expanded_height": 261,
     "internal_log_maximum_lines": 5_000,
+    # Closing LODGaZilla with cards open offers to save them as a workspace first.
+    "ask_save_workspace_on_exit": False,
     "plot_navigator_icon_size": 25,
     "card_drop_selector_delay_ms": 1000,
     "plot_navigator_colors": {
@@ -557,6 +559,7 @@ def sanitize_lodgazilla_settings(raw_settings: dict[str, Any]) -> dict[str, Any]
         "internal_log_maximum_lines": bounded_int(
             raw_settings.get("internal_log_maximum_lines"), 100, 100_000, 5_000
         ),
+        "ask_save_workspace_on_exit": bool(raw_settings.get("ask_save_workspace_on_exit", False)),
         "plot_navigator_icon_size": bounded_int(
             raw_settings.get("plot_navigator_icon_size"), 16, 48, 25
         ),

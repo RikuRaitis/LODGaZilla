@@ -69,6 +69,19 @@ class CoreStartupTests(unittest.TestCase):
                 buttons = [row.itemAt(index).widget() for index in range(row.count()) if row.itemAt(index).widget()]
                 self.assertEqual(buttons, [controls.refresh_button, controls.sample_loss_button,
                                            controls.clipping_button, controls.hide_irrelevant_button])
+                # They sit at the right end of the File bar; the workspace buttons stay at its left.
+                bar = controls.file_bar.layout()
+                items = [bar.itemAt(index) for index in range(bar.count())]
+                self.assertEqual(items[0].widget(), controls.open_workspace_button)
+                # Settings is last in the left group, after Save workspace as; it opens the Settings dialog.
+                left = [item.widget() for item in items[:-2]]
+                self.assertEqual(left[-2:], [controls.save_workspace_as_button, controls.settings_button])
+                self.assertFalse(hasattr(window.plot_navigator, "settings_button"))
+                with mock.patch.object(window, "show_settings") as show_settings:
+                    controls.settings_button.click()
+                show_settings.assert_called_once()
+                self.assertIsNotNone(items[-2].spacerItem())
+                self.assertIs(items[-1].widget(), controls.icon_row)
                 # The Folder menu has no plugin actions; imports and exports are in Source data.
                 shown = []
 
@@ -79,6 +92,10 @@ class CoreStartupTests(unittest.TestCase):
                 with mock.patch("src.app.lodgazilla.QMenu", RecordingMenu):
                     window.show_folder_context_menu(folder, window.navigator.tree.rect().center())
                 self.assertIn("Multi-series", shown)
+                # Copy folder location puts the folder's full path on the clipboard.
+                self.assertIn("Copy folder location", shown)
+                window.copy_folder_location(folder)
+                self.assertEqual(QApplication.clipboard().text(), str(folder))
                 self.assertFalse([text for text in shown if text.startswith("Plugin:")])
                 # Help shows the About dialog; its button opens README.md in the system's own application.
                 with mock.patch("src.app.lodgazilla.QDesktopServices.openUrl", return_value=True) as open_url:

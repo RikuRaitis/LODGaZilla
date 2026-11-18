@@ -5,8 +5,9 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QVector3D
-from PySide6.QtWidgets import QApplication, QComboBox, QToolButton
+from PySide6.QtWidgets import QApplication, QButtonGroup, QHBoxLayout, QToolButton, QWidget
 
+from src.data.axis_scale import clamp_stretch, equal_scale_factors
 from src.data.xyz import XYZ_MAXIMUM_POINTS, AxisSource, XYZData
 from src.gui.plots.base import PlotBaseWidget
 from src.gui.plots.card_markers import PointMarkers
@@ -27,6 +28,9 @@ from src.jobs.xyz import XYZLoadCoordinator
 AXES_ORIGIN = "origin"
 AXES_CORNER = "corner"
 AXES_POSITIONS = {AXES_ORIGIN: "Axes at 0, 0, 0", AXES_CORNER: "Axes at corner"}
+# A click within this many pixels of an axis line selects it; Ctrl+wheel then stretches it this much per step.
+AXIS_HIT_PIXELS = 8.0
+AXIS_STRETCH_PER_WHEEL_STEP = 1.15
 
 
 def axes_origin(low, high, position: str):  # type: ignore[no-untyped-def]
@@ -59,6 +63,10 @@ class XYZView(gl.GLViewWidget):
     clicked = Signal(object, object)
     double_clicked = Signal(object)
     camera_changed = Signal()
+    # Ctrl+wheel while an axis is selected: the axis (0-2) and the wheel's angle delta.
+    axis_stretch_requested = Signal(int, int)
+    # Set by the card: the selected axis, which Ctrl+wheel stretches; None zooms the camera.
+    selected_axis = None
 
     def mousePressEvent(self, event):
         self._press_position = event.position()
@@ -97,6 +105,10 @@ class XYZView(gl.GLViewWidget):
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if self.selected_axis is not None:
+                self.axis_stretch_requested.emit(self.selected_axis, event.angleDelta().y())
+                event.accept()
+                return
             self.opts["distance"] = max(0.2, min(200, self.opts["distance"] * 0.999 ** event.angleDelta().y()))
             self.update()
         else:
@@ -153,21 +165,63 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self.reset_button.setIcon(plot_control_icon(self, "reset-camera"))
         self.reset_button.clicked.connect(self.reset_camera)
         self.header_controls.append(self.reset_button)
+        # The Axes selector: two buttons, axes through 0, 0, 0 or along the corner; the chosen
+        # one is highlighted, like the Draw style selector.
+        from src.gui.plots.theme import palette_overlay_stylesheet
         self.axes_position = AXES_ORIGIN
-        self.axes_combo = QComboBox(self)
-        self.axes_combo.setAccessibleName("Axes position")
-        self.axes_combo.setToolTip("Axes position")
+        self.axes_selector = QWidget(self)
+        self.axes_selector.setAccessibleName("Axes position")
+        axes_layout = QHBoxLayout(self.axes_selector)
+        axes_layout.setContentsMargins(2, 0, 2, 0)
+        axes_layout.setSpacing(0)
+        axes_group = QButtonGroup(self.axes_selector)
+        axes_group.setExclusive(True)
+        self.axes_buttons: dict[str, QToolButton] = {}
         for position, title in AXES_POSITIONS.items():
-            self.axes_combo.addItem(title, position)
-        self.axes_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.axes_combo.setFixedHeight(self.close_button.height() - 2)
-        self.axes_combo.adjustSize()
-        self.axes_combo.currentIndexChanged.connect(
-            lambda index: self.set_axes_position(self.axes_combo.itemData(index)))
-        self.header_controls.append(self.axes_combo)
+            button = QToolButton(self.axes_selector)
+            button.setCheckable(True)
+            button.setAutoRaise(True)
+            button.setToolTip(title)
+            button.setAccessibleName(title)
+            button.setFixedSize(self.close_button.height() - 2, self.close_button.height() - 2)
+            button.setIconSize(QSize(18, 18))
+            button.setIcon(plot_control_icon(self, f"axes-{position}"))
+            button.clicked.connect(lambda _checked=False, position=position: self.set_axes_position(position))
+            axes_group.addButton(button)
+            axes_layout.addWidget(button)
+            self.axes_buttons[position] = button
+        self.axes_buttons[self.axes_position].setChecked(True)
+        self.axes_selector.setStyleSheet(
+            palette_overlay_stylesheet()
+            + " QToolButton { border: none; border-radius: 3px; background: transparent; }"
+            " QToolButton:hover { background: palette(midlight); }"
+            " QToolButton:checked { background: rgba(33, 150, 243, 0.40); }")
+        self.axes_selector.adjustSize()
+        self.header_controls.append(self.axes_selector)
+        # Each axis's stretch; Ctrl+wheel changes the selected axis's (a click on its line selects
+        # it). Equal scale and Fit set all three at once.
+        self.axis_stretch = np.ones(3)
+        self.selected_axis: int | None = None
+        self._axis_segments: list[np.ndarray] = []
+        self.equal_scale_button = QToolButton(self)
+        self.equal_scale_button.setAccessibleName("Equal scale")
+        self.equal_scale_button.clicked.connect(self.equal_scale)
+        self.fit_axes_button = QToolButton(self)
+        self.fit_axes_button.setAccessibleName("Fit axes")
+        self.fit_axes_button.setToolTip("Fit: stretch every axis to fill the box")
+        self.fit_axes_button.clicked.connect(self.fit_axes)
+        for button, icon in ((self.equal_scale_button, "axes-equal"), (self.fit_axes_button, "axes-fit")):
+            button.setAutoRaise(True)
+            button.setFixedSize(self.close_button.size())
+            button.setIconSize(QSize(18, 18))
+            button.setIcon(plot_control_icon(self, icon))
+            self.header_controls.append(button)
+        self._equal_scale_reason = "No data"
+        self._update_equal_scale_button()
         self.view = self.view_class(self)
         self.view.setMinimumHeight(100)
         self.view.scroll_requested.connect(self.wheel_scrolled)
+        self.view.axis_stretch_requested.connect(self.stretch_axis)
         self.view.clicked.connect(self._on_view_clicked)
         self.view.double_clicked.connect(self._on_view_double_clicked)
         self.value_boxes = ValueBoxLayer(self.view)
@@ -276,7 +330,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             if not isinstance(result, XYZData):
                 self._scene_positions.append(None)
                 continue
-            positions = (result.positions - center) / scale
+            positions = (result.positions - center) / scale * self.axis_stretch
             self._scene_positions.append(positions)
             valid = np.all(np.isfinite(positions), axis=1)
             pairs = np.stack((positions[:-1], positions[1:]), axis=1)
@@ -291,6 +345,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
                                                     size=4 if self.draw_style == "points" else 3, pxMode=True,
                                                     glOptions="opaque"))
         self._draw_axes(low, high)
+        self._update_equal_scale_button()
         self._update_legend()
         # New scene positions: the marker items are made again for them.
         self._clear_marker_items()
@@ -306,11 +361,19 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         font.setPointSize(9)
         origin = axes_origin(low, high, self.axes_position)
         corner = self.axes_position != AXES_ORIGIN
+        stretch = self.axis_stretch
         minimums = []
+        self._axis_segments = []
         for axis_index, axis_name in enumerate("XYZ"):
             start, end = origin.copy(), origin.copy()
             start[axis_index], end[axis_index] = -1.0, 1.0
-            self._add_item(gl.GLLinePlotItem(pos=np.array([start, end]), color=pg.glColor(text_color), width=1, glOptions="opaque"))
+            segment = np.array([start, end]) * stretch
+            self._axis_segments.append(segment)
+            # The selected axis, which Ctrl+wheel stretches, is drawn thicker in the highlight colour.
+            selected = axis_index == self.selected_axis
+            color = self.palette().highlight().color() if selected else text_color
+            self._add_item(gl.GLLinePlotItem(pos=segment, color=pg.glColor(color), width=3 if selected else 1,
+                                             glOptions="opaque"))
             for fraction in (0, 0.5, 1):
                 label = axis_tick_label(axis_name, low[axis_index], high[axis_index], fraction)
                 if fraction == 0 and corner:
@@ -318,21 +381,90 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
                     continue
                 pos = start.copy()
                 pos[axis_index] = -1 + 2 * fraction
+                # Labels sit beside their axis, a fixed distance away whatever its stretch.
+                pos = pos * stretch
                 pos[(axis_index + 1) % 3] -= 0.16
                 self._add_item(gl.GLTextItem(pos=pos, text=label, color=text_color, font=font))
         if corner:
             # The three axes start at one corner: one label lists their minimums, where three would overlap.
             # Just above the corner, clear of the X and Y labels beside and below it.
-            self._add_item(gl.GLTextItem(pos=np.array([-1.0, -1.0, -0.84]), text="  ".join(minimums),
-                                         color=text_color, font=font))
+            self._add_item(gl.GLTextItem(pos=np.array([-1.0, -1.0, -1.0]) * stretch + np.array([0, 0, 0.16]),
+                                         text="  ".join(minimums), color=text_color, font=font))
+
+    def axis_at(self, position) -> int | None:  # type: ignore[no-untyped-def]
+        """The axis whose line is within a few pixels of a canvas position, or None (a click selects it)."""
+        point = np.array([position.x(), position.y()], dtype=float)
+        best, best_distance = None, AXIS_HIT_PIXELS
+        for axis_index, segment in enumerate(self._axis_segments):
+            start, end = self.view.project(segment)
+            if not (np.all(np.isfinite(start)) and np.all(np.isfinite(end))):
+                continue
+            direction = end - start
+            length = float(direction @ direction)
+            along = 0.0 if length == 0 else float(np.clip((point - start) @ direction / length, 0, 1))
+            distance = float(np.linalg.norm(point - (start + along * direction)))
+            if distance <= best_distance:
+                best, best_distance = axis_index, distance
+        return best
+
+    def select_axis(self, axis_index: int | None) -> None:
+        """Select the axis Ctrl+wheel stretches, or none (Ctrl+wheel then zooms the camera)."""
+        if axis_index == self.selected_axis:
+            return
+        self.selected_axis = axis_index
+        self.view.selected_axis = axis_index
+        self._render()
+
+    def stretch_axis(self, axis_index: int, delta: int) -> None:
+        """Stretch one axis, as Ctrl+wheel does on the selected axis (up stretches, down shrinks)."""
+        stretch = self.axis_stretch.copy()
+        stretch[axis_index] = clamp_stretch(stretch[axis_index] * AXIS_STRETCH_PER_WHEEL_STEP ** (delta / 120))
+        self.set_axis_stretch(stretch)
+
+    def set_axis_stretch(self, stretch) -> None:  # type: ignore[no-untyped-def]
+        stretch = np.array([clamp_stretch(value) for value in stretch], dtype=float)
+        if np.array_equal(stretch, self.axis_stretch):
+            return
+        self.axis_stretch = stretch
+        self._render()
+
+    def equal_scale(self) -> None:
+        """One metre the same length on every axis, latitude and longitude measured in metres."""
+        factors = self.equal_scale_factors()
+        if factors is not None:
+            self.set_axis_stretch(factors)
+
+    def fit_axes(self) -> None:
+        """Every axis fills the box again."""
+        self.set_axis_stretch(np.ones(3))
+
+    def equal_scale_factors(self):  # type: ignore[no-untyped-def]
+        """The Equal scale stretch for the shown data, or None (with the reason kept for the button)."""
+        data = [result for result in self.results if isinstance(result, XYZData)]
+        if not data or self._extent is None:
+            self._equal_scale_reason = "No data"
+            return None
+        units, roles = data[0].units, data[0].roles
+        for axis_index, name in enumerate("XYZ"):
+            if any(result.units[axis_index] != units[axis_index] or result.roles[axis_index] != roles[axis_index]
+                   for result in data[1:]):
+                self._equal_scale_reason = f"{name} has different units on different traces"
+                return None
+        factors, self._equal_scale_reason = equal_scale_factors(*self._extent, units, roles)
+        return factors
+
+    def _update_equal_scale_button(self) -> None:
+        possible = self.equal_scale_factors() is not None
+        self.equal_scale_button.setEnabled(possible)
+        self.equal_scale_button.setToolTip(
+            "Equal scale: one metre the same length on every axis" if possible
+            else f"Equal scale is not possible: {self._equal_scale_reason}")
 
     def set_axes_position(self, position: str) -> None:
         """Draw the axes through 0, 0, 0 (`AXES_ORIGIN`) or along the box's corner (`AXES_CORNER`)."""
         if position not in AXES_POSITIONS:
             return
-        self.axes_combo.blockSignals(True)
-        self.axes_combo.setCurrentIndex(self.axes_combo.findData(position))
-        self.axes_combo.blockSignals(False)
+        self.axes_buttons[position].setChecked(True)
         if position != self.axes_position:
             self.axes_position = position
             self._render()
@@ -420,6 +552,13 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         index = {Qt.MouseButton.LeftButton: FIRST_MARKER, Qt.MouseButton.RightButton: SECOND_MARKER}.get(button)
         if index is None:
             return
+        # A left click on an axis line selects it, or deselects it when already selected; a click
+        # anywhere else deselects it and places its marker as usual.
+        axis = self.axis_at(position) if button == Qt.MouseButton.LeftButton else None
+        if axis is not None:
+            self.select_axis(None if axis == self.selected_axis else axis)
+            return
+        self.select_axis(None)
         best = None
         for trace_index, positions in enumerate(self._scene_positions):
             if positions is None or not len(positions):
@@ -517,13 +656,19 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
     def workspace_state(self):
         opts = self.view.opts
         center = opts["center"]
-        return {**super().workspace_state(), "axes_position": self.axes_position, "camera": {
+        state = {**super().workspace_state(), "axes_position": self.axes_position}
+        if not np.all(self.axis_stretch == 1):
+            state["axis_stretch"] = [float(value) for value in self.axis_stretch]
+        return {**state, "camera": {
             "center": [center.x(), center.y(), center.z()], "distance": opts["distance"],
             "elevation": opts["elevation"], "azimuth": opts["azimuth"], "fov": opts["fov"]}}
 
     def restore_workspace_state(self, state):
         super().restore_workspace_state(state)
         self.set_axes_position(str(state.get("axes_position", AXES_ORIGIN)))
+        stretch = state.get("axis_stretch")
+        if isinstance(stretch, list) and len(stretch) == 3 and all(isinstance(value, (int, float)) for value in stretch):
+            self.set_axis_stretch(stretch)
         camera = state.get("camera")
         try:
             self.view.opts["fov"] = float(camera["fov"])
@@ -538,6 +683,10 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
 
     def apply_theme(self):
         self.reset_button.setIcon(plot_control_icon(self, "reset-camera"))
+        for position, button in self.axes_buttons.items():
+            button.setIcon(plot_control_icon(self, f"axes-{position}"))
+        self.equal_scale_button.setIcon(plot_control_icon(self, "axes-equal"))
+        self.fit_axes_button.setIcon(plot_control_icon(self, "axes-fit"))
         self.value_boxes.apply_style()
         self._render()
 

@@ -108,18 +108,25 @@ MAGIC_DROP_PLUGIN = "Magic drop"
 
 def source_entry_key(entry: dict[str, str]) -> str:
     """A Source data record's identity: an import by its source file, an export by its output."""
+    if entry.get("kind") == SOURCE_IMPORT and entry.get("set_key"):
+        return f"import-set|{entry.get('plugin_id', '')}|{entry['set_key']}"
     if entry.get("kind") == SOURCE_IMPORT:
         return f"import|{entry.get('source', '').casefold()}"
     return f"export|{entry.get('plugin_id', '')}|{entry.get('output', '').casefold()}"
 
 
 def source_entry(kind: str, *, source: str, output: str, plugin: str, plugin_id: str = "",
-                 operation: str = "", inputs: list[str] | tuple[str, ...] = (), draft: str = "") -> dict[str, str]:
+                 operation: str = "", inputs: list[str] | tuple[str, ...] = (), draft: str = "",
+                 set_key: str = "", dependencies: tuple[str, ...] = ()) -> dict[str, str]:
     """One Source data record. Paths are file names in the folder; ``inputs`` (an export's
-    source files) are joined with ``|``; ``draft`` is a Magic drop's parser folder."""
+    source files or an import set's members) are joined with ``|``; ``draft`` is a Magic drop's parser folder."""
     from datetime import datetime, timezone
     entry = {"kind": kind, "source": source, "output": output, "plugin": plugin, "plugin_id": plugin_id,
              "updated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    if set_key:
+        entry["set_key"] = set_key
+    if dependencies:
+        entry["dependencies"] = "|".join(dependencies)
     if operation:
         entry["operation"] = operation
     if inputs:

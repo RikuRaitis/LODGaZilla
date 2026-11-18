@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from src.data.folder_info import SOURCE_IMPORT, is_info_file as is_folder_info_file, record_sources, source_entry
+from src.data.import_sets import ImportSet, describe_import_set
 from src.jobs.cache_files import is_cache_output, is_cache_temp_file
 from src.jobs.import_data import (
     DEFAULT_CONFIG_DIR,
@@ -46,6 +47,12 @@ class ImportJob:
     config_name: str
     # The GUI's current HDF5 settings; None reads the saved settings file.
     hdf5_settings: dict[str, Any] | None = field(default=None, compare=False, hash=False)
+    import_set: ImportSet | None = None
+
+    @property
+    def output_path(self) -> Path:
+        source = Path(self.source_path)
+        return source.parent / self.import_set.output if self.import_set else default_output_path(source)
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,7 @@ class ImportJobResult:
     write_seconds: float = 0.0
     total_seconds: float = 0.0
     config_path: str = ""
+    import_set: ImportSet | None = None
 
 
 def run_reimport_batch(
@@ -175,6 +183,7 @@ def discover_import_jobs(
         source_candidates = (data_folder / name for name in sources)
     else:
         source_candidates = data_folder.rglob("*") if recursive else data_folder.iterdir()
+    seen_sets: set[tuple[str, str, str]] = set()
     for source_path in source_candidates:
         if (
             not source_path.is_file()
@@ -188,6 +197,12 @@ def discover_import_jobs(
             logger.debug("Skipped %s: %s", source_path, error)
             continue
 
+        import_set = describe_import_set(_importer, source_path)
+        if import_set:
+            identity = (str(source_path.parent), str(configuration.path), import_set.key)
+            if identity in seen_sets:
+                continue
+            seen_sets.add(identity)
         logger.debug("Accepted %s with %s", source_path, configuration.name)
         jobs_by_folder[source_path.parent].append(
             ImportJob(
@@ -195,6 +210,7 @@ def discover_import_jobs(
                 folder_path=str(source_path.parent),
                 config_path=str(configuration.path),
                 config_name=configuration.name,
+                import_set=import_set,
                 hdf5_settings=dict(hdf5_settings) if hdf5_settings is not None else None,
             )
         )
@@ -203,7 +219,7 @@ def discover_import_jobs(
 
 def duplicate_output_paths(jobs_by_folder: dict[Path, list[ImportJob]]) -> list[Path]:
     output_paths = [
-        default_output_path(Path(job.source_path)).resolve()
+        job.output_path.resolve()
         for jobs in jobs_by_folder.values()
         for job in jobs
     ]
@@ -280,10 +296,11 @@ def run_import_job(
 
     source_path = Path(job.source_path)
     config_path = Path(job.config_path)
-    output_path = default_output_path(source_path)
-    source_name = source_path.name
+    output_path = job.output_path
+    source_name = job.import_set.output if job.import_set else source_path.name
     worker_id = str(os.getpid())
-    source_megabytes = input_megabytes(source_path)
+    source_megabytes = (sum(input_megabytes(source_path.parent / name) for name in job.import_set.inputs)
+                        if job.import_set else input_megabytes(source_path))
     started = time.perf_counter()
     progress = progress_queue if progress_queue is not None else _WORKER_PROGRESS_QUEUE
     cancel = cancel_event if cancel_event is not None else _WORKER_CANCEL_EVENT
@@ -301,11 +318,17 @@ def run_import_job(
         check_cancelled()
         emit(("process_started", job.folder_path, worker_id, source_name, PROGRESS_TOTAL))
         # Fail before parsing; the writer checks again before replacing.
-        ensure_replaceable_cache(output_path, source_path)
+        if job.import_set:
+            job.import_set.check_ready(source_path.parent)
+        tracked = (job.import_set.inputs + job.import_set.dependencies if job.import_set else (source_path.name,))
+        before = {name: (source_path.parent / name).stat() for name in tracked}
+        ensure_replaceable_cache(output_path, source_path, job.import_set)
         configuration = load_import_configuration(config_path, hdf5_config=job.hdf5_settings)
         parser_instance = configuration.parser_instance
         if parser_instance is None:
             raise ValueError(f"{configuration.name}: missing parser instance")
+        if describe_import_set(parser_instance, source_path) != job.import_set:
+            raise ValueError("Import set changed since discovery; refresh and try again.")
         last_update = 0.0
 
         def report_parse_progress(fraction: float) -> None:
@@ -335,6 +358,10 @@ def run_import_job(
         import_started = time.perf_counter()
         result = parser_instance.parse(source_path, progress_callback=report_parse_progress)
         parse_seconds = time.perf_counter() - import_started
+        for name, old in before.items():
+            now = (source_path.parent / name).stat()
+            if (old.st_size, old.st_mtime_ns) != (now.st_size, now.st_mtime_ns):
+                raise ValueError(f"Input changed during import: {name}")
         check_cancelled()
 
         emit(("process_progress", job.folder_path, worker_id, source_name, WRITE_PROGRESS_START, PROGRESS_TOTAL))
@@ -345,6 +372,7 @@ def run_import_job(
             selected_config=configuration,
             import_result=result,
             progress_callback=report_write_progress,
+            import_set=job.import_set,
         )
         write_seconds = time.perf_counter() - write_started
         total_seconds = time.perf_counter() - started
@@ -360,6 +388,7 @@ def run_import_job(
             write_seconds=write_seconds,
             total_seconds=total_seconds,
             config_path=job.config_path,
+            import_set=job.import_set,
         )
     except Exception as error:  # noqa: BLE001 - return the failure so the batch can continue.
         emit(("process_finished", job.folder_path, worker_id, source_name, False))
@@ -381,7 +410,7 @@ def make_import_failure_result(job: ImportJob, error: Exception) -> ImportJobRes
         source_path=job.source_path,
         folder_path=job.folder_path,
         config_name=job.config_name,
-        output_path=str(default_output_path(Path(job.source_path))),
+        output_path=str(job.output_path),
         imported=False,
         error=str(error),
         traceback_text=traceback.format_exc(),
@@ -412,8 +441,11 @@ def record_import_source(result: ImportJobResult, logger: logging.Logger) -> Non
     source, output = Path(result.source_path), Path(result.output_path)
     plugin_id, title = importer_plugin_identity(result.config_path) if result.config_path else ("", result.config_name)
     try:
+        group = result.import_set
         record_sources(Path(result.folder_path), [source_entry(
-            SOURCE_IMPORT, source=source.name, output=output.name, plugin=title, plugin_id=plugin_id)])
+            SOURCE_IMPORT, source=group.title if group else source.name, output=output.name,
+            plugin=title, plugin_id=plugin_id, inputs=group.inputs if group else (),
+            set_key=group.key if group else "", dependencies=group.dependencies if group else ())])
     except (OSError, ValueError, TimeoutError) as error:
         # The H5 file is written; only its Source data record is missing.
         logger.warning("Could not record the source of %s: %s", output, error)

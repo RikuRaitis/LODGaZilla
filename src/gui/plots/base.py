@@ -155,6 +155,8 @@ class PlotBaseWidget(QFrame):
     wheel_scrolled = Signal(int)
     # The card and its previous time offset, after the offset changed.
     time_offset_changed = Signal(object, float)
+    # The card's Legend button showed or hid its legend.
+    legend_shown_changed = Signal(object)
     # Cards without a time base, such as images, have no time offset.
     supports_time_offset = True
     supports_horizontal_layout = False
@@ -200,6 +202,18 @@ class PlotBaseWidget(QFrame):
         self.controls_button.setFixedSize(self.close_button.size())
         self.controls_button.clicked.connect(self._controls_button_clicked)
         self._show_controls_button_state()
+        # Between the Card controls button and Close, on cards with a legend: shows or hides
+        # this card's legend. New cards follow the Plot navigator's Legends button.
+        from src.gui.plots.legend import legends_shown
+        self._legend_shown = legends_shown()
+        self.legend_button = QToolButton(self)
+        self.legend_button.setCheckable(True)
+        self.legend_button.setIconSize(QSize(18, 18))
+        self.legend_button.setAccessibleName("Legend")
+        self.legend_button.setAutoRaise(True)
+        self.legend_button.setFixedSize(self.close_button.size())
+        self.legend_button.clicked.connect(lambda: self.set_legend_shown(not self._legend_shown))
+        self.legend_button.hide()
         self.drag_handle = PlotDragHandle(self)
         self.resize_handle = PlotHeightHandle(self)
         self.resize_handle.dragged.connect(lambda delta: self.height_resize_requested.emit(self, delta))
@@ -274,9 +288,15 @@ class PlotBaseWidget(QFrame):
         button_size = self.close_button.width()
         self.drag_handle.setGeometry(3, 3, max(1, self.width() - 6), button_size + 4)
         self.close_button.setGeometry(max(0, self.width() - button_size - 5), 5, button_size, button_size)
-        self.controls_button.setGeometry(max(0, self.close_button.x() - button_size - 2), 5, button_size, button_size)
+        self._show_legend_button_state()
+        right = self.close_button
+        if not self.legend_button.isHidden():
+            self.legend_button.setGeometry(max(0, right.x() - button_size - 2), 5, button_size, button_size)
+            right = self.legend_button
+        self.controls_button.setGeometry(max(0, right.x() - button_size - 2), 5, button_size, button_size)
         self.drag_handle.raise_()
         self.close_button.raise_()
+        self.legend_button.raise_()
         self.controls_button.raise_()
         self._layout_header_controls()
 
@@ -303,6 +323,7 @@ class PlotBaseWidget(QFrame):
         if event.type() in {QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange} and hasattr(self, "help_button"):
             self.close_button.setIcon(plot_control_icon(self, "close"))
             self._show_controls_button_state()
+            self._show_legend_button_state()
             self.help_button.setIcon(plot_control_icon(self, "help"))
             self.offset_button.setIcon(plot_control_icon(self, self._offset_icon_name))
             for style, button in getattr(self, "draw_style_buttons", {}).items():
@@ -378,8 +399,37 @@ class PlotBaseWidget(QFrame):
         self._layout_header_controls()
 
     def header_widgets(self) -> list[QWidget]:
-        """The Close and Card controls buttons and every other control in the Drag strip's row."""
-        return [self.close_button, self.controls_button, *self.header_controls, *self.header_left_controls]
+        """The Close, Legend and Card controls buttons and every other control in the Drag strip's row."""
+        return [self.close_button, self.legend_button, self.controls_button, *self.header_controls,
+                *self.header_left_controls]
+
+    def card_legends(self) -> list:
+        """The card's legends (PlotLegendWidget); most cards have one."""
+        from src.gui.plots.legend import PlotLegendWidget
+        return self.findChildren(PlotLegendWidget)
+
+    @property
+    def legend_shown(self) -> bool:
+        return getattr(self, "_legend_shown", True)
+
+    def set_legend_shown(self, shown: bool, *, notify: bool = True) -> None:
+        """Show or hide this card's legend; a legend the card itself hides, such as an empty
+        one, stays hidden. ``notify`` emits ``legend_shown_changed``."""
+        self._legend_shown = bool(shown)
+        for legend in self.card_legends():
+            legend.apply_legends_shown()
+        self._show_legend_button_state()
+        if notify:
+            self.legend_shown_changed.emit(self)
+
+    def _show_legend_button_state(self) -> None:
+        if not hasattr(self, "legend_button"):
+            return
+        shown = self.legend_shown
+        self.legend_button.setChecked(shown)
+        self.legend_button.setIcon(plot_control_icon(self, "legend-shown" if shown else "legend-hidden"))
+        self.legend_button.setToolTip("Hide legend" if shown else "Show legend")
+        self.legend_button.setVisible(bool(self.card_legends()))
 
     @property
     def header_controls_shown(self) -> bool:
@@ -428,7 +478,8 @@ class PlotBaseWidget(QFrame):
         if not getattr(self, "_header_controls_shown", False):
             # Controls a card shows while the header is hidden are hidden too, and return with it.
             for control in self.header_widgets():
-                if control not in (self.close_button, self.controls_button) and not control.isHidden():
+                if (control not in (self.close_button, self.legend_button, self.controls_button)
+                        and not control.isHidden()):
                     control.hide()
                     if control not in self._suppressed_header_controls:
                         self._suppressed_header_controls.append(control)
@@ -643,6 +694,8 @@ class PlotBaseWidget(QFrame):
             state["draw_style"] = self.draw_style
         if abs(self.time_offset) >= 0.0005:
             state["time_offset"] = self.time_offset
+        if self.card_legends():
+            state["legend_shown"] = self.legend_shown
         representation = getattr(self, "time_axis_representation", None)
         if callable(representation):
             # Real date/time or time from log start, on cards with a time axis.
@@ -651,6 +704,8 @@ class PlotBaseWidget(QFrame):
 
     def restore_workspace_state(self, state: dict) -> None:
         """Show the saved sources, replacing those the card was created with."""
+        if isinstance(state.get("legend_shown"), bool):
+            self.set_legend_shown(state["legend_shown"])
         if self.supports_time_offset and isinstance(state.get("time_offset"), (int, float)):
             self.set_time_offset(float(state["time_offset"]))
         set_representation = getattr(self, "set_time_axis_representation", None)

@@ -8,6 +8,7 @@ import tempfile
 from threading import Event
 from types import SimpleNamespace
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 import h5py
@@ -49,6 +50,19 @@ class XYZDataTests(unittest.TestCase):
         np.testing.assert_equal(result.time, [1, 2, 3])
         np.testing.assert_equal(result.positions, [[10, 100, -1], [20, 200, -2], [30, 200, -2]])
         self.assertFalse(result.sampled)
+
+    def test_units_and_gnss_roles_are_kept_for_equal_scale(self):
+        lat = self.write("GNSS/latitude", [0, 1, 2], [60.0, 60.1, 60.2])
+        lon = self.write("GNSS/longitude", [0, 1, 2], [24.0, 24.1, 24.2])
+        alt = self.write("GNSS/altitude", [0, 1, 2], [5.0, 6.0, 7.0])
+        with h5py.File(self.path, "a") as cache:
+            for name, unit in (("GNSS/latitude", "deg"), ("GNSS/longitude", "deg"), ("GNSS/altitude", "m")):
+                cache["series/" + name].attrs["unit"] = unit
+        result = load_xyz_data((lat, lon, AxisSource(alt.path, alt.name, "time")))
+        self.assertEqual(result.units, ("deg", "deg", "s"))
+        self.assertEqual(result.roles, ("latitude", "longitude", "time"))
+        result = load_xyz_data((lat, lon, alt))
+        self.assertEqual((result.units[2], result.roles[2]), ("m", ""))
 
     def test_time_axis_and_absolute_cross_file_alignment(self):
         x = self.write("x", [0, 1, 2], [5, 6, 7])
@@ -108,6 +122,8 @@ class FakeView(QWidget):
     clicked = Signal(object, object)
     double_clicked = Signal(object)
     camera_changed = Signal()
+    axis_stretch_requested = Signal(int, int)
+    selected_axis = None
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -307,6 +323,82 @@ class XYZCardTests(unittest.TestCase):
         point = xy.legend.rows[0].mapTo(self.workspace.viewport(), xy.legend.rows[0].rect().center())
         self.assertIsNone(controller.update_preview(point))
         controller.finish()
+
+    def test_a_clicked_axis_is_stretched_by_ctrl_wheel_and_fit_restores_the_box(self):
+        from PySide6.QtCore import QPointF
+        card = self.workspace.add_xyz_plot(*self.entries)
+        self.wait_loaded(card)
+        before = card._scene_positions[0].copy()
+        # The fake view looks down on X and Y: the X axis line runs along y = 200 at the origin.
+        x_line = card.view.project(card._axis_segments[0])
+        on_x = QPointF(*(x_line[0] + x_line[1]) / 2)
+        self.assertEqual(card.axis_at(on_x), 0)
+        self.assertIsNone(card.axis_at(QPointF(5, 5)))
+        # A click on its line selects the axis, and places no marker; the view then stretches it.
+        with mock.patch.object(card, "_place_marker_from_view") as place:
+            card.view.clicked.emit(Qt.MouseButton.LeftButton, on_x)
+            place.assert_not_called()
+            self.assertEqual((card.selected_axis, card.view.selected_axis), (0, 0))
+            # A second click deselects it; a click elsewhere deselects it and places the marker.
+            card.view.clicked.emit(Qt.MouseButton.LeftButton, on_x)
+            self.assertIsNone(card.selected_axis)
+            card.view.clicked.emit(Qt.MouseButton.LeftButton, on_x)
+            card.view.clicked.emit(Qt.MouseButton.LeftButton, QPointF(5, 5))
+            self.assertIsNone(card.view.selected_axis)
+            place.assert_called_once()
+        card.select_axis(0)
+        card.view.axis_stretch_requested.emit(0, 240)
+        self.assertAlmostEqual(card.axis_stretch[0], 1.15 ** 2)
+        np.testing.assert_allclose(card._scene_positions[0][:, 0], before[:, 0] * 1.15 ** 2)
+        np.testing.assert_allclose(card._scene_positions[0][:, 1:], before[:, 1:])
+        # The axis line is drawn stretched too, and the hit test follows it.
+        np.testing.assert_allclose(card._axis_segments[0][:, 0], [-1.15 ** 2, 1.15 ** 2])
+        # Saved and restored with the workspace; Fit returns to the box.
+        from PySide6.QtGui import QVector3D
+        card.view.opts = {"center": QVector3D(), "distance": 6, "elevation": 25, "azimuth": 45, "fov": 60}
+        self.assertEqual(card.workspace_state()["axis_stretch"], [1.15 ** 2, 1.0, 1.0])
+        card.fit_axes_button.click()
+        np.testing.assert_allclose(card._scene_positions[0], before)
+        self.assertNotIn("axis_stretch", card.workspace_state())
+        card.restore_workspace_state({"axis_stretch": [2.0, 0.5, 1.0]})
+        np.testing.assert_allclose(card.axis_stretch, [2.0, 0.5, 1.0])
+        # Stretching has limits either way.
+        for _ in range(100):
+            card.stretch_axis(2, -1200)
+        self.assertAlmostEqual(card.axis_stretch[2], 0.001)
+
+    def test_equal_scale_needs_distances_on_every_axis(self):
+        card = self.workspace.add_xyz_plot(*self.entries)
+        self.wait_loaded(card)
+        # These series have no unit: Equal scale is off, and its tooltip says why.
+        self.assertFalse(card.equal_scale_button.isEnabled())
+        self.assertIn("X is in no unit", card.equal_scale_button.toolTip())
+        # With latitude, longitude and metres it sets one metre to the same length on each axis.
+        card.results = [replace(result, units=("deg", "deg", "m"), roles=("latitude", "longitude", ""))
+                        for result in card.results]
+        card._extent = (np.array([60.0, 24.0, 0.0]), np.array([60.01, 24.02, 50.0]))
+        card._update_equal_scale_button()
+        self.assertTrue(card.equal_scale_button.isEnabled())
+        factors = card.equal_scale_factors()
+        # 0.01° of latitude is about 1106 m; 0.02° of longitude at 60° about 1113 m: the longest.
+        self.assertAlmostEqual(factors[1], 1.0)
+        self.assertAlmostEqual(factors[0], 1105.74 / 1113.2, places=2)
+        self.assertAlmostEqual(factors[2], 50 / 1113.2, places=3)
+
+    def test_axes_buttons_choose_the_axes_position(self):
+        card = self.workspace.add_xyz_plot(*self.entries)
+        self.wait_loaded(card)
+        buttons = card.axes_buttons
+        self.assertEqual(list(buttons), ["origin", "corner"])
+        self.assertTrue(buttons["origin"].isChecked() and not buttons["corner"].isChecked())
+        self.assertEqual(buttons["corner"].toolTip(), "Axes at corner")
+        buttons["corner"].click()
+        self.assertEqual(card.axes_position, "corner")
+        self.assertFalse(buttons["origin"].isChecked())
+        # Restoring a workspace checks the matching button.
+        card.set_axes_position("origin")
+        self.assertTrue(buttons["origin"].isChecked() and not buttons["corner"].isChecked())
+        self.assertFalse(hasattr(card, "axes_combo"))
 
     def test_render_keeps_unix_time_ticks_distinct_and_pads_constant_axes(self):
         card = self.workspace.add_xyz_plot(*self.entries)

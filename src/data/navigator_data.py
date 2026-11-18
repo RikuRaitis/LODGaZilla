@@ -135,7 +135,8 @@ def ensure_folder_info_files(
             continue
 
 
-ORIGIN_ATTRIBUTES = ("tool", "source_file", "config_file", "config_name")
+ORIGIN_ATTRIBUTES = ("tool", "source_file", "config_file", "config_name", "import_set_key",
+                     "import_set_title", "source_files_json", "source_dependencies_json")
 
 
 def read_h5_navigator_data(h5_path: Path) -> H5NavigatorData:

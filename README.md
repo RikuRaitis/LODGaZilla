@@ -151,8 +151,9 @@ Drag the dividers between the areas to resize them.
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/workspace-open-recent.svg"><img src="assets/navigator_icons/light/workspace-open-recent.svg" width="20" alt="workspace open recent"></picture> | Open recent workspace | Lists the last ten workspaces. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/workspace-save.svg"><img src="assets/navigator_icons/light/workspace-save.svg" width="20" alt="workspace save"></picture> | Save workspace | Saves the current view (Ctrl+S). |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/workspace-save-as.svg"><img src="assets/navigator_icons/light/workspace-save-as.svg" width="20" alt="workspace save as"></picture> | Save workspace as | Saves it to a new file (Ctrl+Shift+S). |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/settings.svg"><img src="assets/navigator_icons/light/settings.svg" width="20" alt="settings"></picture> | Settings | Opens the Settings dialog. |
 
-**Navigator buttons** (centered above the tree):
+**Navigator buttons** (at the right end of the same row as the workspace buttons):
 
 | Icon | Button | Does |
 | --- | --- | --- |
@@ -172,17 +173,18 @@ so its icon changes when you click it; the table shows each one switched on.
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/views-linked.svg"><img src="assets/plot_icons/light/views-linked.svg" width="20" alt="views linked"></picture> | Plot views linked | Zooming or panning one time card zooms and pans them all. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/info-clicked.svg"><img src="assets/plot_icons/light/info-clicked.svg" width="20" alt="info clicked"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/info-all.svg"><img src="assets/plot_icons/light/info-all.svg" width="20" alt="info all"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/info-off.svg"><img src="assets/plot_icons/light/info-off.svg" width="20" alt="info off"></picture> | Values boxes | Show values only in the card where you placed the marker, in all cards, or nowhere. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/show-sample-loss.svg"><img src="assets/plot_icons/light/show-sample-loss.svg" width="20" alt="show sample loss"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/show-clipping.svg"><img src="assets/plot_icons/light/show-clipping.svg" width="20" alt="show clipping"></picture> | Sample loss, Clipping | Show or hide those areas on the cards. |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/legend-shown.svg"><img src="assets/plot_icons/light/legend-shown.svg" width="20" alt="legend shown"></picture> | Legends | Show or hide every card's legend, for more room. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/legend-shown.svg"><img src="assets/plot_icons/light/legend-shown.svg" width="20" alt="legend shown"></picture> | Legends | Show or hide every card's legend at once, for more room; new cards follow it. Each card also has its own Legend button. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/plot-navigator-shown.svg"><img src="assets/plot_icons/light/plot-navigator-shown.svg" width="20" alt="plot navigator shown"></picture> | Plot navigator | Show or hide the timeline with the card bars. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/plugin.svg"><img src="assets/plot_icons/light/plugin.svg" width="20" alt="plugin"></picture> | Plugins | One icon per plugin with its own window; a plugin can bring its own icon. |
-| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/settings.svg"><img src="assets/plot_icons/light/settings.svg" width="20" alt="settings"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/help.svg"><img src="assets/plot_icons/light/help.svg" width="20" alt="help"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/close-all-plots.svg"><img src="assets/plot_icons/light/close-all-plots.svg" width="20" alt="close all plots"></picture> | Settings, About, Close all | Settings, **About LODGaZilla** (version, author, and a button that opens this README in your Markdown viewer), and closing every card. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/help.svg"><img src="assets/plot_icons/light/help.svg" width="20" alt="help"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/close-all-plots.svg"><img src="assets/plot_icons/light/close-all-plots.svg" width="20" alt="close all plots"></picture> | About, Close all | **About LODGaZilla** (version, author, and a button that opens this README in your Markdown viewer), and closing every card. |
 
-**Card header** (top right of each card). A card shows only Close and the card controls
-button; click the card controls button to make the card active and show the rest. They
+**Card header** (top right of each card). A card shows only Close, its Legend button and
+the card controls button; click the card controls button to make the card active and show the rest. They
 hide again when another card becomes active.
 
 | Icon | Button | Does |
 | --- | --- | --- |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/legend-shown.svg"><img src="assets/plot_icons/light/legend-shown.svg" width="20" alt="legend shown"></picture> | Legend | Shows or hides this card's legend. Only on cards with a legend; saved in workspaces. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/card-controls-hidden.svg"><img src="assets/plot_icons/light/card-controls-hidden.svg" width="20" alt="card controls"></picture> | Card controls | Shows or hides this card's controls below. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/help.svg"><img src="assets/plot_icons/light/help.svg" width="20" alt="help"></picture> | Help | Lists every mouse action of this card. When in doubt, click it. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/time-offset.svg"><img src="assets/plot_icons/light/time-offset.svg" width="20" alt="time offset"></picture> | Time offset | Sets the card's [time offset](#time-offsets). Highlighted while an offset is set. |
@@ -192,7 +194,7 @@ Cards that draw lines add the [draw style](#lines-or-points) buttons <picture><s
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-lines.svg"><img src="assets/plot_icons/light/draw-lines.svg" width="20" alt="draw lines"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-points.svg"><img src="assets/plot_icons/light/draw-points.svg" width="20" alt="draw points"></picture> (Auto, Lines, Points).
 Some cards add their own controls next to these: the [sample limit](#sample-limits)
 dropdown, the Frequency card's FFT settings <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/fft-settings.svg"><img src="assets/plot_icons/light/fft-settings.svg" width="20" alt="fft settings"></picture>, the 3D plot's reset
-camera button <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/reset-camera.svg"><img src="assets/plot_icons/light/reset-camera.svg" width="20" alt="reset camera"></picture> and axes position, the Map type (street or satellite) and the Video
+camera button <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/reset-camera.svg"><img src="assets/plot_icons/light/reset-camera.svg" width="20" alt="reset camera"></picture> and axes buttons <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-origin.svg"><img src="assets/plot_icons/light/axes-origin.svg" width="20" alt="axes at origin"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-corner.svg"><img src="assets/plot_icons/light/axes-corner.svg" width="20" alt="axes at corner"></picture> (through 0, 0, 0 or along the corner), the Map type (street or satellite) and the Video
 card's preview size. The [3D Map](#3d-map) puts its map controls along the left of its
 top strip. Drag the strip at the top of a card to move it, and its bottom edge
 to resize it.
@@ -212,6 +214,7 @@ for:
 - **Attach**: link a video, images or audio to the folder. Removing a link later never
   deletes the file. A folder's **Media** group has the same **Attach** menu.
 - **Show in file manager.**
+- **Copy folder location**: puts the folder's full path on the clipboard.
 
 #### Source data
 
@@ -222,11 +225,19 @@ and what can be, in three columns:
 | --- | --- | --- |
 | `log_20260909_104101.bin` | `log_20260909_104101.h5` | Example binary importer |
 | `log_20260910_090000.bin` | Not imported | Example binary importer |
+| `notes.txt` | Not imported | No compatible plugin |
 | LODGaZilla | `20260909_104101.csv` | Example CSV export |
 
-- A file an enabled importer plugin can read appears as **Not imported** (dimmed), even
-  before anything is imported. Files Magic drop imported show **Magic drop** as the plugin.
+- Every data file of the folder is listed. One that isn't imported yet reads
+  **Not imported** (dimmed), with the enabled importer plugin that can read it, or
+  **No compatible plugin** when none can; try [Magic drop](#magic-drop-import-any-file-with-ai)
+  for those. Files Magic drop imported show **Magic drop** as the plugin.
 - An export appears when the folder has files it reads, as **Not exported** until it runs.
+- An importer that combines several files shows one expandable Source row per
+  output. Expand it to see its inputs and any timing reference; double-click the
+  parent to import them together. The output filename is shown before import.
+  An incomplete set names its missing inputs and cannot be imported. Changing
+  any member or reference marks the output outdated.
 - An output whose source changed after it was written is marked **(outdated)**; one that
   was deleted, **(missing)**. Click **Refresh** to look again.
 - **Double-click** a row to import, re-import or export it. LODGaZilla asks first when
@@ -348,7 +359,8 @@ their layout, series, zoom and settings, both markers, and the Navigator's folde
 grouping and filter. **Open workspace** (Ctrl+O) brings it all back exactly as it was.
 The Plot navigator buttons (linking, legends, time axis) are your own
 preferences and are not saved in workspaces. While cards are open, opening a workspace
-or closing LODGaZilla first asks whether to save them.
+first asks whether to save them. Closing LODGaZilla asks too when **Ask to save the
+workspace on exit** is on in Settings, General (off by default).
 **Open recent workspace** lists the last ten. Paths are stored relative to the
 workspace file, so a workspace saved next to its data still opens after you move the
 folder.
@@ -436,16 +448,29 @@ graphs.
 
 Three series as X, Y and Z, such as the three accelerometer axes. Drag to rotate,
 **Ctrl+drag** to pan and **Ctrl+wheel** to zoom; the camera button resets the view. The
-axes meet at 0, 0, 0 by default, or, from the axes dropdown, at the corner of the data;
+axes meet at 0, 0, 0 by default, or, from the axes buttons, at the corner of the data;
 when 0 is outside a series' range, its axis stays at the edge of the data. A card can
 hold several traces.
+
+Each axis fills the box by default, whatever its unit. **Click an axis line** to select
+it (it turns thicker); **Ctrl+wheel** then stretches or shrinks just that axis. Click it
+again, or anywhere else, to deselect it; with no axis selected, Ctrl+wheel zooms the camera. In the card's controls, **Equal scale**
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-equal.svg"><img src="assets/plot_icons/light/axes-equal.svg" width="20" alt="equal scale"></picture> draws one metre the same length on every axis, so a GNSS track
+shows its true shape: latitude and longitude are estimated in metres for this, while the
+labels stay in degrees. Any two axes in degrees count as latitude and longitude (their
+names say which, or else X is the longitude and Y the latitude); coordinates stored as
+fixed-point numbers (unit `raw`, degrees × 10⁷) are read as the Map card reads them. Every other axis needs a
+length unit; otherwise Equal scale is greyed out and its tooltip names the axis.
+**Fit** <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-fit.svg"><img src="assets/plot_icons/light/axes-fit.svg" width="20" alt="fit axes"></picture> fills the box again. The stretch is saved in workspaces.
 
 ### Map
 
 ![Map card](docs/images/card_map.png)
 
 GNSS tracks on a street or satellite map. Recognised latitude and longitude series
-open here by default. A card can hold several tracks.
+open here by default. A card can hold several tracks. A scale bar at the bottom right
+shows a distance at the current zoom; **Scale bar** in the card's controls hides it. The
+map data's credit (© OpenStreetMap, or Esri for satellite) is small at the top right.
 
 ### 3D Map
 
@@ -464,6 +489,8 @@ to make those hills look properly hilly. The controls along the card's top:
 - **Auto**: sets the offset so that the track's lowest point touches the ground.
   A new card does this by itself.
 - **Center view**: brings the whole track back into view when you've lost it.
+- **Scale bar**: shows or hides the scale bar at the bottom right, a distance at the
+  current zoom (on by default).
 
 ### Video
 

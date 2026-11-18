@@ -97,3 +97,25 @@ class NativeStderrLogCaptureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QtMessageFilterTests(unittest.TestCase):
+    def test_only_the_map_style_warning_is_dropped(self):
+        from types import SimpleNamespace
+        from PySide6.QtCore import QtMsgType
+        from src.app import lodgazilla
+
+        logger = mock.Mock()
+        with mock.patch.object(lodgazilla, "qInstallMessageHandler"):
+            lodgazilla.install_qt_message_logging(logger)
+        handle = logger._qt_message_handler
+        handle(QtMsgType.QtWarningMsg, SimpleNamespace(category="js"),
+               "Expected value to be of type number, but found null instead")
+        logger.warning.assert_not_called()
+        handle(QtMsgType.QtWarningMsg, SimpleNamespace(category="js"), "Uncaught TypeError: x is undefined")
+        handle(QtMsgType.QtWarningMsg, SimpleNamespace(category="qt.multimedia"),
+               "Expected value to be of type number, but found null instead")
+        self.assertEqual([call.args[0] for call in logger.warning.call_args_list], [
+            "js: Uncaught TypeError: x is undefined",
+            "qt.multimedia: Expected value to be of type number, but found null instead",
+        ])

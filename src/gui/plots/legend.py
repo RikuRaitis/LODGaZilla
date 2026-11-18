@@ -43,7 +43,8 @@ class LegendEntry:
     group_sources: tuple | None = None
 
 
-# The Plot navigator's Legends button hides every card's legend while it is off.
+# Whether new cards show their legend: the Plot navigator's Legends button. Each card then
+# shows or hides its own with its Legend button (PlotBaseWidget.legend_shown).
 _LEGENDS_SHOWN = True
 
 
@@ -52,7 +53,7 @@ def legends_shown() -> bool:
 
 
 def set_legends_shown(shown: bool) -> None:
-    """Show or hide legends created from now on; open ones follow `apply_legends_shown`."""
+    """Show or hide the legends of cards opened from now on; open cards keep their own."""
     global _LEGENDS_SHOWN
     _LEGENDS_SHOWN = bool(shown)
 
@@ -125,14 +126,21 @@ class PlotLegendWidget(QFrame):
         return super().eventFilter(watched, event)
 
     def setVisible(self, visible: bool) -> None:  # noqa: N802 - Qt override
-        # Cards show or hide their legend as their series change; the Legends button overrides that.
+        # Cards show or hide their legend as their series change; the card's Legend button overrides that.
         self._wanted_visible = bool(visible)
-        super().setVisible(self._wanted_visible and _LEGENDS_SHOWN)
+        super().setVisible(self._wanted_visible and self._shown_by_card())
 
     def apply_legends_shown(self) -> None:
-        super().setVisible(getattr(self, "_wanted_visible", False) and _LEGENDS_SHOWN)
+        super().setVisible(getattr(self, "_wanted_visible", False) and self._shown_by_card())
         if self.isVisible():
             self.reposition()
+
+    def _shown_by_card(self) -> bool:
+        """Whether this legend's card shows its legend; without a card, the default."""
+        widget = self.parentWidget()
+        while widget is not None and not isinstance(widget, PlotBaseWidget):
+            widget = widget.parentWidget()
+        return widget.legend_shown if widget is not None else _LEGENDS_SHOWN
 
     def set_group_model(self, model):
         if self._scroll is None:

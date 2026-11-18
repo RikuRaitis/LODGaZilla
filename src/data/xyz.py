@@ -8,6 +8,7 @@ from threading import Event
 import h5py
 import numpy as np
 
+from src.data.axis_scale import ROLE_LATITUDE, ROLE_LONGITUDE, ROLE_TIME, is_latitude_name, is_longitude_name
 from src.data.sampling import SAMPLE_LIMIT_ALL, decimation_step
 from src.data.h5_series import (
     _attribute_text, _canonical_time_values, _canonical_to_native_range,
@@ -39,6 +40,9 @@ class XYZData:
     sampled: bool
     # Samples in the shared time range before every-Nth sampling.
     available_points: int | None = None
+    # Each axis's unit, and its role: a GNSS "latitude" or "longitude", "time", or "" (axis_scale).
+    units: tuple[str, str, str] = ("", "", "")
+    roles: tuple[str, str, str] = ("", "", "")
 
     @property
     def shown_points(self) -> int:
@@ -123,7 +127,7 @@ def load_xyz_data(axes: tuple[AxisSource, AxisSource, AxisSource], *, time_range
     if len(axes) != 3 or (maximum_points != SAMPLE_LIMIT_ALL and maximum_points < 2):
         raise ValueError("A 3D trace requires three axes and a point budget of at least two")
     with ExitStack() as stack:
-        sources, labels, absolute_axes = [], [], []
+        sources, labels, absolute_axes, units, roles = [], [], [], [], []
         for axis in axes:
             _check_cancelled(cancelled)
             cache = stack.enter_context(h5py.File(axis.path, "r"))
@@ -149,6 +153,9 @@ def load_xyz_data(axes: tuple[AxisSource, AxisSource, AxisSource], *, time_range
                 unit = "Unix s" if absolute else "s"
                 label = f"Time of {label}"
             labels.append(f"{label} ({unit})" if unit else label)
+            units.append(unit)
+            roles.append(ROLE_TIME if axis.component == "time" else ROLE_LATITUDE if is_latitude_name(axis.name)
+                         else ROLE_LONGITUDE if is_longitude_name(axis.name) else "")
         if any(absolute_axes) and not all(absolute_axes):
             raise ValueError("Cannot align absolute timestamps with series lacking a log start time")
         lower = max(source[3][0] for source in sources)
@@ -171,4 +178,4 @@ def load_xyz_data(axes: tuple[AxisSource, AxisSource, AxisSource], *, time_range
         ])
         if not np.any(np.all(np.isfinite(positions), axis=1)):
             raise ValueError("The shared time range contains no finite 3D points")
-        return XYZData(query, positions, tuple(labels), step > 1, stop - start)
+        return XYZData(query, positions, tuple(labels), step > 1, stop - start, tuple(units), tuple(roles))

@@ -61,7 +61,6 @@ class PlotNavigatorWidget(QWidget):
     second_marker_placed = Signal(float)
     second_marker_cleared = Signal()
     expanded_changed = Signal(bool)
-    settings_requested = Signal()
     help_requested = Signal()
     close_all_requested = Signal()
     # A Plugins group icon clicked: the plugin's id.
@@ -148,7 +147,6 @@ class PlotNavigatorWidget(QWidget):
         self._plugin_icons: dict[QToolButton, object] = {}
         self.plugin_bar.hide()
         header.addWidget(self.plugin_bar)
-        header.addWidget(self.settings_button)
         header.addWidget(self.help_button)
         header.addWidget(self.close_button)
         self.canvas = _NavigatorCanvas(self)
@@ -302,10 +300,6 @@ class PlotNavigatorWidget(QWidget):
             checked=True,
         )
         self.navigator_button.toggled.connect(self.set_expanded)
-        self.settings_button = self._new_action_button("Settings")
-        self._static_icons[self.settings_button] = "settings"
-        self.settings_button.setIcon(plot_control_icon(self, "settings"))
-        self.settings_button.clicked.connect(self.settings_requested.emit)
         self.help_button = self._new_action_button("About LODGaZilla")
         self._static_icons[self.help_button] = "help"
         self.help_button.setIcon(plot_control_icon(self, "help"))

@@ -42,10 +42,17 @@ class PluginExamplesJob(QObject):
 
     def _run(self) -> None:
         lines = []
+        covered = set()
         for source in example_sources(self.examples_folder):
             if self._cancelled.is_set():
                 return
+            if source.name in covered:
+                continue
             try:
+                plan = run_trial_import(self.plugin_folder, source, default_output_path(source),
+                                        timeout=self.timeout, cancelled=self._cancelled, plan_only=True)
+                covered.update(plan["inputs"])
+                covered.update(plan.get("dependencies", ()))
                 summary = run_trial_import(self.plugin_folder, source, default_output_path(source),
                                            timeout=self.timeout, cancelled=self._cancelled)
             except InterruptedError:
@@ -57,7 +64,7 @@ class PluginExamplesJob(QObject):
                 lines.append(f"{source.name}: not imported: {error}")
                 continue
             series = summary_text(summary)
-            lines.append(f"{source.name} → {default_output_path(source).name}" + (f"\n{series}" if series else ""))
+            lines.append(f"{source.name} → {Path(summary['output']).name}" + (f"\n{series}" if series else ""))
         if self._detached.is_set():
             return
         try:

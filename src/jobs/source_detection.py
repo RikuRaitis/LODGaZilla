@@ -3,12 +3,13 @@
 Runs in the Navigator's background snapshot job. Recorded rows come from the folder's
 ``_info.json`` (``FolderInfoData.sources``); files without a record are matched to an
 H5 file LODGaZilla wrote from them, or else offered to the enabled importer plugins'
-``can_parse()``. Export operations with ``inputs`` patterns get a row when a file
+``can_parse()``; a file none of them reads is listed too, as unsupported. Export operations with ``inputs`` patterns get a row when a file
 matches them; without patterns, when the folder has H5 files.
 """
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
 import threading
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from src.data.folder_info import (
     is_info_file,
 )
 from src.data.media import AUDIO_SUFFIX
+from src.data.import_sets import ImportSet, describe_import_set
 from src.jobs.cache_files import is_cache_output
 
 # A source this much newer than its output makes the output outdated; file systems
@@ -31,10 +33,14 @@ from src.jobs.cache_files import is_cache_output
 OUTDATED_TOLERANCE_NS = 2_000_000_000
 CACHE_TOOL_NAME = "universal import and plotting tool"  # src.jobs.import_data.CACHE_TOOL_NAME
 
+STATE_INCOMPLETE = "incomplete"  # a grouped import has missing or ambiguous inputs
 STATE_NEW = "new"            # can be imported or exported; not done yet
 STATE_CURRENT = "current"    # done, and the output is newer than its source
 STATE_OUTDATED = "outdated"  # done, but a source changed after the output was written
 STATE_MISSING = "missing"    # recorded, but the output file is gone
+STATE_UNSUPPORTED = "unsupported"  # a data file no enabled importer reads
+# The Plugin column of a file no enabled importer reads.
+NO_COMPATIBLE_PLUGIN = "No compatible plugin"
 
 _log = logging.getLogger(__name__)
 
@@ -65,13 +71,17 @@ class SourceRow:
     plugin_id: str
     state: str
     operation: str = ""
-    inputs: tuple[str, ...] = ()  # an export's source files, as names in the folder
+    inputs: tuple[str, ...] = ()  # grouped import members or export inputs, as same-folder names
     draft: str = ""            # a Magic drop's parser folder
     recorded: bool = False     # whether _info.json has it
+    set_key: str = ""
+    dependencies: tuple[str, ...] = ()
+    problem: str = ""
+    member: str = ""           # a non-actionable child identifying an input file
 
     @property
     def key(self) -> tuple[str, str, str, str]:
-        return self.kind, self.plugin_id, self.source.casefold(), self.output.casefold()
+        return self.kind, self.plugin_id, (self.set_key or self.source).casefold(), self.output.casefold()
 
 
 def folder_files(folder: Path) -> dict[str, int]:
@@ -114,6 +124,7 @@ def folder_source_rows(
     h5_origin: Callable[[Path], dict[str, str]],
     plugin_titles: Callable[[str, str], tuple[str, str]] = lambda config_file, config_name: ("", config_name),
     exports: Iterable[ExportSpec] = (),
+    import_sets: Iterable[tuple[str, str, ImportSet]] = (),
 ) -> list[SourceRow]:
     """The Source data rows of one folder.
 
@@ -146,10 +157,61 @@ def folder_source_rows(
                         excluded.add(linked.name.casefold())
     excluded.update(entry.get("output", "").casefold() for entry in recorded if entry.get("kind") == SOURCE_EXPORT)
 
-    # Recorded imports.
-    imported_sources: set[str] = set()
+    # Grouped imports take ownership of their members, including legacy single-file
+    # records. Recorded/H5 descriptions keep the group visible when its plugin is off.
+    groups: dict[tuple[str, str], tuple[str, ImportSet, bool, bool]] = {}
     for entry in recorded:
-        if entry.get("kind") != SOURCE_IMPORT:
+        if entry.get("kind") != SOURCE_IMPORT or not entry.get("set_key"):
+            continue
+        try:
+            group = ImportSet(entry["set_key"], entry["source"],
+                              tuple(entry.get("inputs", "").split("|")), entry["output"],
+                              tuple(filter(None, entry.get("dependencies", "").split("|"))))
+        except (KeyError, ValueError):
+            continue
+        groups[(entry.get("plugin_id", ""), group.key)] = (entry.get("plugin", ""), group, True, True)
+    for h5_name in h5_names:
+        origin = h5_origin(folder / h5_name)
+        if origin.get("tool") != CACHE_TOOL_NAME or not origin.get("import_set_key"):
+            continue
+        try:
+            group = ImportSet(origin["import_set_key"], origin["import_set_title"],
+                              tuple(json.loads(origin["source_files_json"])), h5_name,
+                              tuple(json.loads(origin.get("source_dependencies_json", "[]"))))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if any(old_group.output == h5_name and old_group.key == group.key
+               for _, old_group, _, _ in groups.values()):
+            continue
+        plugin_id, title = plugin_titles(origin.get("config_file", ""), origin.get("config_name", ""))
+        groups.setdefault((plugin_id, group.key), (title, group, False, True))
+    for plugin_id, title, group in import_sets:
+        old = groups.get((plugin_id, group.key))
+        groups[(plugin_id, group.key)] = (title, group, bool(old and old[2]), bool(old and old[3]))
+    output_owners: dict[str, list[tuple[str, str]]] = {}
+    for identity, (_, group, _, _) in groups.items():
+        output_owners.setdefault(group.output.casefold(), []).append(identity)
+    imported_sources: set[str] = set()
+    for (plugin_id, key), (title, group, was_recorded, was_imported) in groups.items():
+        missing = [name for name in (*group.inputs, *group.dependencies) if mtime(name) is None]
+        problem = group.problem or ("Missing: " + ", ".join(missing) if missing else "")
+        if len(output_owners[group.output.casefold()]) > 1:
+            problem = "Multiple import sets produce " + group.output
+        state = (STATE_INCOMPLETE if problem else
+                 STATE_NEW if not was_imported and mtime(group.output) is None else
+                 _state(mtime(group.output), [mtime(name) for name in (*group.inputs, *group.dependencies)]))
+        rows.append(SourceRow(SOURCE_IMPORT, group.title, group.output, title, plugin_id, state,
+                              inputs=group.inputs, recorded=was_recorded, set_key=key,
+                              dependencies=group.dependencies, problem=problem,
+                              draft=next((entry.get("draft", "") for entry in recorded
+                                          if entry.get("set_key") == key and entry.get("output") == group.output), "")))
+        imported_sources.update(name.casefold() for name in group.inputs)
+
+    # Recorded single-file imports.
+
+    for entry in recorded:
+        if (entry.get("kind") != SOURCE_IMPORT or entry.get("set_key")
+                or entry.get("source", "").casefold() in imported_sources):
             continue
         source, output = entry.get("source", ""), entry.get("output", "")
         imported_sources.add(source.casefold())
@@ -178,6 +240,8 @@ def folder_source_rows(
         importer = detect_importer(path)
         if importer is not None:
             rows.append(SourceRow(SOURCE_IMPORT, name, "", importer[1], importer[0], STATE_NEW))
+        else:
+            rows.append(SourceRow(SOURCE_IMPORT, name, "", NO_COMPATIBLE_PLUGIN, "", STATE_UNSUPPORTED))
 
     # Exports: recorded ones, and a new row for each enabled export with input files no record covers.
     exported_inputs: dict[tuple[str, str], set[str]] = {}
@@ -245,6 +309,32 @@ class ImporterDetector:
             self._configurations = []
         self._identities = {str(configuration.path): importer_plugin_identity(configuration.path)
                             for configuration in self._configurations}
+
+    def sets_for(self, folder: Path, enabled: tuple[str, ...]) -> list[tuple[str, str, ImportSet]]:
+        """Describe sets in the snapshot worker; sibling changes are never cached."""
+        with self._lock:
+            self._load(enabled)
+            configurations = list(self._configurations)
+            identities = dict(self._identities)
+        if not configurations:
+            return []
+        from src.jobs.import_data import select_importer
+        found = {}
+        for name in sorted(folder_files(folder)):
+            path = folder / name
+            if is_cache_output(path) or is_info_file(path):
+                continue
+            try:
+                config, parser = select_importer(path, configurations)
+                group = describe_import_set(parser, path)
+                if group is not None:
+                    plugin_id, title = identities[str(config.path)]
+                    found[(plugin_id, group.key)] = (plugin_id, title, group)
+            except (OSError, ValueError):
+                continue
+            except Exception as error:  # A broken optional description must not stop scanning.
+                _log.warning("Could not describe import set for %s: %s", path, error)
+        return list(found.values())
 
     def importer_for(self, path: Path, enabled: tuple[str, ...]) -> tuple[str, str] | None:
         """The (plugin ID, title) of the importer that reads ``path``, or None."""

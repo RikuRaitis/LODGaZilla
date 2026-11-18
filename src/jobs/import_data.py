@@ -21,6 +21,7 @@ from typing import Any, Callable, Iterable
 
 import numpy as np
 
+from src.data.import_sets import ImportSet, describe_import_set
 from src.data.time_units import seconds_per_time_unit
 
 from src.app.settings import PLUGINS_SECTION, load_hdf5_settings, load_settings_section
@@ -212,7 +213,7 @@ def default_output_path(input_path: Path) -> Path:
     return input_path.with_suffix(".h5")
 
 
-def ensure_replaceable_cache(output_path: Path, input_path: Path) -> None:
+def ensure_replaceable_cache(output_path: Path, input_path: Path, import_set: ImportSet | None = None) -> None:
     """Refuse to replace an existing H5 unless it is this tool's cache of ``input_path``.
 
     Folders can hold original H5 files from other tools next to sources with
@@ -227,12 +228,16 @@ def ensure_replaceable_cache(output_path: Path, input_path: Path) -> None:
         with h5py.File(output_path, "r") as h5_file:
             tool = _attribute_text(h5_file.attrs.get("tool"))
             source = _attribute_text(h5_file.attrs.get("source_file"))
+            set_key = _attribute_text(h5_file.attrs.get("import_set_key"))
+            members = _attribute_text(h5_file.attrs.get("source_files_json"))
     except Exception as error:  # noqa: BLE001 - any unreadable target is not ours to replace.
         raise FileExistsError(
             f"Not replacing {output_path}: it is not a readable H5 cache ({error}). "
             f"Move or rename it to generate the cache for {input_path.name}."
         ) from error
-    if tool != CACHE_TOOL_NAME or PureWindowsPath(source).name.casefold() != input_path.name.casefold():
+    same_source = (set_key == import_set.key and members == json.dumps(list(import_set.inputs))
+                   if import_set else not set_key and PureWindowsPath(source).name.casefold() == input_path.name.casefold())
+    if tool != CACHE_TOOL_NAME or not same_source:
         raise FileExistsError(
             f"Not replacing {output_path}: it was not generated from {input_path.name} by this application. "
             f"Move or rename it to generate the cache."
@@ -276,7 +281,11 @@ def import_file(
     configurations = load_import_configurations(Path(config_dir))
     selected_config, importer_module = select_importer(input_path, configurations)
 
-    output_path = Path(output_file).resolve() if output_file else default_output_path(input_path)
+    import_set = describe_import_set(importer_module, input_path)
+    if import_set:
+        import_set.check_ready(input_path.parent)
+    output_path = (Path(output_file).resolve() if output_file else
+                   input_path.parent / import_set.output if import_set else default_output_path(input_path))
     if output_path.exists() and not overwrite:
         raise FileExistsError(
             f"Output file already exists: {output_path}. Use --force to overwrite it."
@@ -289,6 +298,7 @@ def import_file(
         selected_config=selected_config,
         import_result=result,
         replace_any=overwrite,
+        import_set=import_set,
     )
     return output_path
 
@@ -301,6 +311,7 @@ def write_hdf5_cache(
     import_result: dict[str, Any],
     progress_callback: Callable[[float], None] | None = None,
     replace_any: bool = False,
+    import_set: ImportSet | None = None,
 ) -> None:
     """Write a complete cache beside the destination, then atomically replace it.
 
@@ -309,7 +320,7 @@ def write_hdf5_cache(
     """
 
     if not replace_any:
-        ensure_replaceable_cache(output_path, input_path)
+        ensure_replaceable_cache(output_path, input_path, import_set)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{output_path.name}.",
@@ -328,10 +339,11 @@ def write_hdf5_cache(
             selected_config=selected_config,
             import_result=import_result,
             progress_callback=temporary_progress,
+            import_set=import_set,
         )
         if not replace_any:
             # The target may have appeared while the cache was being written.
-            ensure_replaceable_cache(output_path, input_path)
+            ensure_replaceable_cache(output_path, input_path, import_set)
         os.replace(temporary_path, output_path)
         if progress_callback is not None:
             progress_callback(1.0)
@@ -346,6 +358,7 @@ def _write_hdf5_cache_file(
     selected_config: ImportConfiguration,
     import_result: dict[str, Any],
     progress_callback: Callable[[float], None] | None = None,
+    import_set: ImportSet | None = None,
 ) -> None:
     """Write one plotting-oriented HDF5 file at the supplied path."""
 
@@ -393,6 +406,11 @@ def _write_hdf5_cache_file(
         h5_file.attrs["tool_version"] = APP_VERSION
         h5_file.attrs["created_utc"] = datetime.now(timezone.utc).isoformat()
         h5_file.attrs["source_file"] = str(input_path)
+        if import_set:
+            h5_file.attrs["import_set_key"] = import_set.key
+            h5_file.attrs["import_set_title"] = import_set.title
+            h5_file.attrs["source_files_json"] = json.dumps(list(import_set.inputs))
+            h5_file.attrs["source_dependencies_json"] = json.dumps(list(import_set.dependencies))
         log_start = log_start_from_source_filename(input_path)
         if log_start is not None:
             h5_file.attrs["log_start_datetime"] = log_start.isoformat()

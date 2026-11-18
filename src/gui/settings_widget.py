@@ -175,6 +175,7 @@ class SettingsEditorWidget(QWidget):
         }
         self.link_plot_time_format_checkbox = QCheckBox()
         self.show_plot_navigator_time_row_checkbox = QCheckBox()
+        self.ask_save_workspace_on_exit_checkbox = QCheckBox()
         self.internal_log_maximum_lines_spin = integer_spinbox(100, 100_000)
         self.internal_log_maximum_lines_spin.setSingleStep(1000)
         self.plot_navigator_icon_size_spin = integer_spinbox(16, 48, " px")
@@ -247,6 +248,7 @@ class SettingsEditorWidget(QWidget):
 
     def application_group(self) -> QGroupBox:
         group, layout = form_group("Application")
+        layout.addRow("Ask to save the workspace on exit", self.ask_save_workspace_on_exit_checkbox)
         layout.addRow("Internal log length (lines)", self.internal_log_maximum_lines_spin)
         layout.addRow("Background processes (max)", self.max_background_processes_spin)
         return group
@@ -597,6 +599,8 @@ class SettingsEditorWidget(QWidget):
         self.show_plot_navigator_time_row_checkbox.setChecked(
             bool(lodgazilla_settings["show_plot_navigator_time_row"])
         )
+        self.ask_save_workspace_on_exit_checkbox.setChecked(
+            bool(lodgazilla_settings["ask_save_workspace_on_exit"]))
         self.internal_log_maximum_lines_spin.setValue(
             int(lodgazilla_settings["internal_log_maximum_lines"])
         )
@@ -698,6 +702,7 @@ class SettingsEditorWidget(QWidget):
             "link_plot_time_format": self.link_plot_time_format_checkbox.isChecked(),
             "show_plot_navigator_time_row": self.show_plot_navigator_time_row_checkbox.isChecked(),
             "internal_log_maximum_lines": self.internal_log_maximum_lines_spin.value(),
+            "ask_save_workspace_on_exit": self.ask_save_workspace_on_exit_checkbox.isChecked(),
             "plot_navigator_icon_size": self.plot_navigator_icon_size_spin.value(),
             "card_drop_selector_delay_ms": self.card_drop_selector_delay_spin.value(),
             "plot_navigator_colors": {

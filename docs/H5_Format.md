@@ -23,6 +23,15 @@ described below.** A small file can work without LOD, diagnostic groups or a
 Navigator index. A complete standalone example is included in section 11.
 Extra arbitrary HDF5 datasets are not automatically recognized as data series.
 
+An importer can combine multiple same-folder sources through the optional
+`ImportSet` contract described in [Plugin API](Plugin_API.md#multiple-inputs-producing-one-h5).
+The host writes `import_set_key`, `import_set_title`, `source_files_json` and
+`source_dependencies_json` as root attributes, alongside the legacy `source_file`
+attribute identifying the member used to start the import. The JSON attributes
+are lists of relative filenames, including dependencies used for time alignment.
+These attributes let the Navigator reconstruct an expandable Source row without
+folder metadata. Series payloads and the H5 series layout are unchanged.
+
 The Navigator discovers `.h5` and `.hdf5` files in the selected folder tree.
 H5 is the data source; folder metadata and image/video attachment links are
 stored separately in `<folder-name>_info.json` (section 10).

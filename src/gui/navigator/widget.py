@@ -94,9 +94,11 @@ from src.jobs.navigator_snapshot import (
     file_signature as _file_signature,
 )
 from src.jobs.source_detection import (
+    STATE_INCOMPLETE,
     STATE_MISSING,
     STATE_NEW,
     STATE_OUTDATED,
+    STATE_UNSUPPORTED,
     SourceDetection,
     SourceRow,
 )
@@ -859,6 +861,10 @@ class DataNavigatorWidget(QWidget):
         self.current_info_index = FolderInfoIndex(set(), set(), {}, {})
         self.current_series_columns = []
         self._source_snapshot: _NavigatorSourceSnapshot | None = None
+        # On a data folder's first read, the folders read so far, shown until the read ends.
+        # Never used as the previous snapshot of a refresh.
+        self._partial_snapshot: _NavigatorSourceSnapshot | None = None
+        self._loading_progress = (0, 0)
         # What the snapshot job uses to find Source data rows; set_source_detection changes it.
         self.source_detection = SourceDetection()
         # None builds snapshots in a background job while an event loop runs
@@ -1129,8 +1135,12 @@ class DataNavigatorWidget(QWidget):
         if self.data_folder() is not None and not self._initial_load_pending:
             self.refresh_tree()
 
+    def _display_snapshot(self) -> _NavigatorSourceSnapshot | None:
+        """The snapshot the tree shows: the finished one, or a first read's folders so far."""
+        return self._source_snapshot if self._source_snapshot is not None else self._partial_snapshot
+
     def source_rows(self, folder: Path) -> list[SourceRow]:
-        snapshot = self._source_snapshot
+        snapshot = self._display_snapshot()
         return list(snapshot.source_rows.get(resolved_path(folder), [])) if snapshot is not None else []
 
     def invalidate_source_snapshot(self) -> None:
@@ -1138,13 +1148,13 @@ class DataNavigatorWidget(QWidget):
         self._source_snapshot = None
 
     def _folder_info_from_snapshot(self, folder: Path) -> FolderInfoData | None:
-        snapshot = self._source_snapshot
+        snapshot = self._display_snapshot()
         if snapshot is None:
             return None
         return snapshot.folder_infos.get(resolved_path(folder))
 
     def _h5_data_from_snapshot(self, h5_path: Path) -> H5NavigatorData:
-        snapshot = self._source_snapshot
+        snapshot = self._display_snapshot()
         if snapshot is None:
             return read_h5_navigator_data(h5_path)
         cached = snapshot.h5_data.get(resolved_path(h5_path))
@@ -1169,6 +1179,7 @@ class DataNavigatorWidget(QWidget):
     def _cancel_snapshot_job(self) -> None:
         job = self._snapshot_job
         self._snapshot_job = None
+        self._partial_snapshot = None
         self._snapshot_refresh_pending = False
         self._snapshot_rescan_pending = False
         self._info_edits_since_job_start = {}
@@ -1188,6 +1199,7 @@ class DataNavigatorWidget(QWidget):
 
     def _start_snapshot_job(self, root: Path, *, rescan: bool) -> None:
         self._info_edits_since_job_start = {}
+        self._loading_progress = (0, 0)
         self.loading_changed.emit(True)
         self._snapshot_job = NavigatorSnapshotJob(
             self,
@@ -1196,12 +1208,38 @@ class DataNavigatorWidget(QWidget):
             self._on_snapshot_job_finished,
             rescan=rescan,
             detection=self.source_detection,
+            on_progress=self._on_snapshot_progress,
+            on_partial=lambda snapshot, job_root=root: self._on_snapshot_partial(job_root, snapshot),
         )
+
+    def _on_snapshot_partial(self, root: Path, snapshot: _NavigatorSourceSnapshot) -> None:
+        """Show a first read's folders so far, keeping the Loading row above them."""
+        job = self._snapshot_job
+        if job is None or job.root != root or self._source_snapshot is not None or root != self.data_folder():
+            return
+        # A metadata edit made since the read started is newer than what it read.
+        for folder, (info, signature) in self._info_edits_since_job_start.items():
+            if folder in snapshot.info_signatures:
+                snapshot.folder_infos[folder] = info
+                snapshot.info_signatures[folder] = signature
+        self._partial_snapshot = snapshot
+        self.rebuild_tree()
+
+    def _on_snapshot_progress(self, done: int, total: int) -> None:
+        """Show how far the first read of the data folder is on its Loading row."""
+        self._loading_progress = (done, total)
+        if self.tree.topLevelItemCount() < 1:
+            return
+        item = self.tree.topLevelItem(0)
+        if item.data(0, ITEM_TYPE_ROLE) != ROW_TYPE_MESSAGE or not item.text(0).startswith(LOADING_MESSAGE):
+            return
+        self.set_item_values(item, {COLUMN_DATA: loading_progress_text(done, total)})
 
     def _on_snapshot_job_finished(self, job: NavigatorSnapshotJob, result: object) -> None:
         if job is not self._snapshot_job:
             return
         self._snapshot_job = None
+        self._partial_snapshot = None
         pending = self._snapshot_refresh_pending
         pending_rescan = self._snapshot_rescan_pending
         self._snapshot_refresh_pending = False
@@ -1330,6 +1368,9 @@ class DataNavigatorWidget(QWidget):
             self.add_message_item(f"Folder does not exist: {data_folder}")
             return
         snapshot = self._snapshot_for_root(data_folder)
+        partial = snapshot is None and self._partial_snapshot is not None and self._partial_snapshot.root == data_folder
+        if partial:
+            snapshot = self._partial_snapshot
         if snapshot is None:
             self.add_message_item(LOADING_MESSAGE)
             return
@@ -1409,6 +1450,10 @@ class DataNavigatorWidget(QWidget):
         self.tree.collapseAll()
         self.restore_tree_state(tree_state)
         self.resize_data_column_if_unsized()
+        if partial:
+            # The folders read so far are shown below the Loading row; the rest follow.
+            self.add_message_item(loading_progress_text(*self._loading_progress))
+            self.tree.insertTopLevelItem(0, self.tree.takeTopLevelItem(self.tree.topLevelItemCount() - 1))
         startup_mark("navigator tree sorting and display finalization completed")
 
     def update_group_by_options(self, info_keys: set[str]) -> None:
@@ -1695,7 +1740,7 @@ class DataNavigatorWidget(QWidget):
         dimmed = QBrush(self.tree.palette().color(QPalette.ColorRole.PlaceholderText))
         for item in self.tree_items():
             row = item.data(0, ITEM_SOURCE_ROLE)
-            if not isinstance(row, SourceRow) or row.state not in {STATE_NEW, STATE_MISSING}:
+            if not isinstance(row, SourceRow) or row.state not in {STATE_NEW, STATE_MISSING, STATE_UNSUPPORTED, STATE_INCOMPLETE}:
                 continue
             self.set_row_foreground(item, dimmed)
             font = item.font(PHYSICAL_DATA_COLUMN)
@@ -2441,8 +2486,9 @@ class DataNavigatorWidget(QWidget):
             row = item.data(0, ITEM_SOURCE_ROLE)
             if isinstance(row, SourceRow):
                 # An import keeps its row when done; an export row by its output.
-                detail = (f"import|{row.source}" if row.kind == SOURCE_IMPORT
-                          else f"export|{row.plugin_id}|{row.operation}|{row.output}")
+                detail = (f"import-set|{row.plugin_id}|{row.set_key}" if row.set_key else
+                          f"import|{row.source}" if row.kind == SOURCE_IMPORT else
+                          f"export|{row.plugin_id}|{row.operation}|{row.output}")
         return item_type, str(item.data(0, ITEM_PATH_ROLE) or ""), detail
 
     def item_identity_paths(self) -> dict[tuple[tuple[str, ...], ...], QTreeWidgetItem]:
@@ -2634,7 +2680,7 @@ class DataNavigatorWidget(QWidget):
         info_index: FolderInfoIndex,
     ) -> tuple[str, ...]:
         # Scanned folders and H5 files are known without asking the disk.
-        snapshot = self._source_snapshot
+        snapshot = self._display_snapshot()
         if snapshot is not None and source_path in snapshot.folder_infos:
             source_folder = source_path
         elif snapshot is not None and source_path in snapshot.h5_data:
@@ -2689,15 +2735,21 @@ class DataNavigatorWidget(QWidget):
 
     def make_source_item(self, folder: Path, row: SourceRow) -> QTreeWidgetItem:
         item = self.make_item({
-            COLUMN_DATA: row.source,
+            COLUMN_DATA: f"{row.source} ({len(row.inputs)} files)" if row.set_key else row.source,
             COLUMN_SOURCE_OUTPUT: source_output_text(row),
             COLUMN_SOURCE_PLUGIN: row.plugin,
         })
         item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_SOURCE)
         item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
         item.setData(0, ITEM_SOURCE_ROLE, row)
+        if row.set_key:
+            for name in (*row.inputs, *row.dependencies):
+                child = replace(row, source=name, member=name, set_key="", inputs=(), output="")
+                item.addChild(self.make_source_item(folder, child))
         if row.inputs:
             item.setToolTip(0, ", ".join(row.inputs))
+        if row.problem:
+            item.setToolTip(0, row.problem)
         self.reapply_item_values(item)
         return item
 
@@ -3079,7 +3131,7 @@ class DataNavigatorWidget(QWidget):
             return
         if item_type == ROW_TYPE_SOURCE:
             row = item.data(0, ITEM_SOURCE_ROLE)
-            if isinstance(row, SourceRow):
+            if isinstance(row, SourceRow) and not row.member:
                 self.source_activated.emit(Path(str(item.data(0, ITEM_PATH_ROLE))), row)
             return
         if item_type == ROW_TYPE_GROUP:
@@ -3262,9 +3314,22 @@ class DataNavigatorWidget(QWidget):
         self.refresh_tree()
 
 
+def loading_progress_text(done: int, total: int) -> str:
+    """The Loading row while the data folder is read: what is known so far."""
+    if total <= 0:
+        return f"{LOADING_MESSAGE} finding folders"
+    return f"{LOADING_MESSAGE} {done} / {total} folders read ({done * 100 // total} %)"
+
+
 def source_output_text(row: SourceRow) -> str:
     """The Output column of a Source data row."""
-    if row.state == STATE_NEW:
+    if row.member:
+        return "Reference" if row.member in row.dependencies else "Input"
+    if row.state == STATE_INCOMPLETE:
+        return "Incomplete - " + row.problem
+    if row.state == STATE_NEW and row.set_key:
+        return f"{row.output} (not imported)"
+    if row.state in {STATE_NEW, STATE_UNSUPPORTED}:
         return "Not imported" if row.kind == SOURCE_IMPORT else "Not exported"
     if row.state == STATE_OUTDATED:
         return f"{row.output} (outdated)"

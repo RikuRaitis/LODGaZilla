@@ -1,4 +1,4 @@
-"""The Plot navigator's Legends button and each card's Card controls button."""
+"""The Plot navigator's Legends button and each card's Legend and Card controls buttons."""
 import os
 import unittest
 
@@ -51,19 +51,64 @@ class CardVisibilityTests(_QtTestCase):
         workspace.set_legends_shown(True)
         self.assertFalse(card.legend.isVisible())
 
+    def test_each_card_shows_or_hides_its_own_legend(self):
+        workspace = self.workspace()
+        states = []
+        workspace.legends_state_changed.connect(states.append)
+        path = self.make_cache()
+        card = workspace.add_multi_plot([(path, "a"), (path, "b")])
+        other = workspace.add_multi_plot([(path, "a"), (path, "b")])
+        self.app.processEvents()
+        self.assertTrue(card.legend_button.isChecked() and card.legend.isVisible())
+        # The card's button hides only its own legend; the Legends button then reads off.
+        card.legend_button.click()
+        self.assertFalse(card.legend.isVisible() or card.legend_button.isChecked())
+        self.assertEqual(card.legend_button.toolTip(), "Show legend")
+        self.assertTrue(other.legend.isVisible())
+        self.assertEqual(states, [False])
+        self.assertTrue(legends_shown())
+        # It is saved with the card and restored.
+        self.assertFalse(card.workspace_state()["legend_shown"])
+        other.restore_workspace_state({"legend_shown": False})
+        self.assertFalse(other.legend.isVisible())
+        card.legend_button.click()
+        other.legend_button.click()
+        self.assertEqual(states[-1], True)
+        # The Legends button shows or hides every card's legend at once, and new cards follow it.
+        card.legend_button.click()
+        workspace.set_legends_shown(True)
+        self.assertTrue(card.legend.isVisible() and other.legend.isVisible() and card.legend_button.isChecked())
+        workspace.set_legends_shown(False)
+        self.assertFalse(card.legend.isVisible() or other.legend.isVisible())
+        later = workspace.add_multi_plot([(path, "a")])
+        self.app.processEvents()
+        self.assertFalse(later.legend_shown)
+        # A card without a legend has no Legend button.
+        image = self.directory / "image.png"
+        from PySide6.QtGui import QColor, QImage
+        picture = QImage(20, 10, QImage.Format.Format_ARGB32)
+        picture.fill(QColor("red"))
+        picture.save(str(image))
+        image_card = workspace.add_image_plot(self.directory, image)
+        self.app.processEvents()
+        self.assertFalse(image_card.legend_button.isVisible())
+        self.assertNotIn("legend_shown", image_card.workspace_state())
+
     def test_each_card_opens_its_own_controls_and_closes_them_when_inactive(self):
         workspace = self.workspace()
         path = self.make_cache()
         card = workspace.add_line_plot(path, "a")
         other = workspace.add_line_plot(path, "b")
         self.app.processEvents()
-        # Only Close and the Card controls button show by default; Help is a card control.
+        # Only Close, Legend and the Card controls button show by default; Help is a card control.
         for plot in (card, other):
-            self.assertTrue(plot.close_button.isVisible() and plot.controls_button.isVisible())
+            self.assertTrue(all(button.isVisible()
+                                for button in (plot.close_button, plot.legend_button, plot.controls_button)))
             self.assertFalse(any(control.isVisible() for control in (plot.help_button, plot.offset_button)))
             self.assertTrue(plot.drag_handle.isVisible())
-        # Close is the rightmost button, with the Card controls button beside it.
-        self.assertEqual(card.controls_button.geometry().right() + 2, card.close_button.x() - 1)
+        # Close is the rightmost button, then the Legend and Card controls buttons.
+        self.assertEqual(card.legend_button.geometry().right() + 2, card.close_button.x() - 1)
+        self.assertEqual(card.controls_button.geometry().right() + 2, card.legend_button.x() - 1)
         # Its click makes the card active and shows its controls, Help included.
         card.controls_button.click()
         self.assertIs(workspace.active_plot, card)

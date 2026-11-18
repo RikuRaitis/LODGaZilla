@@ -8,9 +8,27 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Added
 
+- **Copy folder location** in a folder's right-click menu puts its full path on the clipboard.
+- 3D plot: click an axis line to select it; Ctrl+wheel then stretches that axis (with none
+  selected, it zooms the camera). **Equal scale** in the card's
+  controls draws one metre the same length on every axis, measuring latitude and
+  longitude in metres, so a GNSS track shows its true shape; **Fit** fills the box again.
+- Map and 3D Map cards show a scale bar at the bottom right, a distance at the current
+  zoom. **Scale bar** in the card's controls hides it; it is saved in workspaces.
+- Each card with a legend has its own **Legend** button, between the card controls
+  button and Close, to show or hide that card's legend; it is saved in workspaces. The
+  Plot navigator's Legends button still shows or hides every card's legend at once.
+- While the Navigator first reads a data folder, its Loading row shows the progress:
+  "Loading folder… 120 / 450 folders read (26 %)", after "finding folders". The folders
+  already read appear below it, about once a second, while the rest are read.
+- Importers can combine multiple files into one H5 through the optional
+  `ImportSet` contract. Source rows expand to show their inputs and references;
+  grouped jobs, provenance, incomplete-set checks and re-imports share the same
+  description. Existing single-file importers continue to work.
 - Each folder in the Navigator has a **Source data** group listing its imports and
   exports in three columns, Source, Output and Plugin, recorded in the folder's
-  `_info.json`. Files an enabled importer can read appear before they are imported;
+  `_info.json`. Every data file is listed, with the importer that can read it, or
+  **No compatible plugin**;
   outputs older than their source are marked outdated. Double-click a row, or right-click
   it, to import, re-import or export it.
 - Right-clicking a folder's **Media** group offers **Attach** (video, images, audio), as
@@ -18,7 +36,6 @@ All notable changes to LODGaZilla are listed here. The format follows
 - Plugins: an export operation can list the files it reads (`inputs`), receives the
   files to export from a Source data row (`source_files`) and reports what it wrote with
   `report_source_output`.
-
 - **Sign in to Bitbucket** in Settings > Plugins, shown when a Bitbucket workspace is a
   plugin source: one sign-in through Git Credential Manager, after which the check finds
   the workspace's private plugins.
@@ -28,11 +45,19 @@ All notable changes to LODGaZilla are listed here. The format follows
   until the pointer moves. The delay is **Series name delay** in Settings > Plot.
 - The values box details start with the series' whole name.
 - The Frequency card names its series in a legend, like other cards.
-- 3D plot: an axes dropdown draws the axes through 0, 0, 0 (the new default) or along
+- 3D plot: two axes buttons draw the axes through 0, 0, 0 (the new default) or along
   the corner of the data, as before.
 
 ### Changed
 
+- The Settings button moved from the Plot navigator to the end of the workspace buttons,
+  after Save workspace as.
+- Closing LODGaZilla no longer asks to save the open cards unless **Ask to save the
+  workspace on exit** is on in Settings, General (off by default).
+- Map cards show the map data's credit small at the top right, under Close: the 3D Map
+  its "i", the Map "© OpenStreetMap" (or "Esri") instead of "Leaflet".
+- The Navigator's Refresh, Sample loss, Clipping and Hide irrelevant series buttons
+  moved to the right end of the workspace buttons' row.
 - Imports and exports start only from Source data rows. Double-clicking a folder only
   expands it, the Folder menu no longer has the **Plugin: Generate / update H5 files**
   and export entries, and the plugin menu for years, months and several folders is gone.
@@ -50,6 +75,10 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Fixed
 
+- 3D Map: a track below the terrain shows again as soon as the map opacity is below
+  100%; the faded map was drawn over it until 0%.
+- The 3D Map no longer fills the Internal log with "js: Expected value to be of type
+  number, but found null instead": a harmless warning from the downloaded map style.
 - A very long log message no longer widens the main window. The collapsed Internal log
   panel shows as much of the latest message as fits, ending in `…`; its tooltip and the
   expanded log show all of it.

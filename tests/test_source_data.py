@@ -21,7 +21,8 @@ from src.jobs.import_batch import discover_import_jobs, run_reimport_batch  # no
 from src.jobs.import_data import CACHE_TOOL_NAME  # noqa: E402
 from src.jobs.navigator_snapshot import build_navigator_snapshot  # noqa: E402
 from src.jobs.source_detection import (  # noqa: E402
-    STATE_CURRENT, STATE_MISSING, STATE_NEW, STATE_OUTDATED, ExportSpec, ImporterDetector, SourceDetection,
+    NO_COMPATIBLE_PLUGIN, STATE_CURRENT, STATE_MISSING, STATE_NEW, STATE_OUTDATED, STATE_UNSUPPORTED, ExportSpec,
+    ImporterDetector, SourceDetection,
     folder_files, folder_source_rows,
 )
 from src.plugins.catalog import parse_operations, validate_manifest  # noqa: E402
@@ -45,6 +46,10 @@ def rows_for(folder: Path, *, detect=None, origins=None, exports=()):
         plugin_titles=lambda config_file, config_name: ("sample", "Sample plugin"),
         exports=exports,
     )
+
+
+def export_rows(folder: Path, *, exports):
+    return [row for row in rows_for(folder, exports=exports) if row.kind == SOURCE_EXPORT]
 
 
 class SourceRecordTests(unittest.TestCase):
@@ -113,8 +118,10 @@ class SourceRowTests(unittest.TestCase):
                                   "config_file": "x/importer.json"}}
             rows = rows_for(folder, origins=origins,
                             detect=lambda path: ("sample", "Sample plugin") if path.suffix == ".csv" else None)
+            # A file no enabled importer reads is listed too.
             self.assertEqual([(row.source, row.output, row.plugin, row.state, row.recorded) for row in rows], [
                 ("new.csv", "", "Sample plugin", STATE_NEW, False),
+                ("notes.txt", "", NO_COMPATIBLE_PLUGIN, STATE_UNSUPPORTED, False),
                 ("old.csv", "old.h5", "Sample plugin", STATE_CURRENT, False),
             ])
 
@@ -148,22 +155,22 @@ class SourceRowTests(unittest.TestCase):
             touch(folder / "log_2.bin", age=100)
             touch(folder / "1.csv", age=50)
             spec = ExportSpec("x", "Sample CSV Export", "Sample CSV export", ("*.bin",))
-            rows = rows_for(folder, exports=[spec])
+            rows = export_rows(folder, exports=[spec])
             self.assertEqual([(row.source, row.output, row.state, row.inputs) for row in rows],
                              [(EXPORT_SOURCE_NAME, "", STATE_NEW, ("log_1.bin", "log_2.bin"))])
             record_sources(folder, [source_entry(SOURCE_EXPORT, source=EXPORT_SOURCE_NAME, output="1.csv",
                                                  plugin="Sample CSV Export", plugin_id="x", operation="Sample CSV export",
                                                  inputs=["log_1.bin"])])
-            rows = rows_for(folder, exports=[spec])
+            rows = export_rows(folder, exports=[spec])
             self.assertEqual([(row.output, row.state, row.inputs) for row in rows], [
                 ("1.csv", STATE_OUTDATED, ("log_1.bin",)),
                 ("", STATE_NEW, ("log_2.bin",)),
             ])
             # Without input patterns, an export reads the folder's H5 files.
             plain = ExportSpec("y", "Other", "Export")
-            self.assertEqual(rows_for(folder, exports=[plain])[-1].plugin, "Sample CSV Export")
+            self.assertEqual(export_rows(folder, exports=[plain])[-1].plugin, "Sample CSV Export")
             touch(folder / "data.h5")
-            self.assertEqual([(row.plugin, row.state) for row in rows_for(folder, exports=[plain])][-1],
+            self.assertEqual([(row.plugin, row.state) for row in export_rows(folder, exports=[plain])][-1],
                              ("Other", STATE_NEW))
 
 
@@ -178,13 +185,15 @@ class DetectionTests(unittest.TestCase):
             with mock.patch("src.jobs.import_data.DEFAULT_CONFIG_DIR", plugins), \
                     mock.patch.object(source_detection, "IMPORTER_DETECTOR", ImporterDetector()):
                 without = build_navigator_snapshot(root, None, rescan=True)
-                self.assertEqual(without.snapshot.source_rows[run.resolve()], [])
+                self.assertEqual([(row.source, row.state) for row in without.snapshot.source_rows[run.resolve()]],
+                                 [("log.csv", STATE_UNSUPPORTED), ("readme.txt", STATE_UNSUPPORTED)])
                 detection = SourceDetection(("sample",))
                 result = build_navigator_snapshot(root, without.snapshot, rescan=False, detection=detection)
             self.assertTrue(result.changed)
             rows = result.snapshot.source_rows[run.resolve()]
             self.assertEqual([(row.source, row.plugin, row.plugin_id, row.state) for row in rows],
-                             [("log.csv", "Sample plugin", "sample", STATE_NEW)])
+                             [("log.csv", "Sample plugin", "sample", STATE_NEW),
+                              ("readme.txt", NO_COMPATIBLE_PLUGIN, "", STATE_UNSUPPORTED)])
 
     def test_a_source_row_imports_one_file_and_records_it(self):
         with sample_importer(), tempfile.TemporaryDirectory() as directory:
@@ -308,6 +317,12 @@ class WindowSourceActionTests(unittest.TestCase):
             request = window.start_import.call_args.args[0]
             self.assertEqual((request.folder, request.sources, request.importer_id),
                              (folder.resolve(), ("log.csv",), "sample"))
+            # A file no importer reads starts nothing, and says why.
+            window = self.window()
+            LODGaZillaWindow.run_source(window, folder, SourceRow(SOURCE_IMPORT, "log.csv", "", NO_COMPATIBLE_PLUGIN,
+                                                                  "", STATE_UNSUPPORTED))
+            window.start_import.assert_not_called()
+            self.assertIn("no enabled importer plugin reads it", window.internal_logger.warning.call_args.args[0])
             # A disabled importer is named instead.
             window = self.window(importers=())
             LODGaZillaWindow.run_source(window, folder, row)

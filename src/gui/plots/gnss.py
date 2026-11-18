@@ -12,9 +12,10 @@ from PySide6.QtCore import QEvent, QObject, Qt, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
-    QButtonGroup, QHBoxLayout, QLabel, QRadioButton, QStackedLayout, QWidget,
+    QButtonGroup, QCheckBox, QHBoxLayout, QLabel, QRadioButton, QStackedLayout, QWidget,
 )
 
+from src.data.axis_scale import coordinate_scale, declared_coordinate_scale, is_latitude_name, is_longitude_name
 from src.gui.plots.base import PlotBaseWidget, series_from_mime
 from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.legend import PlotLegendWidget
@@ -335,13 +336,27 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.satellite_radio.toggled.connect(lambda checked: checked and self._set_map_type("Satellite"))
         type_layout.addWidget(self.street_radio)
         type_layout.addWidget(self.satellite_radio)
-        self.map_type.setStyleSheet(palette_overlay_stylesheet())
-        self.map_type.adjustSize()
-        self.header_controls.append(self.map_type)
+        # A metric scale bar at the map's bottom right, for the current zoom; in its own panel,
+        # like Street/Satellite.
+        self.scale_bar_panel = QWidget(self)
+        scale_layout = QHBoxLayout(self.scale_bar_panel)
+        scale_layout.setContentsMargins(5, 0, 5, 0)
+        self.scale_bar_check = QCheckBox("Scale bar", self.scale_bar_panel)
+        self.scale_bar_check.setChecked(True)
+        self.scale_bar_check.setToolTip("Scale bar")
+        self.scale_bar_check.toggled.connect(self._set_scale_bar)
+        scale_layout.addWidget(self.scale_bar_check)
+        # Both panels are as tall as the card's other header controls (the Draw style buttons
+        # and the Sample limit selector).
+        for panel in (self.map_type, self.scale_bar_panel):
+            panel.setStyleSheet(palette_overlay_stylesheet())
+            panel.setFixedHeight(self.close_button.height() - 2)
+            panel.adjustSize()
+            self.header_controls.append(panel)
         # Keep the legend a sibling of the WebEngine view.  A child overlay of
         # QWebEngineView can be drawn above Chromium while still letting its
         # mouse events fall through to the web page.
-        self.legend = PlotLegendWidget(self.map_container)
+        self.legend = PlotLegendWidget(self.map_container, top_offset=MAP_LEGEND_TOP)
         self.legend.set_group_model(self.grouped_series)
         # Values boxes are siblings of the web view, like the legend, so they draw above it.
         self.value_boxes = ValueBoxLayer(self.map_container)
@@ -401,6 +416,7 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         """Refresh Qt overlays and WebEngine's initial page background."""
         apply_map_background(self)
         self.map_type.setStyleSheet(palette_overlay_stylesheet())
+        self.scale_bar_panel.setStyleSheet(palette_overlay_stylesheet())
         self.value_boxes.apply_style()
 
     def on_series_changed(self) -> None:
@@ -463,11 +479,14 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
 
     def workspace_state(self) -> dict:
         return {**super().workspace_state(), "map_type": "Satellite" if self.satellite_radio.isChecked() else "Street",
-                "map_view": self._pending_map_view or self._map_view_state}
+                "map_view": self._pending_map_view or self._map_view_state,
+                "scale_bar": self.scale_bar_check.isChecked()}
 
     def restore_workspace_state(self, state: dict) -> None:
         if state.get("map_type") == "Satellite":
             self.satellite_radio.setChecked(True)
+        if isinstance(state.get("scale_bar"), bool):
+            self.scale_bar_check.setChecked(state["scale_bar"])
         view = state.get("map_view")
         if isinstance(view, dict) and "center" in view and "zoom" in view:
             self._pending_map_view = {"center": [float(value) for value in view["center"]], "zoom": float(view["zoom"])}
@@ -548,11 +567,16 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
             self.legend.reposition()
             if self.satellite_radio.isChecked():
                 self._set_map_type("Satellite")
+            self._set_scale_bar(self.scale_bar_check.isChecked())
             self._flush_marker()
             self._refresh_value_box_positions()
         else:
             self._map_failed = True
             self.map_loading.setText("Could not initialize map. Check the map library connection.")
+
+    def _set_scale_bar(self, shown: bool) -> None:
+        if self.map_view is not None and self._map_ready:
+            self.map_view.page().runJavaScript(f"setScaleBar({str(bool(shown)).lower()});")
 
     def _set_map_type(self, name: str) -> None:
         if self.map_view is not None and self._map_ready:
@@ -711,43 +735,20 @@ def _series_coordinate_scale(h5_file, group, name: str, maximum_degrees: float) 
 
 
 def _declared_coordinate_scale(*, unit="", name="", source="") -> float | None:
-    """The scale a series' unit, name or source states; None when only its values can tell."""
-    unit = unit.strip().casefold()
-    leaf = name.rsplit("/", 1)[-1].casefold()
-    if unit in {"deg", "degree", "degrees", "°"}:
-        return 1.0
-    if unit in {"rad", "radian", "radians"} or (not unit and leaf.endswith("_rad")):
-        return np.pi / 180.0
-    if unit in {"raw", "e7", "deg*1e7", "degrees_e7"} or (not unit and source == "aux.gps"):
-        return 10_000_000.0
-    if unit in {"deg*10", "degrees_x10"}:
-        return 10.0
-    if not unit and leaf.endswith("_deg"):
-        return 1.0
-    return None
+    """The scale a series' unit, name or source states (shared, src/data/axis_scale.py)."""
+    return declared_coordinate_scale(unit=unit, name=name, source=source)
 
 
 def _coordinate_scale(values: np.ndarray, maximum_degrees: float, *, unit="", name="", source="") -> float:
     """Return the one divisor that converts a whole coordinate series to degrees.
 
-    Explicit units take precedence over all magnitude heuristics. Legacy
-    legacy 'raw' coordinates are E7, including samples arbitrarily close to
-    zero. Partly scaled caches can declare 'deg*10'. Only unlabelled legacy
-    series fall back to a single scale chosen from the complete series.
+    Explicit units take precedence over all magnitude heuristics; only unlabelled legacy
+    series fall back to a scale chosen from the complete series (src/data/axis_scale.py).
     """
-    declared = _declared_coordinate_scale(unit=unit, name=name, source=source)
-    if declared is not None:
-        return declared
     finite = np.abs(np.asarray(values, dtype=float))
     finite = finite[np.isfinite(finite)]
-    if not len(finite):
-        return 1.0
-    largest = float(finite.max())
-    if largest <= maximum_degrees:
-        return 1.0
-    if largest <= maximum_degrees * 10:
-        return 10.0
-    return 10_000_000.0
+    largest = float(finite.max()) if len(finite) else 0.0
+    return coordinate_scale(largest, maximum_degrees, unit=unit, name=name, source=source)
 
 
 def _normalise_coordinate(values: np.ndarray, maximum_degrees: float) -> np.ndarray:
@@ -760,12 +761,9 @@ def _same_group(first: str, second: str) -> bool:
     return first.rsplit("/", 1)[0].casefold() == second.rsplit("/", 1)[0].casefold()
 
 
-def _is_latitude(name: str) -> bool:
-    return "latitude" in name.casefold() or name.casefold().endswith("/lat")
-
-
-def _is_longitude(name: str) -> bool:
-    return "longitude" in name.casefold() or name.casefold().endswith("/lon")
+# Shared with the 3D plot's Equal scale (src/data/axis_scale.py).
+_is_latitude = is_latitude_name
+_is_longitude = is_longitude_name
 
 
 def script_json(value) -> str:
@@ -773,11 +771,18 @@ def script_json(value) -> str:
     return json.dumps(value).replace("<", "\\u003c")
 
 
+# The map data's credit sits at the map's top right, just under the card's Close button row
+# (the map starts 3 px below the card's top); the legend goes below the credit.
+MAP_CREDIT_TOP = 28
+MAP_LEGEND_TOP = MAP_CREDIT_TOP + 18
+
+
 def map_html(*, background: str = "#000000") -> str:
     """Return the empty map page; tracks are pushed with ``setTracks`` once ready."""
     return f'''<!doctype html>
 <html><head><meta charset="utf-8">
-<style>html,body,#map{{height:100%;margin:0;background:{background}}}</style>
+<style>html,body,#map{{height:100%;margin:0;background:{background}}}
+.leaflet-top.leaflet-right{{top:{MAP_CREDIT_TOP}px}}.leaflet-top.leaflet-right .leaflet-control{{margin-top:0}}</style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -787,8 +792,15 @@ let bridge=null;
 // A view from a workspace file, shown instead of fitting the first tracks.
 let restoreView=null;
 let map=L.map('map',{{zoomControl:false,scrollWheelZoom:false,doubleClickZoom:false}});
-let street=L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19}}).addTo(map);
-let satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{maxZoom:19}});
+// The map data's required credit, small at the top right under the card's Close button,
+// without Leaflet's own name.
+map.attributionControl.setPrefix(false);
+map.attributionControl.setPosition('topright');
+let street=L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'&copy; OpenStreetMap'}}).addTo(map);
+// A metric scale bar at the bottom right; the card's Scale bar checkbox shows or hides it.
+let scaleBar=L.control.scale({{position:'bottomright',imperial:false}});
+function setScaleBar(shown){{if(shown)scaleBar.addTo(map);else scaleBar.remove();}}
+let satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{maxZoom:19,attribution:'Esri'}});
 let markers=[];
 let selectionLayers=[];
 let lastContextMenu=0;

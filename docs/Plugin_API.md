@@ -109,6 +109,38 @@ and file layout, shared/per-series timestamps, units, state labels, diagnostics,
 LOD, metadata and runnable examples. Use that guide as the format reference when
 developing an importer manually or with an AI agent.
 
+### Multiple inputs producing one H5
+
+An importer may implement `import_set(input_path) -> ImportSet | None`, importing
+`ImportSet` from `src.contracts.importer`. The default is `None`, preserving the
+single-file API. A description has a stable `key`, a short `title`, the tuple of
+required `inputs`, the intended `output` filename, optional `dependencies` (such
+as a clock reference), and an optional `problem` explaining an invalid set.
+All paths are filenames in the selected input's folder. Include missing members
+in the description; the Navigator shows the set as incomplete. Discovery runs
+in a worker and must inspect only filenames/small headers, not measurement arrays.
+
+`can_parse()` recognizes each member. `parse()` accepts any member and returns
+the series for the entire set, using its siblings as needed. The host deduplicates
+jobs by plugin, folder and set key, rejects output collisions, and writes one H5.
+The three-column Source row expands to show its member files and dependencies;
+only the parent starts import. Changing an input or dependency makes the result
+outdated. Missing members disable import, without hiding a previous output's data.
+Different import sets must not silently claim the same output; the importer
+should report ambiguous sibling sets through `problem`, including when only one
+member was selected for import.
+
+The host stores the set key, display title, inputs and dependencies in folder
+metadata and H5 provenance. Paths remain relative so moved folders still work.
+Re-import can start through any member and only replaces a matching generated
+cache. Single-file import records and older H5 files remain supported.
+Plugin example imports and trial imports also use the description; the trial
+summary returns the actual output path and member names. Magic drop with an
+installed importer copies the required companions and dependencies together.
+
+This is an additive API 1 capability. Plugins using `ImportSet` require a host
+that exports it; older single-file plugins need no changes.
+
 ## Registered background jobs
 
 A UI plugin can declare `"operations": {"Example export": "worker.py:run"}`; the

@@ -138,7 +138,7 @@ from src.data.folder_info import (
     source_entry, video_attachment_path, write_info_file,
 )
 from src.contracts.jobs import SOURCE_FILES_PARAMETER, SOURCE_OUTPUT_EVENT
-from src.jobs.source_detection import STATE_CURRENT, STATE_OUTDATED, ExportSpec, SourceDetection
+from src.jobs.source_detection import STATE_INCOMPLETE, STATE_CURRENT, STATE_OUTDATED, STATE_UNSUPPORTED, ExportSpec, SourceDetection
 from src.data.workspace_file import (
     UMW_FILE_FILTER, UMW_SUFFIX, WorkspaceFileError, read_workspace_file, updated_recent_workspaces,
     write_workspace_file,
@@ -224,11 +224,23 @@ _H5_STAT_CACHE: dict[str, tuple[float, int, int]] = {}
 
 
 
+# Map pages' console messages that say nothing about LODGaZilla: MapLibre warns, many times a
+# second, when a feature of the downloaded map style (OpenFreeMap) lacks a number its style
+# expects; the map draws fine.
+IGNORED_JS_MESSAGES = ("Expected value to be of type number, but found null instead",)
+
+
+def is_ignored_qt_message(category: str, message: str) -> bool:
+    return category == "js" and any(message.startswith(text) for text in IGNORED_JS_MESSAGES)
+
+
 def install_qt_message_logging(internal_logger: InternalLogger) -> None:
     """Send Qt library diagnostics, including Qt Multimedia/FFmpeg, to the app log."""
 
     def handle_qt_message(message_type, context, message) -> None:  # type: ignore[no-untyped-def]
         category = getattr(context, "category", "qt") or "qt"
+        if is_ignored_qt_message(category, message):
+            return
         text = f"{category}: {message}"
         if message_type in {QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg}:
             internal_logger.warning(text)
@@ -422,6 +434,8 @@ class PlotWorkspace(QScrollArea):
 
     plot_status_changed = Signal(str)
     plot_navigator_changed = Signal(object)
+    # Whether every card with a legend now shows it, after a card's Legend button.
+    legends_state_changed = Signal(bool)
     video_offset_saved = Signal(Path)
     global_marker_changed = Signal(object)
     global_second_marker_changed = Signal(object)
@@ -654,6 +668,7 @@ class PlotWorkspace(QScrollArea):
         plot.height_resize_requested.connect(self.resize_plot)
         plot.wheel_scrolled.connect(self.scroll_workspace)
         plot.time_offset_changed.connect(self.on_time_offset_changed)
+        plot.legend_shown_changed.connect(self.on_card_legend_shown_changed)
         if isinstance(plot, TIME_CARD_TYPES):
             install_offset_x_link(plot.plot_view_box())
             # The plot area also changes without a layout change: a workspace scroll bar
@@ -1236,12 +1251,20 @@ class PlotWorkspace(QScrollArea):
         self.update_time_axis_visibility()
 
     def set_legends_shown(self, shown: bool) -> None:
-        """Show or hide the legend of every card, including cards opened later."""
+        """Show or hide the legend of every card, and of cards opened later."""
         self.legends_shown = bool(shown)
         set_legends_shown(self.legends_shown)
         for plot in self.plots():
-            for legend in plot.findChildren(PlotLegendWidget):
-                legend.apply_legends_shown()
+            plot.set_legend_shown(self.legends_shown, notify=False)
+
+    def all_legends_shown(self) -> bool:
+        """Whether every open card with a legend shows it; with none, the default for new cards."""
+        cards = [plot for plot in self.plots() if plot.card_legends()]
+        return all(plot.legend_shown for plot in cards) if cards else self.legends_shown
+
+    def on_card_legend_shown_changed(self, _plot) -> None:  # type: ignore[no-untyped-def]
+        # The Plot navigator's Legends button reads on only while every card shows its legend.
+        self.legends_state_changed.emit(self.all_legends_shown())
 
     def update_time_axis_visibility(self) -> None:
         """Show the time axis on every time card, only on the lowest one, or on none."""
@@ -2108,7 +2131,8 @@ class LODGaZillaWindow(QMainWindow):
         startup_mark("plot workspace construction completed")
         startup_mark("plot navigator construction started")
         self.plot_navigator = PlotNavigatorWidget()
-        self.plot_navigator.settings_requested.connect(self.show_settings)
+        # The File bar's Settings button, last after the workspace buttons.
+        self.navigator.controls.settings_requested.connect(lambda: self.show_settings())
         startup_mark("plot navigator construction completed")
         self.plot_workspace.plot_navigator_changed.connect(self.plot_navigator.set_entries)
         self.plot_workspace.global_marker_changed.connect(self.plot_navigator.set_marker)
@@ -2140,6 +2164,8 @@ class LODGaZillaWindow(QMainWindow):
         self.plot_navigator.marker_info_display_changed.connect(self.set_marker_info_display)
         self.plot_navigator.time_axis_display_changed.connect(self.set_time_axis_display)
         self.plot_navigator.legends_visibility_changed.connect(self.set_legends_shown)
+        # A card's own Legend button changes only the Legends button's look, not the saved default.
+        self.plot_workspace.legends_state_changed.connect(self.plot_navigator.set_legends_shown)
         self.plot_navigator.snap_to_nearest_changed.connect(self.set_snap_to_nearest)
         self.plot_navigator.marker_link_changed.connect(self.set_markers_linked)
         self.plot_navigator.plot_views_link_changed.connect(self.set_plot_views_linked)
@@ -2981,6 +3007,7 @@ class LODGaZillaWindow(QMainWindow):
         menu.addSeparator()
         self.add_attach_menu(menu, folder)
         menu.addAction("Show in file manager", lambda: self.show_folder_in_file_manager(folder))
+        menu.addAction("Copy folder location", lambda: self.copy_folder_location(folder))
         # Imports and exports are in the folder's Source data group; plugins' own folder
         # actions (add_folder_context_actions) come last, each named "Plugin: …".
         separator = menu.addSeparator()
@@ -2998,13 +3025,17 @@ class LODGaZillaWindow(QMainWindow):
             text = "Re-import" if done else "Import"
         else:
             text = "Export again" if done else "Export"
-        menu.addAction(text, lambda: self.run_source(folder, row))
-        menu.addSeparator()
+        if not row.member:
+            action = menu.addAction(text, lambda: self.activate_source(folder, row))
+            action.setEnabled(row.state not in {STATE_UNSUPPORTED, STATE_INCOMPLETE})
+            menu.addSeparator()
         menu.addAction("Show in file manager", lambda: self.show_folder_in_file_manager(folder))
         menu.exec(self.navigator.tree.viewport().mapToGlobal(position))
 
     def activate_source(self, folder: Path, row) -> None:  # type: ignore[no-untyped-def]
         """Double-click on a Source data row: import or export it; ask first when it is done."""
+        if row.member:
+            return
         if row.state in {STATE_CURRENT, STATE_OUTDATED}:
             action = "Import" if row.kind == SOURCE_IMPORT else "Export"
             what = row.source if row.kind == SOURCE_IMPORT else row.output
@@ -3018,9 +3049,20 @@ class LODGaZillaWindow(QMainWindow):
     def run_source(self, folder: Path, row) -> None:  # type: ignore[no-untyped-def]
         """Import or export one Source data row with its plugin."""
         folder = Path(folder)
+        if row.member:
+            return
+        if row.state == STATE_INCOMPLETE:
+            self.internal_logger.warning(f"Cannot import {row.source}: {row.problem}")
+            return
+        if row.state == STATE_UNSUPPORTED:
+            self.internal_logger.warning(
+                f"Cannot import {row.source}: no enabled importer plugin reads it. Enable one in "
+                "Settings > Plugins, or drop the file on Magic drop.")
+            return
         if row.kind == SOURCE_IMPORT:
-            source = folder / row.source
-            if not source.is_file():
+            source_names = row.inputs if row.set_key else (row.source,)
+            source = folder / source_names[0]
+            if not all((folder / name).is_file() for name in (*source_names, *row.dependencies)):
                 self.internal_logger.warning(f"Cannot import {row.source}: the file is missing from {folder}.")
                 return
             if row.draft:
@@ -3034,7 +3076,7 @@ class LODGaZillaWindow(QMainWindow):
             if not enabled:
                 self.internal_logger.warning("Cannot import: no importer plugin is enabled.")
                 return
-            self.start_import(ImportRequest(folder.resolve(), False, 1, (row.source,), row.plugin_id))
+            self.start_import(ImportRequest(folder.resolve(), False, 1, source_names, row.plugin_id))
             return
         if not self.plugin_manager.is_enabled(row.plugin_id):
             self.internal_logger.warning(
@@ -3381,6 +3423,11 @@ class LODGaZillaWindow(QMainWindow):
         sources = [PlotSource("series", path, name) for path, name in entries]
         populate_plot_menu(menu, self.plot_workspace, sources, group=True)
         menu.exec(self.navigator.tree.viewport().mapToGlobal(position))
+
+    def copy_folder_location(self, folder: Path) -> None:
+        """Put the folder's full path on the clipboard."""
+        QApplication.clipboard().setText(str(folder))
+        self.internal_logger.info(f"Copied folder location: {folder}")
 
     def show_folder_in_file_manager(self, folder: Path) -> None:
         if not folder.is_dir():
@@ -3992,10 +4039,14 @@ class LODGaZillaWindow(QMainWindow):
         ):
             self.plot_workspace.set_x_axes_linked(bool(enabled))
 
+    def asks_to_save_on_close(self, event) -> bool:  # type: ignore[no-untyped-def]
+        """Whether closing offers to save the cards: a close by the user (the window's close button,
+        Alt+F4) with "Ask to save the workspace on exit" on (off by default). A close from code, such
+        as tests or shutdown, never asks."""
+        return event.spontaneous() and bool(self.lodgazilla_settings["ask_save_workspace_on_exit"])
+
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        # Closing by the user (the window's close button, Alt+F4) offers to save the cards;
-        # a close from code, such as tests or shutdown, does not ask.
-        if event.spontaneous() and not self.confirm_replacing_cards():
+        if self.asks_to_save_on_close(event) and not self.confirm_replacing_cards():
             event.ignore()
             return
         # Persist settings before any teardown step that could raise.

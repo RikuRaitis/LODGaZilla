@@ -150,7 +150,7 @@ class GnssTrackTests(_TempCase):
             _map_ready=False, _map_failed=False, _map_generation=1, _marker_times={0: None, 1: None}, _sync_time=None, _value_box_times={0: None, 1: None}, value_boxes=mock.Mock(),
             _marker_revision=0, _marker_in_flight=False, _track_data=[], _loading=True,
             map_view=mock.Mock(), map_stack=mock.Mock(), map_loading=mock.Mock(), map_type=mock.Mock(),
-            legend=mock.Mock(), satellite_radio=mock.Mock(),
+            legend=mock.Mock(), satellite_radio=mock.Mock(), scale_bar_check=mock.Mock(),
             grouped_series=SimpleNamespace(groups=[SimpleNamespace(color="#123456")]),
             update_sample_coverage=mock.Mock(), map_container=mock.Mock(),
             palette=QApplication.palette, draw_style="auto",
@@ -159,13 +159,21 @@ class GnssTrackTests(_TempCase):
         card.satellite_radio.isChecked.return_value = False
         for name in ("_loaded_tracks", "_push_tracks", "_on_map_ready", "_flush_marker", "_load_map",
                      "_update_selection", "_refresh_value_box_positions", "_request_value_box_positions", "_markers_ready",
-                     "marker_values"):
+                     "marker_values", "_set_scale_bar"):
             setattr(card, name, getattr(GnssPlotWidget, name).__get__(card))
         card._loaded_tracks([{"lat": [1.0], "lon": [2.0], "time": [3.0]}])
         page.runJavaScript.assert_not_called()
         card.map_view.setHtml.assert_not_called()
         card._on_map_ready(1, True)
         scripts = [call.args[0] for call in page.runJavaScript.call_args_list]
+        # The scale bar is shown once the map is ready; the page puts it at the bottom right.
+        self.assertIn("setScaleBar(true);", scripts)
+        from src.gui.plots.gnss import map_html
+        self.assertIn("L.control.scale({position:'bottomright',imperial:false})", map_html())
+        # The map credit sits at the top right, without Leaflet's name.
+        self.assertIn("map.attributionControl.setPrefix(false);", map_html())
+        self.assertIn("map.attributionControl.setPosition('topright');", map_html())
+        self.assertIn("attribution:'&copy; OpenStreetMap'", map_html())
         # The map background is matched to the canvases before the tracks are pushed.
         self.assertIn("backgroundColor", scripts[0])
         tracks = [script for script in scripts if script.startswith("setTracks(")]
