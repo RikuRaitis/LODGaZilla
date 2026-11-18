@@ -233,7 +233,9 @@ class AppSettingsTests(unittest.TestCase):
             editor.lod_target_buckets_spin.setValue(500)
             editor.lod_bucket_growth_spin.setValue(8)
             editor.minimum_diagnostic_width_pixels_spin.setValue(9)
-            editor.multi_selected_line_width_spin.setValue(7)
+            editor.selected_series_line_width_spin.setValue(7)
+            editor.track_selection_opacity_spin.setValue(60)
+            editor.track_selection_layer_combo.setCurrentIndex(editor.track_selection_layer_combo.findData("own_trace"))
             editor.save()
 
             controls = load_navigator_control_settings(path)
@@ -252,13 +254,22 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(hdf5["lod_target_buckets"], 500)
         self.assertEqual(hdf5["lod_bucket_growth"], 8)
         self.assertEqual(plot["minimum_diagnostic_width_pixels"], 9)
-        self.assertEqual(plot["multi_selected_line_width"], 7)
+        self.assertEqual(plot["selected_series_line_width"], 7)
+        self.assertEqual(plot["track_selection_opacity_percent"], 60)
+        self.assertEqual(plot["track_selection_layer"], "own_trace")
 
     def test_plot_settings_default_to_five_pixel_diagnostic_width(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = load_plot_settings(Path(temp_dir) / "app_settings.json")
 
         self.assertEqual(settings, DEFAULT_PLOT_SETTINGS)
+
+    def test_track_selection_settings_are_validated(self):
+        from src.app.settings import sanitize_plot_settings
+        plot = sanitize_plot_settings({"track_selection_layer": "sideways", "track_selection_opacity_percent": 500,
+                                       "track_selection_color": "not a color"})
+        self.assertEqual((plot["track_selection_layer"], plot["track_selection_opacity_percent"],
+                          plot["track_selection_color"]), ("always_top", 100, "#2196f3"))
 
     def test_diagnostic_settings_migrate_legacy_switch_before_defaults_merge(self):
         with tempfile.TemporaryDirectory() as temp_dir:

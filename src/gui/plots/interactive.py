@@ -12,6 +12,7 @@ from PySide6.QtGui import QAction, QCursor
 from PySide6.QtWidgets import QApplication, QGraphicsView, QMenu
 
 from src.gui.plots.markers import (
+    markers_shown,
     FIRST_MARKER, SECOND_MARKER, SELECTION_BRUSH, sync_marker_color, marker_color, marker_width,
 )
 
@@ -238,6 +239,9 @@ class InteractivePlotWidget(pg.PlotWidget):
     time_axis_representation_changed = Signal(str)
     selection_changed = Signal(float, float)
     selection_cleared = Signal()
+    # A plain left click in the plot area, at this widget position (QPointF); it also places
+    # the first marker. Cards select the series under it.
+    plot_left_clicked = Signal(object)
 
     def __init__(self, parent=None) -> None:  # type: ignore[no-untyped-def]
         self.interactive_view_box = HorizontalPanViewBox()
@@ -379,6 +383,8 @@ class InteractivePlotWidget(pg.PlotWidget):
                 and (event.position() - self._axis_drag_start).manhattanLength() < QApplication.startDragDistance()
             )
             scene_position = self.mapToScene(event.position().toPoint())
+            if clicked and mode in ("marker", "plot_x") and event.button() == Qt.MouseButton.LeftButton:
+                self.plot_left_clicked.emit(event.position())
             if mode == "marker" and self._dragged_marker is not None:
                 index = self._dragged_marker
                 self._dragged_marker = None
@@ -414,6 +420,8 @@ class InteractivePlotWidget(pg.PlotWidget):
         self._axis_drag_start = position
 
     def _place_marker_at(self, scene_position, index: int) -> None:  # type: ignore[no-untyped-def]
+        if not markers_shown():
+            return  # The Plot navigator's Markers button hides them: no marker is placed.
         x_value = self.interactive_view_box.mapSceneToView(scene_position).x()
         if self.snap_marker_to_nearest_point and self.marker_snap_resolver is not None:
             try:

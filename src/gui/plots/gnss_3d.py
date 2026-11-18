@@ -21,11 +21,12 @@ from PySide6.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSlider, QStackedLayout, QToolButton, QWidget,
 )
 
+from src.gui.plots.series_style import SELECT_TOLERANCE_PIXELS
 from src.gui.plots.gnss import (
-    MAP_CREDIT_TOP, MAP_MAXIMUM_POINTS, GnssBridge, MapMarkersMixin, gnss_pair_for_series, load_gnss_group, script_json,
+    MAP_CREDIT_TOP, MAP_MAXIMUM_POINTS, GnssBridge, track_selection_script, MapMarkersMixin, gnss_pair_for_series, load_gnss_group, script_json,
 )
 from src.gui.plots.markers import (
-    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
+    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, track_selection_layer, track_selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxLayer
 from src.gui.plots.icons import plot_control_icon
@@ -251,7 +252,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.auto_button.setToolTip("Auto: set the offset that puts the track's lowest point on the ground")
         self.auto_button.setAccessibleName("Auto offset")
         self.center_view_button = QToolButton()
-        self.center_view_button.setToolTip("Center view: show the whole track again")
+        self.center_view_button.setToolTip("Center view: show all the data again")
         self.center_view_button.setAccessibleName("Center view")
         for button in (self.follow_ground, self.auto_button, self.center_view_button):
             button.setAutoRaise(True)
@@ -290,6 +291,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.bridge.view_changed.connect(self._refresh_value_box_positions)
         self.bridge.view_reported.connect(self._view_reported)
         self.bridge.auto_settings_reported.connect(self._auto_settings_reported)
+        self.bridge.track_clicked.connect(lambda index: self.select_series(index if index >= 0 else None))
         # Connected after the legend so the flat-altitude labels win.
         self.grouped_series.changed.connect(self._update_legend_labels)
         self._update_legend_labels()
@@ -371,14 +373,17 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
 
     def _flush_marker(self) -> None:
         times = [self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]]
-        selection = list(selection_rgba(2.0))
+        selection = list(track_selection_rgba())
         colors = [list(marker_color(index).getRgb()) for index in (FIRST_MARKER, SECOND_MARKER)]
         sync = self._sync_time
         sync_color = [int(sync_marker_color()[i:i + 2], 16) for i in (1, 3, 5)] + [255]
         self._run_map_script(f"setMarkers({json.dumps(times)}, {json.dumps(colors)}, "
-                             f"{marker_width()}, {json.dumps(selection)}, {json.dumps(sync)}, {json.dumps(sync_color)});")
+                             f"{marker_width()}, {json.dumps(selection)}, {json.dumps(track_selection_layer())}, {json.dumps(sync)}, {json.dumps(sync_color)});")
 
     def on_series_changed(self) -> None:
+        # A track removed from the card cannot stay selected.
+        if self.selected_series is not None and self.selected_series >= len(self.grouped_series.groups):
+            self.select_series(None)
         self._loading = True
         self.loader.request([group.axes for group in self.grouped_series.groups], self.time_range,
                             self.sample_limit)
@@ -508,6 +513,7 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
             self._set_track_altitude_offset(self.track_offset_input.value())
             self._set_follow_ground(self.follow_ground.isChecked())
             self._set_scale_bar(self.scale_bar_check.isChecked())
+            self.apply_series_widths()
             self._flush_marker()
             self._apply_auto_settings_once()
             self.legend.reposition()
@@ -524,6 +530,13 @@ class Gnss3DPlotWidget(MapMarkersMixin, PlotBaseWidget):
             f"trackAt({position.x()},{position.y()},{HIT_TOLERANCE_PIXELS})",
             lambda index: done(names[int(index)] if isinstance(index, (int, float)) and 0 <= index < len(names)
                                else None))
+
+    def apply_series_widths(self) -> None:
+        """Every track at the series width, the selected one wider."""
+        self._run_map_script(track_selection_script(self.selected_series))
+
+    def selected_legend_rows(self):  # type: ignore[no-untyped-def]
+        return (), self.selected_series
 
     def _set_scale_bar(self, shown: bool) -> None:
         self._run_map_script(f"setScaleBar({str(bool(shown)).lower()});")
@@ -664,6 +677,7 @@ def _three_d_map_html(*, settings: dict[str, object] | None = None, background: 
     """Return an empty MapLibre/deck.gl document; routes arrive via ``setTracks``."""
     view_settings = script_json({
         "mapOpacity": 1, "altitudeExaggeration": 1, "trackAltitudeOffset": 0, "followGround": False,
+        "selectedTrack": -1, "trackWidth": 2, "selectedTrackWidth": 5,
         "drawStyle": "auto", **(settings or {}),
     })
     return f'''<!doctype html><html><head><meta charset="utf-8">
@@ -679,7 +693,7 @@ def _three_d_map_html(*, settings: dict[str, object] | None = None, background: 
 </head><body><div id="map"></div><script>
 let tracks=[];
 let bridge=null;
-let markerState={{times:[null,null],colors:[[255,59,48,255],[0,200,83,255]],width:1,selection:[33,150,243,112]}};
+let markerState={{times:[null,null],colors:[[255,59,48,255],[0,200,83,255]],width:1,selection:[33,150,243,255],mode:'always_top'}};
 let rightPress=null,lastContextMenu=0,viewTimer=null;
 // A camera from a workspace file, shown instead of fitting the first tracks.
 let restoreView=null;
@@ -781,7 +795,9 @@ function routeLayer(){{
     id:'gnss-3d-route',data:tracks,
     getPath:d=>d.coordinates.map((p,i)=>[p[0],p[1],pointHeight(d,i)]),
     updateTriggers:{{getPath:[viewSettings.altitudeExaggeration,viewSettings.trackAltitudeOffset,
-      viewSettings.followGround,groundVersion]}},getColor:d=>d.color||[33,150,243],getWidth:5,
+      viewSettings.followGround,groundVersion],
+      getWidth:[viewSettings.selectedTrack,viewSettings.trackWidth,viewSettings.selectedTrackWidth]}},getColor:d=>d.color||[33,150,243],
+    getWidth:(_d,info)=>info.index===viewSettings.selectedTrack?viewSettings.selectedTrackWidth:viewSettings.trackWidth,
     widthUnits:'pixels',jointRounded:true,capRounded:true,pickable:true,
     // deck.gl 9 uses luma.gl depth parameters, not the legacy depthTest flag.
     parameters:{{depthCompare:useTrackOcclusion()?'less-equal':'always',depthWriteEnabled:useTrackOcclusion()}}
@@ -797,12 +813,22 @@ function nearestIndex(track,t){{
 }}
 function markerLayers(){{
   const layers=[],times=markerState.times;
-  if(times[0]!==null&&times[1]!==null){{
+  if(times[0]!==null&&times[1]!==null&&markerState.mode!=='off'){{
+    // The stretch between the markers in the selection color, at its track's width: above
+    // everything ("always_top"), or hidden where its own track is ("own_trace").
     const left=Math.min(times[0],times[1]),right=Math.max(times[0],times[1]);
-    const paths=tracks.map(track=>(track.time||[]).map((t,i)=>t>=left&&t<=right?trackPoint(track,i):null).filter(Boolean)).filter(p=>p.length>1);
-    layers.push(new deck.PathLayer({{id:'gnss-3d-selection',data:paths,getPath:d=>d,getColor:markerState.selection,
-      getWidth:11,widthUnits:'pixels',jointRounded:true,capRounded:true,
-      parameters:{{depthCompare:'always',depthWriteEnabled:false}}}}));
+    const parameters=markerState.mode==='own_trace'
+      ?{{depthCompare:useTrackOcclusion()?'less-equal':'always',depthWriteEnabled:false}}
+      :{{depthCompare:'always',depthWriteEnabled:false}};
+    const stretches=tracks.map((track,index)=>({{index,path:(track.time||[]).map((t,i)=>t>=left&&t<=right?trackPoint(track,i):null).filter(Boolean)}}));
+    const width=d=>d.index===viewSettings.selectedTrack?viewSettings.selectedTrackWidth:viewSettings.trackWidth;
+    if(viewSettings.drawStyle==='points'){{
+      const points=[];stretches.forEach(d=>d.path.forEach(position=>points.push(position)));
+      layers.push(new deck.ScatterplotLayer({{id:'gnss-3d-selection',data:points,getPosition:d=>d,
+        getFillColor:markerState.selection,getRadius:3,radiusUnits:'pixels',parameters}}));
+    }}else layers.push(new deck.PathLayer({{id:'gnss-3d-selection',data:stretches.filter(d=>d.path.length>1),
+      getPath:d=>d.path,getColor:markerState.selection,getWidth:width,widthUnits:'pixels',jointRounded:true,capRounded:true,
+      updateTriggers:{{getWidth:[viewSettings.selectedTrack,viewSettings.trackWidth,viewSettings.selectedTrackWidth]}},parameters}}));
   }}
   const points=[];
   // A Video card's stored sync data marker, as a larger point under the markers.
@@ -816,8 +842,8 @@ function markerLayers(){{
     radiusUnits:'pixels',getRadius:d=>d.radius||6+markerState.width,parameters:{{depthCompare:'always',depthWriteEnabled:false}}}}));
   return layers;
 }}
-function setMarkers(times,colors,width,selection,syncTime=null,syncColor=null){{
-  markerState={{times,colors,width,selection,syncTime,syncColor}};
+function setMarkers(times,colors,width,selection,mode='always_top',syncTime=null,syncColor=null){{
+  markerState={{times,colors,width,selection,mode,syncTime,syncColor}};
   updateRoute();
 }}
 function screenPoint(p){{
@@ -914,7 +940,15 @@ function autoSettings(computeOffset,first=false){{
   }});
 }}
 map.doubleClickZoom.disable();
-map.on('click',e=>{{const t=nearestTime(e.point);if(t!==null&&bridge)bridge.select_timestamp(t)}});
+// A left click selects the track under it (or none) and places the first marker.
+map.on('click',e=>{{
+  if(bridge)bridge.select_track(trackAt(e.point.x,e.point.y,{SELECT_TOLERANCE_PIXELS:g}));
+  const t=nearestTime(e.point);if(t!==null&&bridge)bridge.select_timestamp(t);
+}});
+function setTrackSelection(index,normal,selected){{
+  viewSettings.selectedTrack=index;viewSettings.trackWidth=normal;viewSettings.selectedTrackWidth=selected;
+  updateRoute();
+}}
 map.on('dblclick',()=>{{if(bridge)bridge.clear_marker()}});
 // A right drag tilts and rotates; only a right click without moving places the second marker,
 // and a second right click soon after removes it.

@@ -262,10 +262,16 @@ class InternalLogPanel(QWidget):
         self.entries.setUndoRedoEnabled(False)
         self.entries.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.set_maximum_lines(maximum_lines)
-        self.expanded_button = QToolButton(self.entries)
+        # The collapse arrow sits at the top of the vertical scroll bar, which is always shown
+        # so the arrow is too.
+        self.expanded_button = QToolButton()
         self.expanded_button.setAutoRaise(True)
         self.expanded_button.setToolTip("Minimize internal log")
         self.expanded_button.clicked.connect(lambda: self.set_expanded(False))
+        self.entries.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        width = self.entries.verticalScrollBar().sizeHint().width()
+        self.expanded_button.setFixedSize(width, width)
+        self.entries.addScrollBarWidget(self.expanded_button, Qt.AlignmentFlag.AlignTop)
 
         self.mini_row = QWidget(self)
         mini_layout = QHBoxLayout(self.mini_row)
@@ -318,16 +324,6 @@ class InternalLogPanel(QWidget):
         else:
             self.setFixedHeight(self.MINI_HEIGHT)
         self.updateGeometry()
-
-    def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        super().resizeEvent(event)
-        if self._expanded:
-            size = 22
-            scrollbar_width = self.entries.verticalScrollBar().sizeHint().width()
-            self.expanded_button.setGeometry(
-                max(0, self.entries.width() - scrollbar_width - size - 3), 1, size, size
-            )
-            self.expanded_button.raise_()
 
     def append_message(self, timestamp: str, message: str, message_type: str = "message") -> None:
         scrollbar = self.entries.verticalScrollBar()

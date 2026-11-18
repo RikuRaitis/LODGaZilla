@@ -17,10 +17,15 @@ from PySide6.QtWidgets import QApplication
 
 from src.app.lodgazilla import PlotWorkspace
 from src.gui.plots.gnss import track_distance_m
+from src.gui.plots.markers import set_track_selection_style, track_selection_rgba
 from src.gui.plots.xyz import XYZPlotWidget
 from tests.test_xyz_plot import FakeView
 
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class PointMarkerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -61,6 +66,7 @@ class PointMarkerTests(unittest.TestCase):
         event = mock.Mock()
         event.button.return_value = button
         event.double.return_value = double
+        event.scenePos.return_value = QPointF(0, 0)
         point = QPointF(card._x[time_index], card._y[time_index])
         with mock.patch.object(card.plot_item.vb, "mapSceneToView", return_value=point):
             card._on_scene_click(event)
@@ -104,6 +110,49 @@ class PointMarkerTests(unittest.TestCase):
         self.wait_for(lambda: card.value_boxes.visible_boxes(0))
         self.assertEqual(card.value_boxes.visible_boxes(0)[0].item.x_value, 2.0)
 
+    def test_xy_selection_style_and_layer(self):
+        card = self.workspace.add_xy_plot((self.path, "x"), (self.path, "y"))
+        self.wait_loaded(card)
+        self.click(card, Qt.MouseButton.LeftButton, 2)
+        self.click(card, Qt.MouseButton.RightButton, 6)
+        item = card._selection_items[0]
+        curve = card._graph_items[0][0]
+        # Its own color at full opacity, at the graph's width.
+        self.assertEqual(item.opts["pen"].color().getRgb(), track_selection_rgba())
+        self.assertEqual(item.opts["pen"].widthF(), curve.opts["pen"].widthF())
+        try:
+            # On its own trace: just above its graph.
+            set_track_selection_style("#ff0000", 50, "own_trace")
+            card.apply_marker_style()
+            self.assertEqual(item.zValue(), curve.zValue() + 0.5)
+            self.assertEqual(item.opts["pen"].color().getRgb(), (255, 0, 0, 128))
+            # Off: not drawn.
+            set_track_selection_style("#ff0000", 50, "off")
+            card.apply_marker_style()
+            self.assertEqual(len(item.getData()[0] or []), 0)
+        finally:
+            set_track_selection_style("#2196f3", 100, "always_top")
+
+    def test_3d_plot_selection_layers(self):
+        with mock.patch.object(XYZPlotWidget, "view_class", FakeView):
+            card = self.workspace.add_xyz_plot(*[(self.path, name) for name in "xyz"])
+        self.wait_loaded(card)
+        try:
+            set_track_selection_style("#2196f3", 100, "own_trace")
+            card.set_vertical_marker(3.0, 0)
+            card.set_vertical_marker(7.0, 1)
+            # Recolored on the trace, with nothing drawn above it.
+            colors = np.asarray(card._trace_items[0]["line"].color)
+            np.testing.assert_allclose(colors[3 * 2], np.asarray(track_selection_rgba()) / 255, rtol=1e-6)
+            self.assertFalse(any(item.visible() for items in card._selection_on_top.values()
+                                 for item in items.values()))
+            # Off: the trace keeps its own color.
+            set_track_selection_style("#2196f3", 100, "off")
+            card.apply_marker_style()
+            self.assertEqual(np.asarray(card._trace_items[0]["line"].color).ndim, 1)
+        finally:
+            set_track_selection_style("#2196f3", 100, "always_top")
+
     def test_xy_markers_link_with_time_cards(self):
         line = self.workspace.add_line_plot(self.path, "x")
         card = self.workspace.add_xy_plot((self.path, "x"), (self.path, "y"))
@@ -122,9 +171,17 @@ class PointMarkerTests(unittest.TestCase):
         card.view.clicked.emit(Qt.MouseButton.LeftButton, QPointF(*pixels[3]))
         card.view.clicked.emit(Qt.MouseButton.RightButton, QPointF(*pixels[7]))
         self.assertEqual(card.marker_values(), (3.0, 7.0))
+        on_top = [item for items in card._selection_on_top.values() for item in items.values()]
         marker_points = [item for item in card._marker_items
-                         if type(item).__name__ == "GLScatterPlotItem" and item.visible()]
+                         if type(item).__name__ == "GLScatterPlotItem" and item.visible() and item not in on_top]
         self.assertEqual(len(marker_points), 2)
+        # The selection: the stretch recolored on the trace, and drawn once more above everything.
+        selection = tuple(value / 255 for value in track_selection_rgba())
+        line_colors = np.asarray(card._trace_items[0]["line"].color)
+        np.testing.assert_allclose(line_colors[3 * 2], selection, rtol=1e-6)
+        self.assertFalse(np.allclose(line_colors[0], selection))
+        self.assertTrue(card._selection_on_top[0]["line"].visible())
+        self.assertEqual(card._selection_on_top[0]["line"].width, card._trace_items[0]["width"])
         # Moving a marker updates the items in place.
         items = list(card._marker_items)
         card.set_vertical_marker(4.0, 0)

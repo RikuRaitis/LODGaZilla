@@ -73,6 +73,8 @@ class PlotNavigatorWidget(QWidget):
     marker_link_changed = Signal(bool)
     plot_views_link_changed = Signal(bool)
     legends_visibility_changed = Signal(bool)
+    # The Markers button: markers can be placed (and are shown), or not.
+    markers_visibility_changed = Signal(bool)
     # The overview's width changed; its plot area margins are measured again from the cards.
     canvas_resized = Signal()
 
@@ -237,6 +239,11 @@ class PlotNavigatorWidget(QWidget):
         layout.addWidget(self._info_group_gap())
         layout.addWidget(self._separator())
         layout.addWidget(self._info_group_gap())
+        # The Markers button first: the marker group's other buttons matter only while markers are shown.
+        self.markers_button = self._add_toggle_button(
+            layout, "markers-shown", "markers-hidden", "Markers shown", "Markers hidden", checked=False
+        )
+        self.markers_button.toggled.connect(self.markers_visibility_changed.emit)
         self.marker_link_button = self._add_toggle_button(
             layout, "markers-linked", "markers-unlinked", "Markers linked", "Markers unlinked", checked=True
         )
@@ -364,6 +371,9 @@ class PlotNavigatorWidget(QWidget):
 
     def set_legends_shown(self, shown: bool) -> None:
         self._set_toggle_quietly(self.legends_button, shown)
+
+    def set_markers_shown(self, shown: bool) -> None:
+        self._set_toggle_quietly(self.markers_button, shown)
 
     def _set_toggle_quietly(self, button: QToolButton, checked: bool) -> None:
         """Show a saved state without emitting it back as a change."""

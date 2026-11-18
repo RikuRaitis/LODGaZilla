@@ -81,6 +81,78 @@ class GroupedLegendTests(unittest.TestCase):
         self.app.processEvents()
         return card
 
+    def test_a_click_selects_a_graph_trace_or_track_and_its_legend_group(self):
+        from src.gui.plots.series_style import series_line_width
+        selected, normal = series_line_width(selected=True), series_line_width()
+        # X/Y: a left click near the graph selects it (and still places the first marker).
+        xy = self.make_card("xy")
+        xy.grouped_series.insert((AxisSource(self.path, self.names[1]), AxisSource(self.path, self.names[2])))
+        self.wait_loaded(xy)
+        self.app.processEvents()
+        curve = xy._graph_items[1][0]
+        x, y = curve.getData()
+        scene = xy.plot_item.vb.mapViewToScene(QPointF(float(x[1]), float(y[1])))
+        click = mock.Mock(scenePos=mock.Mock(return_value=scene), double=mock.Mock(return_value=False))
+        click.button.return_value = Qt.MouseButton.LeftButton
+        xy._on_scene_click(click)
+        self.assertEqual(xy.selected_series, 1)
+        self.assertEqual([graph[0].opts["pen"].width() for graph in xy._graph_items], [normal, selected])
+        self.assertEqual(len(xy.legend.selected_rows()), 1 + 2)  # its heading and X, Y rows
+        click.scenePos.return_value = QPointF(-5000, -5000)
+        xy._on_scene_click(click)
+        self.assertIsNone(xy.selected_series)
+        # 3D plot: the trace under the click; an axis line comes first.
+        xyz = self.make_card("xyz")
+        positions = xyz._scene_positions[0]
+        pixel = xyz.view.project(positions[1:2])[0]
+        xyz._on_view_clicked(Qt.MouseButton.LeftButton, QPointF(*pixel))
+        self.assertEqual(xyz.selected_series, 0)
+        self.assertEqual(xyz.legend.selected_rows()[-1], xyz.legend.group_headers[0])
+        xyz._on_view_clicked(Qt.MouseButton.LeftButton, QPointF(-500, -500))
+        self.assertIsNone(xyz.selected_series)
+        # Map (its page is off here): the selected track's Legend group is highlighted; the page
+        # reports a click's track through select_track and draws it with setTrackSelection.
+        from src.gui.plots.gnss import map_html, track_selection_script
+        gnss = self.make_card("gnss")
+        gnss.select_series(0)
+        self.assertEqual(gnss.legend.selected_rows()[-1], gnss.legend.group_headers[0])
+        gnss.select_series(None)
+        self.assertEqual(gnss.legend.selected_rows(), [])
+        self.assertIn("bridge.select_track(trackAt(e.containerPoint.x,e.containerPoint.y,8))", map_html())
+        self.assertEqual(track_selection_script(1), f"setTrackSelection(1,{normal},{selected});")
+        # 3D Map: the page draws the selected track wider.
+        gnss_3d = self.make_card("gnss_3d")
+        gnss_3d._auto_pending = False
+        gnss_3d.map_view.runJavaScript("map.events.load()")
+        gnss_3d.map_view.loadFinished.emit(True)
+        gnss_3d.bridge.track_clicked.emit(0)
+        js = gnss_3d.map_view.runJavaScript
+        self.assertEqual(js("viewSettings.selectedTrack"), 0)
+        self.assertEqual(js("map.overlay.props.layers[0].props.getWidth(tracks[0],{index:0})"), selected)
+        gnss_3d.bridge.track_clicked.emit(-1)
+        self.assertEqual(js("map.overlay.props.layers[0].props.getWidth(tracks[0],{index:0})"), normal)
+
+    def test_xy_center_view_brings_every_graph_back(self):
+        xy = self.make_card("xy")
+        view = xy.plot_item.vb
+        full = [list(axis) for axis in view.viewRange()]
+        view.setRange(xRange=(1000, 1001), yRange=(1000, 1001), padding=0)
+        self.assertIn(xy.center_view_button, xy.header_controls)
+        xy.center_view_button.click()
+        for (low, high), (full_low, full_high) in zip(view.viewRange(), full):
+            self.assertAlmostEqual(low, full_low, delta=abs(full_high - full_low) * 0.1 + 1e-6)
+            self.assertAlmostEqual(high, full_high, delta=abs(full_high - full_low) * 0.1 + 1e-6)
+
+    def test_map_center_view_fits_the_tracks(self):
+        from src.gui.plots.gnss import map_html
+        gnss = self.make_card("gnss")
+        self.assertIn(gnss.center_view_button, gnss.header_controls)
+        self.assertIn("function fitTracks()", map_html())
+        gnss.map_view, gnss._map_ready = mock.Mock(), True
+        gnss.center_view()
+        gnss.map_view.page.return_value.runJavaScript.assert_called_once_with("fitTracks();")
+        gnss.map_view = None
+
     def test_map_header_controls_share_one_height(self):
         card = self.make_card("gnss")
         card.controls_button.click()

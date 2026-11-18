@@ -8,6 +8,20 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Added
 
+- 3D plot: **Use shader** in the card's controls (off by default) draws the traces at the
+  Series line widths, the selected one wider; without it they stay 1 px, as OpenGL draws lines.
+- The selection on X/Y, 3D plot, Map and 3D Map cards recolors the stretch between the
+  markers at the track's own width, in its own colour and opacity (Settings > Plot), drawn
+  above every track, only above its own track, or not at all (**Selection drawn**).
+- A **Center view** button, with one icon and name on every card that zooms (Line,
+  Multi-series, Sample interval, Event/state, Frequency, X/Y, 3D plot, Map and 3D Map),
+  shows all the card's data again; it replaces the 3D plot's Reset camera button.
+- A **Markers** button in the Plot navigator, off by default: while it is off no card
+  places markers, and switching it off removes every marker and selection.
+- A left click selects the series under it in every card with series, as in Multi-series:
+  it is drawn wider and its Legend row highlighted; a click elsewhere selects none.
+  **Series line width** (2 px) and **Selected series line width** (5 px) in Settings,
+  Plot apply to every card and replace "Multi-series: selected trace width".
 - **Copy folder location** in a folder's right-click menu puts its full path on the clipboard.
 - 3D plot: click an axis line to select it; Ctrl+wheel then stretches that axis (with none
   selected, it zooms the camera). **Equal scale** in the card's
@@ -50,6 +64,7 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Changed
 
+- The Internal log's collapse arrow is at the top of its scroll bar.
 - The Settings button moved from the Plot navigator to the end of the workspace buttons,
   after Save workspace as.
 - Closing LODGaZilla no longer asks to save the open cards unless **Ask to save the
@@ -61,7 +76,8 @@ All notable changes to LODGaZilla are listed here. The format follows
 - Imports and exports start only from Source data rows. Double-clicking a folder only
   expands it, the Folder menu no longer has the **Plugin: Generate / update H5 files**
   and export entries, and the plugin menu for years, months and several folders is gone.
-- Removed the Navigator's **Batch** button.
+- The Navigator's **Batch** button has a new menu: **Generate missing H5 files**, **Generate
+  with plugin** (missing ones, or all again, per plugin) and **Re-generate all**, which asks first.
 - New settings have no default metadata fields; the previous built-in ones (diver,
   session, place, device location) are gone. Existing settings keep their own.
 - New defaults: Markers linked and snapping to the nearest point on, the Plot navigator
@@ -75,6 +91,7 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Fixed
 
+- The plot menu's **Existing 3D cards** submenu was deleted before it could open.
 - 3D Map: a track below the terrain shows again as soon as the map opacity is below
   100%; the faded map was drawn over it until 0%.
 - The 3D Map no longer fills the Internal log with "js: Expected value to be of type

@@ -163,16 +163,23 @@ def _bar_contains(item, scene_position) -> bool:  # type: ignore[no-untyped-def]
 def name_at_canvas_point(canvas, position: QPoint, items) -> str | None:  # type: ignore[no-untyped-def]
     """The name of the drawn item under a canvas position: the nearest line or point within
     `HIT_TOLERANCE_PIXELS`, or a bar containing it. `items` holds (graphics item, name) pairs."""
+    return item_at_canvas_point(canvas, position, [(item, name) for item, name in items if name])
+
+
+def item_at_canvas_point(canvas, position: QPoint, items, tolerance: float = HIT_TOLERANCE_PIXELS):  # type: ignore[no-untyped-def]
+    """The key of the drawn item under a canvas position: the nearest line or point within
+    ``tolerance`` pixels, or a bar containing it; None when none is that close. ``items``
+    holds (graphics item, key) pairs; a click selects a series with ``SELECT_TOLERANCE_PIXELS``."""
     import pyqtgraph as pg
 
     scene_position = canvas.mapToScene(position)
-    best, found = HIT_TOLERANCE_PIXELS ** 2, None
-    for item, name in items:
-        if item is None or not name:
+    best, found = tolerance ** 2, None
+    for item, key in items:
+        if item is None or key is None:
             continue
         if isinstance(item, pg.BarGraphItem):
             if _bar_contains(item, scene_position):
-                return name
+                return key
             continue
         points = _item_points(item)
         if points is None:
@@ -182,5 +189,5 @@ def name_at_canvas_point(canvas, position: QPoint, items) -> str | None:  # type
             lines = item.opts.get("pen") is not None
         distance = distance_squared(points, scene_position.x(), scene_position.y(), lines=lines)
         if distance <= best:
-            best, found = distance, name
+            best, found = distance, key
     return found

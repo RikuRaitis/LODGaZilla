@@ -8,6 +8,7 @@ the card keeps the two marker times and draws them itself.
 """
 from __future__ import annotations
 
+from src.gui.plots.markers import markers_shown
 from src.gui.plots.markers import FIRST_MARKER, SECOND_MARKER
 
 
@@ -88,7 +89,9 @@ class PointMarkers:
         self._redraw_markers()
 
     def _place_marker_from_view(self, index: int, time_value: float) -> None:
-        """A click placed a marker: show it and tell the workspace."""
+        """A click placed a marker: show it and tell the workspace (not while markers are hidden)."""
+        if not markers_shown():
+            return
         self.set_vertical_marker(time_value, index)
         (self.marker_placed if index == FIRST_MARKER else self.second_marker_placed).emit(time_value)
 

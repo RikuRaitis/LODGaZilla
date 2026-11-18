@@ -151,6 +151,7 @@ class GnssTrackTests(_TempCase):
             _marker_revision=0, _marker_in_flight=False, _track_data=[], _loading=True,
             map_view=mock.Mock(), map_stack=mock.Mock(), map_loading=mock.Mock(), map_type=mock.Mock(),
             legend=mock.Mock(), satellite_radio=mock.Mock(), scale_bar_check=mock.Mock(),
+            apply_series_widths=mock.Mock(),
             grouped_series=SimpleNamespace(groups=[SimpleNamespace(color="#123456")]),
             update_sample_coverage=mock.Mock(), map_container=mock.Mock(),
             palette=QApplication.palette, draw_style="auto",
@@ -330,6 +331,10 @@ class BoundedLoadTests(_TempCase):
         expected = (np.asarray(result["time"]) - self.times[0]) / 0.01 * 0.001
         np.testing.assert_allclose(heights, expected, atol=1e-6)
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class XYTests(_TempCase):
     def test_r5_coverage_has_no_half_sample_extrapolation(self):
         path = self.make_file([-.4, 0., 1., 2., 2.4], [0., 1., 2.])
@@ -388,6 +393,7 @@ class XYTests(_TempCase):
         event = mock.Mock()
         event.button.return_value = Qt.MouseButton.LeftButton
         event.double.return_value = False
+        event.scenePos.return_value = QPointF(0, 0)
         with mock.patch.object(card.plot_item.vb, "mapSceneToView", return_value=QPointF(2.0, 20.0)):
             card._on_scene_click(event)
             self.assertEqual(placed, [3.0])

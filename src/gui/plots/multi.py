@@ -10,6 +10,7 @@ from PySide6.QtCore import QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QPen, QTransform
 from PySide6.QtWidgets import QApplication, QGraphicsRectItem
 
+from src.gui.plots.series_style import series_line_width
 from src.app.settings import DEFAULT_PLOT_SETTINGS, load_plot_settings
 from src.data.h5_series import TimeAxisMetadata, series_value_range
 from src.data.plot_policy import PlotSource
@@ -517,7 +518,7 @@ class MultiSeriesPlot(SeriesPlotWidget):
         span_left, span_right = max(left, lane.start), min(right, end)
         selected = lane.key == self.selected and span_right > span_left
         if selected:
-            pen = QPen(QColor(lane.color), self.selected_width)
+            pen = QPen(QColor(lane.color), series_line_width(selected=True))
             pen.setCosmetic(True)
             lane.outline.setPen(pen)
             lane.outline.setRect(QRectF(span_left, lane.center - height / 2, span_right - span_left, height))
@@ -602,7 +603,7 @@ class MultiSeriesPlot(SeriesPlotWidget):
             transform = QTransform(1, 0, 0, gain, 0, offset)
             curve.setTransform(transform)
             markers.setTransform(transform)
-            curve.setPen(pg.mkPen(colors[index], width=self.selected_width if key == self.selected else 1))
+            curve.setPen(pg.mkPen(colors[index], width=series_line_width(selected=key == self.selected)))
             curve.setZValue(15 if key == self.selected else 10)
             if self.event_kinds.get(key):
                 markers.clear()
@@ -613,7 +614,7 @@ class MultiSeriesPlot(SeriesPlotWidget):
                     else:
                         item.setTransform(transform)
                         pen = pg.mkPen(item.opts['pen'])
-                        pen.setWidth(self.selected_width if key == self.selected else 1)
+                        pen.setWidth(series_line_width(selected=key == self.selected))
                         item.setOpts(pen=pen)
                     item.setZValue(16 if key == self.selected else 12)
             else:
@@ -788,7 +789,6 @@ class MultiSeriesPlot(SeriesPlotWidget):
     def reload_plot_settings(self):
         super().reload_plot_settings()
         settings = load_plot_settings(self.settings_path)
-        self.selected_width = settings['multi_selected_line_width']
         # Applies to series added later; placed series keep their lane.
         self.lane_height = settings['multi_series_lane_height_percent'] / 100
         self.filmstrip_height = settings['multi_filmstrip_height_pixels']
@@ -829,9 +829,24 @@ class MultiPlotWidget(LinePlotWidget):
             return key
         return None
 
-    def _selected_series_changed(self, _key):
+    def _selected_series_changed(self, key):
         self.hide_time_offset_editor()
         self._show_time_offset()
+        self._selected_series = key
+        self.show_selected_series_in_legend()
+
+    def _select_series_at(self, position):
+        """Multi-series selects on press, in its own plot (it also drags the selected trace)."""
+
+    def apply_series_widths(self):
+        self.series_plot.apply_transforms()
+
+    def selected_legend_rows(self):
+        key = self.series_plot.selected
+        if key in self.series:
+            return (self.series.index(key),), None
+        lanes = [lane.key for lane in self.series_plot.filmstrips]
+        return ((len(self.series) + lanes.index(key),) if key in lanes else ()), None
 
     def edited_time_offset(self):
         key = self._selected_offset_key()

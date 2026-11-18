@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QHBoxLayout, QLabel, QRadioButton, QStackedLayout, QWidget,
 )
 
+from src.gui.plots.series_style import SELECT_TOLERANCE_PIXELS, series_line_width
 from src.data.axis_scale import coordinate_scale, declared_coordinate_scale, is_latitude_name, is_longitude_name
 from src.gui.plots.base import PlotBaseWidget, series_from_mime
 from src.gui.plots.card_markers import PointMarkers
@@ -27,7 +28,7 @@ from src.jobs.plot_groups import GroupedPlotLoadCoordinator
 from src.gui.plots.theme import apply_map_background, canvas_background, palette_overlay_stylesheet
 from src.gui.plots.marker_info import MarkerInfoEntry
 from src.gui.plots.markers import (
-    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
+    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, track_selection_layer, track_selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.data.h5_series import (
@@ -53,6 +54,8 @@ class GnssBridge(QObject):
     # The map's camera as JSON, for saving it in a workspace file.
     view_reported = Signal(str)
     scroll_requested = Signal(int)
+    # A left click on the map: the index of the track under it, or -1 when none is that close.
+    track_clicked = Signal(int)
 
     @Slot(float)
     def select_timestamp(self, timestamp: float) -> None:
@@ -77,6 +80,10 @@ class GnssBridge(QObject):
     @Slot(str)
     def report_view(self, view: str) -> None:
         self.view_reported.emit(view)
+
+    @Slot(int)
+    def select_track(self, index: int) -> None:
+        self.track_clicked.emit(int(index))
 
     @Slot(int)
     def scroll_workspace(self, delta: int) -> None:
@@ -264,6 +271,7 @@ class MapMarkersMixin(PointMarkers):
 
 class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
     """Map card with street/satellite tiles and one or more GNSS tracks."""
+    has_center_view = True
     help_topic = "gnss"
 
     supports_horizontal_layout = True
@@ -420,6 +428,9 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.value_boxes.apply_style()
 
     def on_series_changed(self) -> None:
+        # A track removed from the card cannot stay selected.
+        if self.selected_series is not None and self.selected_series >= len(self.grouped_series.groups):
+            self.select_series(None)
         if hasattr(self, "value_boxes"):
             # The boxes return on the reloaded tracks (Sample limit, trim): keep their times.
             for marker in (FIRST_MARKER, SECOND_MARKER):
@@ -523,6 +534,7 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         # Right click places the second marker instead of opening a browser menu.
         self.map_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.bridge.scroll_requested.connect(self.wheel_scrolled)
+        self.bridge.track_clicked.connect(lambda index: self.select_series(index if index >= 0 else None))
         self.map_view.wheel_scrolled.connect(self.wheel_scrolled)
         self.map_view.loadFinished.connect(self._on_map_loaded)
         self.map_view.loadStarted.connect(lambda: setattr(self, '_map_ready', False))
@@ -568,11 +580,25 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
             if self.satellite_radio.isChecked():
                 self._set_map_type("Satellite")
             self._set_scale_bar(self.scale_bar_check.isChecked())
+            self.apply_series_widths()
             self._flush_marker()
             self._refresh_value_box_positions()
         else:
             self._map_failed = True
             self.map_loading.setText("Could not initialize map. Check the map library connection.")
+
+    def apply_series_widths(self) -> None:
+        """Every track at the series width, the selected one wider and in front."""
+        if self.map_view is not None and self._map_ready:
+            self.map_view.page().runJavaScript(track_selection_script(self.selected_series))
+
+    def selected_legend_rows(self):  # type: ignore[no-untyped-def]
+        return (), self.selected_series
+
+    def center_view(self) -> None:
+        """Every track back in view."""
+        if self.map_view is not None and self._map_ready:
+            self.map_view.page().runJavaScript("fitTracks();")
 
     def _set_scale_bar(self, shown: bool) -> None:
         if self.map_view is not None and self._map_ready:
@@ -589,11 +615,11 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         generation, revision = self._map_generation, self._marker_revision
         self._marker_in_flight = True
         times = [self._marker_times[FIRST_MARKER], self._marker_times[SECOND_MARKER]]
-        selection = _css_rgba(selection_rgba(2.0))
+        selection = _css_rgba(track_selection_rgba())
         colors = [_css_rgba(marker_color(index).getRgb()) for index in (FIRST_MARKER, SECOND_MARKER)]
         sync = json.dumps(self._sync_time)
         command = (f"setMarkers({json.dumps(times)}, {json.dumps(colors)}, {marker_width()}, {json.dumps(selection)}, "
-                   f"{sync}, {json.dumps(sync_marker_color())});")
+                   f"{json.dumps(track_selection_layer())}, {sync}, {json.dumps(sync_marker_color())});")
         self.map_view.page().runJavaScript(
             "if (window.gnssReady === true) { " + command + " }",
             lambda _: self._marker_delivered(generation, revision))
@@ -777,6 +803,12 @@ MAP_CREDIT_TOP = 28
 MAP_LEGEND_TOP = MAP_CREDIT_TOP + 18
 
 
+def track_selection_script(selected) -> str:  # type: ignore[no-untyped-def]
+    """The map pages' call that draws every track at the series width and the selected one wider."""
+    index = -1 if selected is None else int(selected)
+    return f"setTrackSelection({index},{series_line_width()},{series_line_width(selected=True)});"
+
+
 def map_html(*, background: str = "#000000") -> str:
     """Return the empty map page; tracks are pushed with ``setTracks`` once ready."""
     return f'''<!doctype html>
@@ -798,6 +830,26 @@ map.attributionControl.setPrefix(false);
 map.attributionControl.setPosition('topright');
 let street=L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',{{maxZoom:19,attribution:'&copy; OpenStreetMap'}}).addTo(map);
 // A metric scale bar at the bottom right; the card's Scale bar checkbox shows or hides it.
+// The series widths and the selected track (-1: none), set by the card (setTrackSelection).
+let trackWidth=2,selectedTrackWidth=5,selectedTrack=-1,trackLines=[];
+function setTrackSelection(index,normal,selected){{
+  selectedTrack=index;trackWidth=normal;selectedTrackWidth=selected;
+  trackLines.forEach((line,i)=>{{if(line)line.setStyle({{weight:i===index?selected:normal}})}});
+  selectionLayers.forEach((layer,i)=>{{if(layer&&layer.setStyle)layer.setStyle({{weight:i===index?selected:normal}})}});
+  orderTracks();
+}}
+// How the selection is drawn (Settings > Plot, Selection drawn): "always_top" above every
+// track, "own_trace" above its own track only, "off" not at all.
+let selectionMode='always_top';
+// The tracks in order, the selected one in front; each selection above its own track, or
+// all above every track; the markers on top.
+function orderTracks(){{
+  let order=trackLines.map((line,i)=>i).filter(i=>trackLines[i]);
+  if(selectedTrack>=0&&trackLines[selectedTrack]){{order=order.filter(i=>i!==selectedTrack);order.push(selectedTrack)}}
+  order.forEach(i=>{{trackLines[i].bringToFront();if(selectionMode==='own_trace'&&selectionLayers[i]&&selectionLayers[i].bringToFront)selectionLayers[i].bringToFront()}});
+  if(selectionMode==='always_top')selectionLayers.forEach(layer=>{{if(layer&&layer.bringToFront)layer.bringToFront()}});
+  markers.forEach(marker=>{{if(marker.bringToFront)marker.bringToFront()}});
+}}
 let scaleBar=L.control.scale({{position:'bottomright',imperial:false}});
 function setScaleBar(shown){{if(shown)scaleBar.addTo(map);else scaleBar.remove();}}
 let satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{maxZoom:19,attribution:'Esri'}});
@@ -831,11 +883,12 @@ function trackAt(x,y,tol){{
 }}
 function nearest(e){{return all.reduce((a,p)=>map.distance(e.latlng,L.latLng(p[0],p[1]))<map.distance(e.latlng,L.latLng(a[0],a[1]))?p:a)}}
 function select(e,index){{if(!all.length||!bridge)return;let point=nearest(e);if(index===0)bridge.select_timestamp(point[2]);else bridge.select_second_timestamp(point[2])}}
+function fitTracks(){{if(all.length)map.fitBounds(all.map(p=>p.slice(0,2)),{{padding:[20,20]}})}}
 function setTracks(nextTracks,fit=false){{
 tracks=nextTracks;
 trackLayers.forEach(layer=>map.removeLayer(layer));
-trackLayers=[];trackPoints=[];all=[];clearMarkers();
-tracks.forEach(track=>{{
+trackLayers=[];trackPoints=[];all=[];trackLines=[];clearMarkers();
+tracks.forEach((track,trackIndex)=>{{
   let pts=track.lat.map((lat,j)=>[lat,track.lon[j],track.time[j]]);
   let color=track.color||'#2196f3';
   trackPoints.push(pts);
@@ -843,7 +896,10 @@ tracks.forEach(track=>{{
   for(const p of pts)all.push(p);
   if(drawStyle==='points')trackLayers.push(L.layerGroup(pts.map(p=>L.circleMarker(p.slice(0,2),
     {{renderer:pointRenderer,radius:2.5,stroke:false,fillColor:color,fillOpacity:1,interactive:false}}))).addTo(map));
-  else trackLayers.push(L.polyline(pts.map(p=>p.slice(0,2)),{{color:color,weight:3}}).addTo(map));
+  else{{
+    let line=L.polyline(pts.map(p=>p.slice(0,2)),{{color:color,weight:trackIndex===selectedTrack?selectedTrackWidth:trackWidth}}).addTo(map);
+    trackLayers.push(line);trackLines[trackIndex]=line;
+  }}
   // A stationary or very short GNSS recording can be smaller than one pixel
   // even at Leaflet's maximum zoom.  The H5 data is still a valid track, so
   // give it a visible representative point instead of making it look empty.
@@ -861,7 +917,8 @@ if(fit&&all.length){{
   else map.fitBounds(all.map(p=>p.slice(0,2)),{{padding:[20,20]}});
 }}
 }}
-map.on('click',e=>select(e,0));
+// A left click selects the track under it (or none) and places the first marker.
+map.on('click',e=>{{if(bridge)bridge.select_track(trackAt(e.containerPoint.x,e.containerPoint.y,{SELECT_TOLERANCE_PIXELS:g}));select(e,0)}});
 map.on('dblclick',()=>{{if(bridge)bridge.clear_marker()}});
 // Right click places the second marker; a second right click soon after removes it.
 map.on('contextmenu',e=>{{let now=Date.now();if(now-lastContextMenu<400){{lastContextMenu=0;if(bridge)bridge.clear_second_marker();return}}lastContextMenu=now;select(e,1)}});
@@ -879,18 +936,22 @@ new QWebChannel(qt.webChannelTransport,c=>bridge=c.objects.gnssBridge);
 function setMapType(t){{if(t==='Satellite'){{map.removeLayer(street);satellite.addTo(map)}}else{{map.removeLayer(satellite);street.addTo(map)}}}}
 function nearestTimestamp(points,t){{return points.reduce((a,p)=>Math.abs(p[2]-t)<Math.abs(a[2]-t)?p:a)}}
 function pointAtTimestamp(points,t){{if(!points.length||t<points[0][2]||t>points[points.length-1][2])return null;return nearestTimestamp(points,t)}}
-function setMarkers(times,colors,width,selectionColor,syncTime=null,syncColor=null){{
-  clearMarkers();
+function setMarkers(times,colors,width,selectionColor,mode='always_top',syncTime=null,syncColor=null){{
+  clearMarkers();selectionMode=mode;
   if(syncTime!==null)trackPoints.forEach(points=>{{
     let p=pointAtTimestamp(points,syncTime);
     if(p)markers.push(L.circleMarker(p.slice(0,2),{{radius:11,color:syncColor,weight:2,dashArray:'4 3',fill:false,interactive:false}}).addTo(map));
   }});
-  if(times[0]!==null&&times[1]!==null){{
+  if(times[0]!==null&&times[1]!==null&&mode!=='off'){{
     let left=Math.min(times[0],times[1]),right=Math.max(times[0],times[1]);
-    trackPoints.forEach(points=>{{
+    trackPoints.forEach((points,i)=>{{
       let inside=points.filter(p=>p[2]>=left&&p[2]<=right).map(p=>p.slice(0,2));
-      // Above the track, translucent so its color shows through; markers are added after it.
-      if(inside.length>1)selectionLayers.push(L.polyline(inside,{{color:selectionColor,weight:9,interactive:false}}).addTo(map));
+      // The stretch between the markers in the selection color, at its track's width
+      // (as points in the Points style); orderTracks layers it.
+      if(drawStyle==='points'&&inside.length)selectionLayers[i]=L.layerGroup(inside.map(p=>L.circleMarker(p,
+        {{renderer:pointRenderer,radius:2.5,stroke:false,fillColor:selectionColor,fillOpacity:1,interactive:false}}))).addTo(map);
+      else if(inside.length>1)selectionLayers[i]=L.polyline(inside,{{color:selectionColor,
+        weight:i===selectedTrack?selectedTrackWidth:trackWidth,interactive:false}}).addTo(map);
     }});
   }}
   times.forEach((t,index)=>{{
@@ -900,8 +961,9 @@ function setMarkers(times,colors,width,selectionColor,syncTime=null,syncColor=nu
       if(p)markers.push(L.circleMarker(p.slice(0,2),{{radius:8,color:colors[index],weight:Math.max(2,width),fillOpacity:0.25}}).addTo(map));
     }});
   }});
+  orderTracks();
 }}
-function clearMarkers(){{markers.concat(selectionLayers).forEach(layer=>map.removeLayer(layer));markers=[];selectionLayers=[]}}
+function clearMarkers(){{markers.concat(selectionLayers).forEach(layer=>{{if(layer)map.removeLayer(layer)}});markers=[];selectionLayers=[]}}
 function markerScreenPositions(t){{return trackPoints.map(points=>{{let p=pointAtTimestamp(points,t);if(!p)return null;let point=map.latLngToContainerPoint(p.slice(0,2));return [point.x,point.y]}})}}
 window.gnssReady = true;
 </script></body></html>'''

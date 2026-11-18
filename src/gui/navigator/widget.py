@@ -1139,6 +1139,13 @@ class DataNavigatorWidget(QWidget):
         """The snapshot the tree shows: the finished one, or a first read's folders so far."""
         return self._source_snapshot if self._source_snapshot is not None else self._partial_snapshot
 
+    def all_source_rows(self) -> list[tuple[Path, SourceRow]]:
+        """Every folder's Source data rows, with their folder, for the Batch menu."""
+        snapshot = self._display_snapshot()
+        if snapshot is None:
+            return []
+        return [(folder, row) for folder in snapshot.folders for row in snapshot.source_rows.get(folder, [])]
+
     def source_rows(self, folder: Path) -> list[SourceRow]:
         snapshot = self._display_snapshot()
         return list(snapshot.source_rows.get(resolved_path(folder), [])) if snapshot is not None else []

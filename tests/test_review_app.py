@@ -121,14 +121,14 @@ class SettingsFlushTests(unittest.TestCase):
             changed = mock.Mock()
             try:
                 set_app_settings_changed_callback(changed, path)
-                save_settings_section(path, "plot", {"multi_selected_line_width": 7})
+                save_settings_section(path, "plot", {"selected_series_line_width": 7})
                 changed.assert_called_once_with()
                 self.assertFalse(path.exists())
             finally:
                 self.assertTrue(end_app_settings_cache(path))
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["plot"]["multi_selected_line_width"], 7)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["plot"]["selected_series_line_width"], 7)
             # Ending the session also drops the callback.
-            save_settings_section(path, "plot", {"multi_selected_line_width": 8})
+            save_settings_section(path, "plot", {"selected_series_line_width": 8})
             changed.assert_called_once_with()
 
     def test_failed_flush_is_retried_later(self):
@@ -171,11 +171,11 @@ class MainWindowCloseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "app_settings.json"
             window = self._window(directory)
-            save_settings_section(path, "plot", {"multi_selected_line_width": 9})
+            save_settings_section(path, "plot", {"selected_series_line_width": 9})
             with mock.patch("src.app.lodgazilla.shutdown_web_engine", side_effect=RuntimeError("web")):
                 with self.assertRaises(RuntimeError):
                     window.closeEvent(QCloseEvent())
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["plot"]["multi_selected_line_width"], 9)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["plot"]["selected_series_line_width"], 9)
 
     def test_close_cancels_imports_before_terminating(self):
         process = mock.Mock()

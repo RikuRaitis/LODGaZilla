@@ -200,6 +200,10 @@ class TimeAndMarkerTests(_QtTestCase):
         np.testing.assert_array_equal(data.x, [4.0, 5.0])
 
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class SelectionTests(_QtTestCase):
     def mouse(self, canvas, kind, point, button=Qt.MouseButton.RightButton):
         buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else button

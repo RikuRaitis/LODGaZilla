@@ -16,6 +16,7 @@ from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication, QMenu
 
+from src.gui.plots.series_style import series_line_width, set_series_line_widths  # noqa: E402
 from src.app.lodgazilla import PlotWorkspace, LODGaZillaWindow
 from src.app.settings import save_settings_section, PLOT_SECTION
 from src.gui.plots.multi import MultiPlotWidget
@@ -24,6 +25,10 @@ from src.gui.plots.base import SERIES_MIME_TYPE
 from src.gui.plots.legend import _LegendLabel
 
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class MultiPlotTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -71,8 +76,10 @@ class MultiPlotTests(unittest.TestCase):
         self.assertEqual(plot.transforms[selected], adjusted)
         self.assertEqual(plot.transforms[(self.path, 'voltage')], original)
         self.assertEqual(plot.additional_series[0].curve.opts['pen'].width(), 5)
-        save_settings_section(self.settings, PLOT_SECTION, {'multi_selected_line_width': 9})
-        self.card.reload_plot_settings()
+        # The widths are global (Settings > Plot > Cards); the main window sets them and redraws the cards.
+        set_series_line_widths(2, 9)
+        self.addCleanup(set_series_line_widths, 2, 5)
+        self.card.apply_series_widths()
         self.assertEqual(plot.additional_series[0].curve.opts['pen'].width(), 9)
         self.card.remove_series_at(0)
         self.assertEqual(plot.selected, selected)
@@ -115,7 +122,7 @@ class MultiPlotTests(unittest.TestCase):
                 self.assertAlmostEqual(plot.value_midpoints[key] * actual[0] + actual[1], center)
             for key, curve, _, _ in plot.items():
                 self.assertAlmostEqual(curve.transform().m22(), plot.transforms[key][0])
-                self.assertEqual(curve.opts['pen'].width(), 1)
+                self.assertEqual(curve.opts['pen'].width(), series_line_width())
             for key, items in plot.timeline_items.items():
                 for item in items:
                     if not isinstance(item, pg.TextItem):
@@ -143,10 +150,10 @@ class MultiPlotTests(unittest.TestCase):
     def test_new_series_remain_unselected_and_existing_choice_survives_insertions(self):
         plot = self.card.series_plot
         self.assertIsNone(plot.selected)
-        self.assertEqual(plot.curve.opts['pen'].width(), 1)
+        self.assertEqual(plot.curve.opts['pen'].width(), series_line_width())
         self.card.insert_series(self.path, 'pressure', 0)
         self.assertIsNone(plot.selected)
-        self.assertTrue(all(curve.opts['pen'].width() == 1 for _, curve, _, _ in plot.items()))
+        self.assertTrue(all(curve.opts['pen'].width() == series_line_width() for _, curve, _, _ in plot.items()))
         selected = (self.path, 'voltage')
         plot.select_series(selected)
         self.card.insert_series(self.path, 'state', 0)
@@ -154,9 +161,9 @@ class MultiPlotTests(unittest.TestCase):
         plot.update_visible_data()
         self.assertEqual(plot.selected, selected)
         for key, curve, _, _ in plot.items():
-            self.assertEqual(curve.opts['pen'].width(), plot.selected_width if key == selected else 1)
+            self.assertEqual(curve.opts['pen'].width(), series_line_width(selected=key == selected))
         for items in plot.timeline_items.values():
-            self.assertTrue(all(item.opts['pen'].width() == 1 for item in items if not isinstance(item, pg.TextItem)))
+            self.assertTrue(all(item.opts['pen'].width() == series_line_width() for item in items if not isinstance(item, pg.TextItem)))
 
     def test_batch_add_preserves_deselection_and_removing_selected_series_does_not_select_another(self):
         plot = self.card.series_plot
@@ -166,12 +173,12 @@ class MultiPlotTests(unittest.TestCase):
         self.card.series[0:0] = [(self.path, 'state'), (self.path, 'event')]
         self.card.on_series_changed()
         self.assertIsNone(plot.selected)
-        self.assertTrue(all(curve.opts['pen'].width() == 1 for _, curve, _, _ in plot.items()))
+        self.assertTrue(all(curve.opts['pen'].width() == series_line_width() for _, curve, _, _ in plot.items()))
         plot.select_series((self.path, 'pressure'))
         self.card.remove_series_at(self.card.series.index((self.path, 'pressure')))
         plot.update_visible_data()
         self.assertIsNone(plot.selected)
-        self.assertTrue(all(curve.opts['pen'].width() == 1 for _, curve, _, _ in plot.items()))
+        self.assertTrue(all(curve.opts['pen'].width() == series_line_width() for _, curve, _, _ in plot.items()))
 
     def test_state_event_bars_labels_and_independent_transforms(self):
         self.card.add_series(self.path, 'state')
@@ -338,19 +345,19 @@ class MultiPlotTests(unittest.TestCase):
         self.assertAlmostEqual(widget.marker_value(0), 1, delta=.05)
         self.assertEqual(plot.selected_axis.labelText, '')
         self.assertEqual(plot.selected_axis.tickStrings([.5], 1, .1), [''])
-        self.assertTrue(all(curve.opts['pen'].width() == 1 for _, curve, _, _ in plot.items()))
+        self.assertTrue(all(curve.opts['pen'].width() == series_line_width() for _, curve, _, _ in plot.items()))
         plot.update_visible_data()
         self.card.add_series(self.path, 'state')
         self.card.reload_plot_settings()
         self.assertIsNone(plot.selected)
-        self.assertTrue(all(curve.opts['pen'].width() == 1 for _, curve, _, _ in plot.items()))
+        self.assertTrue(all(curve.opts['pen'].width() == series_line_width() for _, curve, _, _ in plot.items()))
         gain, offset = plot.transforms[key]
         self.app.processEvents()
         point = widget.mapFromScene(plot.plot_item.vb.mapViewToScene(QPointF(2, 3000 * gain + offset)))
         self.assertEqual(plot.hit_series(widget.mapToScene(point)), key)
         QTest.mouseClick(widget.viewport(), Qt.MouseButton.LeftButton, pos=point)
         self.assertEqual(plot.selected, key)
-        self.assertEqual(plot.additional_series[0].curve.opts['pen'].width(), plot.selected_width)
+        self.assertEqual(plot.additional_series[0].curve.opts['pen'].width(), series_line_width(selected=True))
         # Clicking a trace selects it and also places the first marker there.
         self.assertAlmostEqual(widget.marker_value(0), 2, delta=.05)
 

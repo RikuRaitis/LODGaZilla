@@ -105,6 +105,10 @@ class WorkspaceFileFormatTests(unittest.TestCase):
         self.assertEqual(len(updated_recent_workspaces(updated, self.folder / "new.umw")), 10)
 
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class WorkspaceRestoreTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -278,6 +282,7 @@ class CardStateTests(unittest.TestCase):
             card.sample_limit_combo.setCurrentIndex(card.sample_limit_combo.count() - 1)
             card.axes_buttons["corner"].click()
             card.set_axis_stretch([1.0, 2.5, 0.25])
+            card.set_use_shader(True)
 
         with mock.patch.object(XYZPlotWidget, "view_class", CameraView):
             saved, restored, card = self.round_trip(
@@ -289,6 +294,7 @@ class CardStateTests(unittest.TestCase):
         self.assertEqual(saved["camera"]["distance"], 9)
         self.assertEqual((saved["axes_position"], card.axes_position), ("corner", "corner"))
         self.assertEqual((saved["axis_stretch"], list(card.axis_stretch)), ([1.0, 2.5, 0.25], [1.0, 2.5, 0.25]))
+        self.assertEqual((saved["use_shader"], card.use_shader), (True, True))
 
     def test_frequency_keeps_fft_settings_peak_line_and_view(self):
         def change(card):  # type: ignore[no-untyped-def]

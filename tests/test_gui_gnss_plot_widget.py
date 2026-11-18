@@ -39,7 +39,7 @@ class GnssCoordinateTests(unittest.TestCase):
         card = SimpleNamespace(draw_style="auto", _map_ready=False, _map_generation=0, _marker_times={0: None, 1: None}, _sync_time=None, _value_box_times={0: None, 1: None}, value_boxes=mock.Mock(),
                                _marker_revision=0, _marker_in_flight=False,
                                map_view=mock.Mock(), map_stack=mock.Mock(), map_loading=mock.Mock(),
-                               map_type=mock.Mock(), legend=mock.Mock(), satellite_radio=mock.Mock(), scale_bar_check=mock.Mock(),
+                               map_type=mock.Mock(), legend=mock.Mock(), satellite_radio=mock.Mock(), scale_bar_check=mock.Mock(), apply_series_widths=mock.Mock(),
                                close=mock.Mock(), _track_data=[],
                                palette=QApplication.palette, map_container=mock.Mock())
         card.map_view.page.return_value = page
@@ -60,6 +60,8 @@ class GnssCoordinateTests(unittest.TestCase):
             self.assertEqual(probe.args[0], 'window.gnssReady === true')
             probe.args[1](True)
             self.assertIn('setMarkers([99.0, null]', page.runJavaScript.call_args.args[0])
+            # The selection: its own color at full opacity, drawn above every track by default.
+            self.assertIn('"rgba(33, 150, 243, 1.000)", "always_top"', page.runJavaScript.call_args.args[0])
             delivered = page.runJavaScript.call_args.args[1]
             page.runJavaScript.reset_mock()
             card.set_vertical_marker(100)

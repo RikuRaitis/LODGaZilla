@@ -211,3 +211,44 @@ class CardVisibilityTests(_QtTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CenterViewTests(_QtTestCase):
+    def test_cards_with_a_zoomable_view_have_center_view(self):
+        from src.gui.plots.event_state import EventStatePlotWidget
+        from src.gui.plots.frequency import FrequencyPlotWidget
+        from src.gui.plots.gnss import GnssPlotWidget
+        from src.gui.plots.gnss_3d import Gnss3DPlotWidget
+        from src.gui.plots.image import ImagePlotWidget
+        from src.gui.plots.line import LinePlotWidget
+        from src.gui.plots.multi import MultiPlotWidget
+        from src.gui.plots.sample_interval import SampleIntervalPlotWidget
+        from src.gui.plots.xy import XYPlotWidget
+        from src.gui.plots.xyz import XYZPlotWidget
+        for card in (LinePlotWidget, MultiPlotWidget, SampleIntervalPlotWidget, EventStatePlotWidget,
+                     FrequencyPlotWidget, XYPlotWidget, XYZPlotWidget, GnssPlotWidget):
+            self.assertTrue(card.has_center_view, card.__name__)
+        # The 3D Map has its own Center view among its map controls; an image does not zoom.
+        for card in (Gnss3DPlotWidget, ImagePlotWidget):
+            self.assertFalse(card.has_center_view, card.__name__)
+        self.assertFalse(EventStatePlotWidget.center_view_fits_y)
+
+    def test_a_time_card_shows_its_whole_time_range_again(self):
+        from PySide6.QtCore import QThreadPool
+        from src.app.lodgazilla import PlotWorkspace
+
+        workspace = PlotWorkspace(settings_path=self.directory / "settings.json")
+        workspace.resize(900, 600)
+        workspace.show()
+        self.addCleanup(lambda: (workspace.close_all_plots(), workspace.close(), workspace.deleteLater(),
+                                 QThreadPool.globalInstance().waitForDone(5000)))
+        card = workspace.add_line_plot(self.make_cache(), "a")
+        self.app.processEvents()
+        self.assertIn(card.center_view_button, card.header_controls)
+        full = workspace._plot_navigator_full_ranges[card]
+        view = card.plot_view_box()
+        view.setXRange(full[0] + 10, full[0] + 20, padding=0)
+        card.center_view_button.click()
+        low, high = view.viewRange()[0]
+        self.assertAlmostEqual(low, full[0] - card.time_offset, places=3)
+        self.assertAlmostEqual(high, full[1] - card.time_offset, places=3)

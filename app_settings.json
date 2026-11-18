@@ -8,7 +8,8 @@
     "theme": "os"
   },
   "plot": {
-    "multi_selected_line_width": 5,
+    "series_line_width": 2,
+    "selected_series_line_width": 5,
     "multi_series_lane_height_percent": 20,
     "multi_filmstrip_height_pixels": 30,
     "minimum_diagnostic_width_pixels": 1,
@@ -20,6 +21,9 @@
     "marker_opacity_percent": 100,
     "selection_color": "#2196f3",
     "selection_opacity_percent": 22,
+    "track_selection_color": "#2196f3",
+    "track_selection_opacity_percent": 100,
+    "track_selection_layer": "always_top",
     "sync_marker_color": "#8e49e6",
     "values_box_opacity_percent": 70,
     "series_colors": [
@@ -55,6 +59,7 @@
     "marker_info_display": "active",
     "time_axis_display": "none",
     "show_legends": false,
+    "show_markers": false,
     "show_plot_navigator_time_row": true,
     "plot_navigator_expanded": true,
     "ai_panel_expanded": true,

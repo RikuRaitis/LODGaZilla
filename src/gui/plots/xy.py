@@ -14,7 +14,8 @@ from src.gui.plots.card_markers import PointMarkers
 from src.gui.plots.interactive import use_full_viewport_updates
 from src.gui.plots.legend import PlotLegendWidget
 from src.gui.plots.legend_groups import group_display_name
-from src.gui.plots.series_hover import install_series_name_hover, name_at_canvas_point
+from src.gui.plots.series_hover import install_series_name_hover, item_at_canvas_point, name_at_canvas_point
+from src.gui.plots.series_style import SELECT_TOLERANCE_PIXELS, series_line_width
 from src.data.sampling import SampledResult, decimation_step
 from src.data.h5_series import _canonical_to_native_range, _visible_sample_bounds
 from src.data.xyz import AxisSource, _aligned_values
@@ -22,7 +23,7 @@ from src.jobs.plot_groups import GroupedPlotLoadCoordinator
 from src.gui.plots.theme import apply_plot_palette
 from src.gui.plots.marker_info import MarkerInfoEntry, marker_entries_from_samples
 from src.gui.plots.markers import (
-    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
+    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, track_selection_layer, track_selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.gui.plots.series import (
@@ -37,6 +38,11 @@ from src.gui.plots.series import (
     _time_axis_metadata_from_group,
 )
 
+
+
+# The selection drawn above every graph (Selection drawn: Always on top), below the
+# marker points (19 and 20) and above the graphs (10, the selected one 15).
+SELECTION_TOP_Z = 18
 
 class XYInteractivePlotWidget(pg.PlotWidget):
     """Keep ordinary wheel input reserved for scrolling the plot workspace."""
@@ -61,6 +67,7 @@ XY_MAXIMUM_POINTS = 100_000
 
 class XYPlotWidget(PointMarkers, PlotBaseWidget):
     """One or more X/Y graphs with independently assigned axis pairs."""
+    has_center_view = True
     help_topic = "xy"
 
     marker_placed = Signal(float)
@@ -135,11 +142,14 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
         apply_plot_palette(self.plot_widget)
         self.value_boxes.apply_style()
 
+    def center_view(self) -> None:
+        """Show every graph in full again, as when it was loaded."""
+        self.plot_item.autoRange()
+
     def apply_marker_style(self) -> None:
         for index, highlight in enumerate(self.highlights):
             highlight.setPen(pg.mkPen(marker_color(index), width=max(2, marker_width())))
-        for item in self._selection_items:
-            item.setPen(pg.mkPen(selection_rgba(2.0), width=6))
+        self._draw_selection()
         self.value_boxes.apply_style()
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
@@ -159,6 +169,8 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
         self.hide_marker_data(forget=False)
         self._auto_range_load = True
         if not keep_graphs:
+            # The graphs may have moved or gone: the selection does not follow them.
+            self.select_series(None)
             for highlight in self.highlights:
                 highlight.setData([], [])
             self._loaded([], auto_range=False)
@@ -173,6 +185,8 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
         for curve, points in self._graph_items:
             curve.setVisible(style != "points")
             points.setVisible(style != "lines")
+        # The selected stretch follows: a line, points, or both.
+        self._draw_selection()
 
     def restore_workspace_state(self, state: dict) -> None:
         super().restore_workspace_state(state)
@@ -181,6 +195,25 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
             self._auto_range_load = False
             self.plot_item.vb.disableAutoRange()
             apply_view_range_state(self.plot_item.vb, state["view"])
+
+    def graph_at(self, position):  # type: ignore[no-untyped-def]
+        """The index of the graph drawn within SELECT_TOLERANCE_PIXELS of a canvas position, or None."""
+        items = [(item, index) for index, (curve, points) in enumerate(self._graph_items)
+                 if index < len(self.grouped_series.groups) for item in (curve, points)]
+        return item_at_canvas_point(self.plot_widget, position, items, SELECT_TOLERANCE_PIXELS)
+
+    def apply_series_widths(self):
+        """Every graph at the series width, the selected one wider and in front (its selection too)."""
+        for index, (curve, _points) in enumerate(self._graph_items):
+            if index >= len(self.grouped_series.groups):
+                continue
+            selected = index == self.selected_series
+            curve.setPen(pg.mkPen(self.grouped_series.groups[index].color, width=series_line_width(selected=selected)))
+            curve.setZValue(15 if selected else 10)
+        self._draw_selection()
+
+    def selected_legend_rows(self):  # type: ignore[no-untyped-def]
+        return (), self.selected_series
 
     def series_name_at(self, position):  # type: ignore[no-untyped-def]
         """The graph drawn under a canvas position, named by its sources, for the hover name."""
@@ -205,7 +238,7 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
                 points.setData([], [])
                 continue
             color = self.grouped_series.groups[index].color
-            curve.setPen(pg.mkPen(color, width=1))
+            curve.setPen(pg.mkPen(color, width=series_line_width(selected=index == self.selected_series)))
             curve.setData(result[1], result[2])
             points.setData(result[1], result[2], pen=pg.mkPen(color), brush=pg.mkBrush(color))
         self.apply_draw_style(self.draw_style)
@@ -249,20 +282,7 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
     def _update_selection(self) -> None:
         """Highlight each graph between the markers and load the selection statistics."""
         selection = self.selection_range()
-        while len(self._selection_items) < len(self.results):
-            # Above the graph so it stays visible, and translucent so the graph's
-            # color shows through; the marker points stay on top.
-            item = pg.PlotDataItem(pen=pg.mkPen(selection_rgba(2.0), width=6))
-            item.setZValue(10)
-            self.plot_item.addItem(item)
-            self._selection_items.append(item)
-        for index, item in enumerate(self._selection_items):
-            result = self.results[index] if index < len(self.results) else None
-            if selection is None or not isinstance(result, tuple):
-                item.setData([], [])
-                continue
-            inside = (result[0] >= selection[0]) & (result[0] <= selection[1])
-            item.setData(result[1][inside], result[2][inside])
+        self._draw_selection(selection)
         if selection is None:
             self._selection_request_id = self._selection_loads.invalidate()
             self.value_boxes.set_selection_duration(None)
@@ -272,6 +292,32 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
         self.value_boxes.set_selection_duration((selection[1] - selection[0]) * scale)
         if self.series:
             self._selection_request_id = self._selection_loads.request(*selection, list(self.series))
+
+    def _draw_selection(self, selection=None) -> None:  # type: ignore[no-untyped-def]
+        """Each graph's stretch between the markers, recolored (Settings > Plot)."""
+        if selection is None:
+            selection = self.selection_range()
+        while len(self._selection_items) < len(self.results):
+            item = pg.PlotDataItem()
+            self.plot_item.addItem(item)
+            self._selection_items.append(item)
+        # The stretch between the markers in the selection color, at its graph's width: above
+        # every graph, above its own graph only, or not drawn (Settings > Plot). The marker
+        # points stay on top.
+        layer, rgba = track_selection_layer(), track_selection_rgba()
+        for index, item in enumerate(self._selection_items):
+            result = self.results[index] if index < len(self.results) else None
+            if selection is None or not isinstance(result, tuple) or layer == "off":
+                item.setData([], [])
+                continue
+            inside = (result[0] >= selection[0]) & (result[0] <= selection[1])
+            width = series_line_width(selected=index == self.selected_series)
+            lines, points = self.draw_style != "points", self.draw_style != "lines"
+            item.setData(result[1][inside], result[2][inside],
+                         pen=pg.mkPen(rgba, width=width) if lines else None,
+                         symbol="o" if points else None, symbolSize=4, symbolPen=None, symbolBrush=pg.mkBrush(rgba))
+            own = self._graph_items[index][0].zValue() if index < len(self._graph_items) else 10
+            item.setZValue(SELECTION_TOP_Z if layer == "always_top" else own + 0.5)
 
     def _show_loaded_selection_statistics(
         self, request_id: int, _left: float, _right: float, statistics: list[SelectionStatistics]
@@ -341,6 +387,9 @@ class XYPlotWidget(PointMarkers, PlotBaseWidget):
         if mouse_event.double():
             self._clear_marker_from_view(index)
             return
+        if index == FIRST_MARKER:
+            # A left click selects the graph under it, or none, and still places the first marker.
+            self.select_series(self.graph_at(self.plot_widget.mapFromScene(mouse_event.scenePos())))
         if not len(self._time):
             return
         point = self.plot_item.vb.mapSceneToView(mouse_event.scenePos())

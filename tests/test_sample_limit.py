@@ -104,10 +104,15 @@ class SampleLimitSelectorTests(unittest.TestCase):
                     # The Offset and Help buttons sit next to Close; the selector comes next.
                     self.assertEqual(card.offset_button.geometry().right() + 2, card.controls_button.x() - 1)
                     self.assertEqual(card.help_button.geometry().right() + 2, card.offset_button.x() - 1)
-                    self.assertEqual(combo.geometry().right() + 2, card.help_button.x() - 1)
+                    neighbour = card.help_button
+                    if card.has_center_view:
+                        # Center view sits left of Help, then the selector.
+                        self.assertEqual(card.center_view_button.geometry().right() + 2, card.help_button.x() - 1)
+                        neighbour = card.center_view_button
+                    self.assertEqual(combo.geometry().right() + 2, neighbour.x() - 1)
                     if card_type is XYZPlotWidget:
-                        # The Reset camera button follows to the left of the selector.
-                        self.assertLess(card.reset_button.x(), combo.x())
+                        # The Center view button sits right of the selector, as on the other cards.
+                        self.assertGreater(card.center_view_button.x(), combo.x())
                     request.reset_mock()
                     combo.setCurrentIndex(combo.findData(SAMPLE_LIMIT_ALL))
                     self.assertEqual(card.sample_limit, SAMPLE_LIMIT_ALL)

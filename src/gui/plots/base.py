@@ -157,8 +157,15 @@ class PlotBaseWidget(QFrame):
     time_offset_changed = Signal(object, float)
     # The card's Legend button showed or hid its legend.
     legend_shown_changed = Signal(object)
+    # A time card's Center view: the workspace shows its whole time range (Plot navigator bar).
+    center_view_requested = Signal(object)
     # Cards without a time base, such as images, have no time offset.
     supports_time_offset = True
+    # Cards whose view can be zoomed or panned get the Center view button among their header
+    # controls; it calls ``center_view``.
+    has_center_view = False
+    # Time cards: Center view also fits the vertical axis to the data (Event/state lanes keep theirs).
+    center_view_fits_y = True
     supports_horizontal_layout = False
     accepts_series_drop = False
     accepts_axis_drop = False
@@ -184,6 +191,9 @@ class PlotBaseWidget(QFrame):
         # opens them; they close again when the card stops being active. The strip still drags.
         self._header_controls_shown = False
         self._suppressed_header_controls: list[QWidget] = []
+        # The series a left click selected (its identity is the card's own), drawn at the
+        # selected width and highlighted in the Legend; None when none is selected.
+        self._selected_series = None
 
         self.close_button = QToolButton(self)
         self.close_button.setIconSize(QSize(18, 18))
@@ -261,6 +271,17 @@ class PlotBaseWidget(QFrame):
         self.help_button.released.connect(
             lambda: QTimer.singleShot(0, self, lambda: setattr(self, "_help_closed_by_button", False)))
         self.header_controls.append(self.help_button)
+        if self.has_center_view:
+            # Center view, left of Help: the whole data back in view.
+            self.center_view_button = QToolButton(self)
+            self.center_view_button.setToolTip("Center view: show all the data again")
+            self.center_view_button.setAccessibleName("Center view")
+            self.center_view_button.setAutoRaise(True)
+            self.center_view_button.setFixedSize(self.close_button.size())
+            self.center_view_button.setIconSize(QSize(18, 18))
+            self.center_view_button.setIcon(plot_control_icon(self, "center-track"))
+            self.center_view_button.clicked.connect(self.center_view)
+            self.header_controls.append(self.center_view_button)
         self._help_popup: MouseHelpPopup | None = None
         self._help_closed_by_button = False
         self.sample_limit = self.default_sample_limit
@@ -325,6 +346,8 @@ class PlotBaseWidget(QFrame):
             self._show_controls_button_state()
             self._show_legend_button_state()
             self.help_button.setIcon(plot_control_icon(self, "help"))
+            if hasattr(self, "center_view_button"):
+                self.center_view_button.setIcon(plot_control_icon(self, "center-track"))
             self.offset_button.setIcon(plot_control_icon(self, self._offset_icon_name))
             for style, button in getattr(self, "draw_style_buttons", {}).items():
                 button.setIcon(plot_control_icon(self, f"draw-{style}"))
@@ -402,6 +425,36 @@ class PlotBaseWidget(QFrame):
         """The Close, Legend and Card controls buttons and every other control in the Drag strip's row."""
         return [self.close_button, self.legend_button, self.controls_button, *self.header_controls,
                 *self.header_left_controls]
+
+    def center_view(self) -> None:
+        """Show all the card's data again. Time cards ask the workspace, which knows their
+        whole time range (the Plot navigator's bar); other cards override this."""
+        self.center_view_requested.emit(self)
+
+    @property
+    def selected_series(self):
+        return self._selected_series
+
+    def select_series(self, key) -> None:  # type: ignore[no-untyped-def]
+        """Select a series (the card's own key), or none; it is drawn wider and its Legend row
+        highlighted. A left click within SELECT_TOLERANCE_PIXELS of a series selects it."""
+        if key == self._selected_series:
+            return
+        self._selected_series = key
+        self.apply_series_widths()
+        self.show_selected_series_in_legend()
+
+    def apply_series_widths(self) -> None:
+        """Draw the series at the current widths (``series_line_width``); cards with series override it."""
+
+    def selected_legend_rows(self):  # type: ignore[no-untyped-def]
+        """The Legend entry keys, or the group index, of the selected series: ((keys), group)."""
+        return (), None
+
+    def show_selected_series_in_legend(self) -> None:
+        keys, group = self.selected_legend_rows() if self._selected_series is not None else ((), None)
+        for legend in self.card_legends():
+            legend.set_selected(keys, group)
 
     def card_legends(self) -> list:
         """The card's legends (PlotLegendWidget); most cards have one."""

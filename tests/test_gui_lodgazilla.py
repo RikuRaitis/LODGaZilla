@@ -136,6 +136,10 @@ class ImportSchedulingTests(unittest.TestCase):
         self.assertTrue(request_conflicts_with_active(ImportRequest(folder, False, 1), active_h5))
 
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class PlotWorkspaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

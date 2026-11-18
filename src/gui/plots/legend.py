@@ -62,6 +62,8 @@ def set_legends_shown(shown: bool) -> None:
 # are shortened in the middle with "...", like the data folder field.
 LEGEND_WIDTH_PERCENT = [25]
 LEGEND_MINIMUM_WIDTH = 80
+# The selected series' rows: the selection blue, faint.
+SELECTED_ROW_BACKGROUND = "rgba(33, 150, 243, 0.35)"
 # Space between a Legend and its card's right edge, in pixels.
 LEGEND_RIGHT_MARGIN = 4
 
@@ -93,6 +95,10 @@ class PlotLegendWidget(QFrame):
         self._headers: list[QWidget] = []
         self.group_headers: list[QWidget] = []
         self.group_model = None
+        # The card's selected series: the row keys, or the group index, highlighted.
+        self._selected_keys: frozenset = frozenset()
+        self._selected_group: int | None = None
+        self._group_header_indexes: list[int | None] = []
         self._content = self
         self._scroll = None
         self._scroll_direction = 0
@@ -216,6 +222,8 @@ class PlotLegendWidget(QFrame):
         for entry in entries:
             if entry.group is not None and entry.group != previous_group:
                 header = QWidget(self._content)
+                header.setObjectName("legendRow")
+                header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 header_layout = QHBoxLayout(header)
                 header_layout.setContentsMargins(0, 3, 0, 0)
                 header_layout.setSpacing(4)
@@ -233,8 +241,11 @@ class PlotLegendWidget(QFrame):
                 self.layout.addWidget(header)
                 self._headers.append(header)
                 self.group_headers.append(header)
+                self._group_header_indexes.append(index)
             previous_group = entry.group
             row = QWidget(self._content)
+            row.setObjectName("legendRow")
+            row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(4)
@@ -263,6 +274,7 @@ class PlotLegendWidget(QFrame):
             footer.setFixedHeight(12)
             self.layout.addWidget(footer)
             self._headers.append(footer)
+        self._show_selection()
         if not self.rows:
             self.hide()
             return
@@ -274,6 +286,28 @@ class PlotLegendWidget(QFrame):
         # applied that deferred layout; otherwise an event/state legend may
         # retain a zero-width or stale geometry until the card is resized.
         QTimer.singleShot(0, self, self.reposition)
+
+    def set_selected(self, keys=(), group_index: int | None = None) -> None:
+        """Highlight the selected series' rows (by entry key), or its whole group."""
+        self._selected_keys = frozenset(keys)
+        self._selected_group = group_index
+        self._show_selection()
+
+    def selected_rows(self) -> list[QWidget]:
+        """The rows and group heading highlighted now."""
+        rows = [row for row, entry in zip(self.rows, self.entries)
+                if (self._selected_group is None and entry.group is None and entry.key in self._selected_keys)
+                or (self._selected_group is not None and entry.group_index == self._selected_group)]
+        rows += [header for header, index in zip(self.group_headers, self._group_header_indexes)
+                 if self._selected_group is not None and index == self._selected_group]
+        return rows
+
+    def _show_selection(self) -> None:
+        selected = set(map(id, self.selected_rows()))
+        for row in [*self.rows, *self.group_headers]:
+            row.setProperty("selectedSeries", id(row) in selected)
+            row.setStyleSheet(f"QWidget#legendRow {{ background: {SELECTED_ROW_BACKGROUND}; }}"
+                              if id(row) in selected else "")
 
     def show_drop_hint(self, point: QPoint) -> int:
         """Outline a hovered row, or mark the insertion gap between rows."""
@@ -353,6 +387,7 @@ class PlotLegendWidget(QFrame):
         self.rows.clear()
         self._headers.clear()
         self.group_headers.clear()
+        self._group_header_indexes.clear()
 
     def card_width(self) -> int:
         """The width of the card this legend belongs to."""

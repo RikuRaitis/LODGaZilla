@@ -158,6 +158,7 @@ Drag the dividers between the areas to resize them.
 | Icon | Button | Does |
 | --- | --- | --- |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/refresh.svg"><img src="assets/navigator_icons/light/refresh.svg" width="20" alt="refresh"></picture> | Refresh | Reads the data folder again. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/batch-h5.svg"><img src="assets/navigator_icons/light/batch-h5.svg" width="20" alt="batch"></picture> | Batch | For the whole data folder: **Generate missing H5 files** (files an importer plugin reads that have no H5 file yet), **Generate with plugin** (one importer or export plugin: missing ones, or all again) and **Re-generate all**, after an "Are you sure?". |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/sample-loss.svg"><img src="assets/navigator_icons/light/sample-loss.svg" width="20" alt="sample loss"></picture> | Sample loss | Highlights series with dropped samples. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/clipping.svg"><img src="assets/navigator_icons/light/clipping.svg" width="20" alt="clipping"></picture> | Clipping | Highlights series that hit their sensor's limits. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/navigator_icons/dark/hide-irrelevant.svg"><img src="assets/navigator_icons/light/hide-irrelevant.svg" width="20" alt="hide irrelevant"></picture> | Hide irrelevant series | Hides series the importer marks as hidden, such as system counters. |
@@ -168,6 +169,7 @@ so its icon changes when you click it; the table shows each one switched on.
 | Icons | Buttons | Do |
 | --- | --- | --- |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/time-axis-all.svg"><img src="assets/plot_icons/light/time-axis-all.svg" width="20" alt="time axis all"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/time-axis-bottom.svg"><img src="assets/plot_icons/light/time-axis-bottom.svg" width="20" alt="time axis bottom"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/time-axis-none.svg"><img src="assets/plot_icons/light/time-axis-none.svg" width="20" alt="time axis none"></picture> | Time axis | Show the time axis on every card, only on the bottom one, or on none. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/markers-shown.svg"><img src="assets/plot_icons/light/markers-shown.svg" width="20" alt="markers shown"></picture> | Markers | Off by default: no card places markers. Switching it off removes every marker and selection. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/markers-linked.svg"><img src="assets/plot_icons/light/markers-linked.svg" width="20" alt="markers linked"></picture> | Markers linked | All cards share the same markers. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/snap-nearest-timestamp.svg"><img src="assets/plot_icons/light/snap-nearest-timestamp.svg" width="20" alt="snap nearest timestamp"></picture> | Snap to nearest timestamp | A marker jumps to the nearest sample instead of staying where you clicked. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/views-linked.svg"><img src="assets/plot_icons/light/views-linked.svg" width="20" alt="views linked"></picture> | Plot views linked | Zooming or panning one time card zooms and pans them all. |
@@ -187,14 +189,14 @@ hide again when another card becomes active.
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/legend-shown.svg"><img src="assets/plot_icons/light/legend-shown.svg" width="20" alt="legend shown"></picture> | Legend | Shows or hides this card's legend. Only on cards with a legend; saved in workspaces. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/card-controls-hidden.svg"><img src="assets/plot_icons/light/card-controls-hidden.svg" width="20" alt="card controls"></picture> | Card controls | Shows or hides this card's controls below. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/help.svg"><img src="assets/plot_icons/light/help.svg" width="20" alt="help"></picture> | Help | Lists every mouse action of this card. When in doubt, click it. |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/center-track.svg"><img src="assets/plot_icons/light/center-track.svg" width="20" alt="center view"></picture> | Center view | Shows all the card's data again: a time card's whole time range (or the part trimmed on the Plot navigator), every graph or track. On every card that zooms: Line, Multi-series, Sample interval, Event/state, Frequency, X/Y, 3D plot (the camera back to the whole trace), Map and 3D Map. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/time-offset.svg"><img src="assets/plot_icons/light/time-offset.svg" width="20" alt="time offset"></picture> | Time offset | Sets the card's [time offset](#time-offsets). Highlighted while an offset is set. |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/close.svg"><img src="assets/plot_icons/light/close.svg" width="20" alt="close"></picture> | Close | Closes the card. Always shown, rightmost. |
 
 Cards that draw lines add the [draw style](#lines-or-points) buttons <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-auto.svg"><img src="assets/plot_icons/light/draw-auto.svg" width="20" alt="draw auto"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-lines.svg"><img src="assets/plot_icons/light/draw-lines.svg" width="20" alt="draw lines"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/draw-points.svg"><img src="assets/plot_icons/light/draw-points.svg" width="20" alt="draw points"></picture> (Auto, Lines, Points).
 Some cards add their own controls next to these: the [sample limit](#sample-limits)
-dropdown, the Frequency card's FFT settings <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/fft-settings.svg"><img src="assets/plot_icons/light/fft-settings.svg" width="20" alt="fft settings"></picture>, the 3D plot's reset
-camera button <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/reset-camera.svg"><img src="assets/plot_icons/light/reset-camera.svg" width="20" alt="reset camera"></picture> and axes buttons <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-origin.svg"><img src="assets/plot_icons/light/axes-origin.svg" width="20" alt="axes at origin"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-corner.svg"><img src="assets/plot_icons/light/axes-corner.svg" width="20" alt="axes at corner"></picture> (through 0, 0, 0 or along the corner), the Map type (street or satellite) and the Video
+dropdown, the Frequency card's FFT settings <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/fft-settings.svg"><img src="assets/plot_icons/light/fft-settings.svg" width="20" alt="fft settings"></picture>, the 3D plot's axes buttons <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-origin.svg"><img src="assets/plot_icons/light/axes-origin.svg" width="20" alt="axes at origin"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-corner.svg"><img src="assets/plot_icons/light/axes-corner.svg" width="20" alt="axes at corner"></picture> (through 0, 0, 0 or along the corner), the Map type (street or satellite) and the Video
 card's preview size. The [3D Map](#3d-map) puts its map controls along the left of its
 top strip. Drag the strip at the top of a card to move it, and its bottom edge
 to resize it.
@@ -267,6 +269,18 @@ batch conversion.
 | More, or a mix with events or states | Multi-series                                            |
 | A video or image                     | Video or Image                                          |
 
+### Selecting a series
+
+**Left-click a series** (a line, lane, graph, trace or map track) to select it: it is
+drawn wider and in front, and its Legend row is highlighted. A click farther from every
+series selects none. The left click still places the red marker. Every card with more
+than one series can select one; the Frequency card holds one series and selects none.
+The widths of all series and of the selected one are **Series line width** (2 px) and
+**Selected series line width** (5 px) in Settings, Plot. The 3D plot draws its traces 1 px
+wide, as OpenGL does, unless **Use shader** is on in its card controls (off by default); then
+they follow these widths, drawn by the graphics card. The selection is not saved in
+workspaces.
+
 ### Legends
 
 Each card's legend lists its series, at the card's right edge. Every legend is the
@@ -287,7 +301,8 @@ remove the whole graph.
 
 ### Markers and selection
 
-Every card except Image has two markers:
+Markers are off until you switch on the **Markers** button in the Plot navigator; switching it
+off again removes every marker and selection. With it on, every card except Image has two markers:
 
 
 | Action                            | Result                          |
@@ -300,7 +315,9 @@ Every card except Image has two markers:
 With both markers placed, the time between them is the **selection**, painted blue.
 With **Markers linked**, every card shows the same markers. On X/Y, 3D plot and map
 cards a click marks the nearest point, and the selection is that stretch of the graph
-or track.
+or track, drawn in its own colour at the track's width. Settings > Plot sets that colour
+and opacity apart from the time cards' shading, and whether the stretch is drawn above
+every track, only above its own track, or not at all.
 
 A **values box** shows each series' value at a marker. Hover over it for the details,
 which start with the series' whole name; with a selection, they include minimum,

@@ -151,7 +151,8 @@ class SettingsEditorWidget(QWidget):
         self.lod_bucket_growth_spin = integer_spinbox(2, 128)
         self.lod_bucket_growth_spin.setToolTip("Factor between LOD levels")
         self.minimum_diagnostic_width_pixels_spin = integer_spinbox(1, 100, " px")
-        self.multi_selected_line_width_spin = integer_spinbox(1, 20, " px")
+        self.series_line_width_spin = integer_spinbox(1, 20, " px")
+        self.selected_series_line_width_spin = integer_spinbox(1, 20, " px")
         self.multi_series_lane_height_spin = integer_spinbox(2, 50, " %")
         self.multi_filmstrip_height_spin = integer_spinbox(15, 240, " px")
         self.first_marker_color_button = ColorButton("First marker")
@@ -161,6 +162,12 @@ class SettingsEditorWidget(QWidget):
         self.marker_width_spin = integer_spinbox(1, 10, " px")
         self.marker_opacity_spin = integer_spinbox(10, 100, " %")
         self.selection_opacity_spin = integer_spinbox(5, 100, " %")
+        # The selection on cards without time on the X axis.
+        self.track_selection_color_button = ColorButton("Selection on X/Y, 3D and map cards")
+        self.track_selection_opacity_spin = integer_spinbox(5, 100, " %")
+        self.track_selection_layer_combo = QComboBox()
+        for value, text in (("always_top", "Always on top"), ("own_trace", "On its own trace"), ("off", "Off")):
+            self.track_selection_layer_combo.addItem(text, value)
         # Default colors for new series, tracks and lanes, in the order they are used.
         self.series_color_buttons = [ColorButton(f"Series {number}") for number in range(1, 7)]
         self.values_box_opacity_spin = integer_spinbox(0, 100, " %")
@@ -324,8 +331,11 @@ class SettingsEditorWidget(QWidget):
         layout.addRow("Second marker", self.second_marker_color_button)
         layout.addRow("Marker width", self.marker_width_spin)
         layout.addRow("Marker opacity", self.marker_opacity_spin)
-        layout.addRow("Selection", self.selection_color_button)
-        layout.addRow("Selection opacity", self.selection_opacity_spin)
+        layout.addRow("Selection (time cards)", self.selection_color_button)
+        layout.addRow("Selection opacity (time cards)", self.selection_opacity_spin)
+        layout.addRow("Selection (X/Y, 3D, maps)", self.track_selection_color_button)
+        layout.addRow("Selection opacity (X/Y, 3D, maps)", self.track_selection_opacity_spin)
+        layout.addRow("Selection drawn (X/Y, 3D, maps)", self.track_selection_layer_combo)
         layout.addRow("Values box opacity", self.values_box_opacity_spin)
         layout.addRow("Video sync marker", self.sync_marker_color_button)
         return group
@@ -342,10 +352,11 @@ class SettingsEditorWidget(QWidget):
     def plot_group(self) -> QGroupBox:
         group, layout = form_group("Cards")
         layout.addRow("Same time format on all time cards", self.link_plot_time_format_checkbox)
+        layout.addRow("Series line width", self.series_line_width_spin)
+        layout.addRow("Selected series line width", self.selected_series_line_width_spin)
         layout.addRow("Legend width", self.legend_width_spin)
         layout.addRow("Series name delay", self.series_name_hover_delay_spin)
         layout.addRow("Minimum warning band width", self.minimum_diagnostic_width_pixels_spin)
-        layout.addRow("Multi-series: selected trace width", self.multi_selected_line_width_spin)
         layout.addRow("Multi-series: lane height", self.multi_series_lane_height_spin)
         layout.addRow("Multi-series: filmstrip height", self.multi_filmstrip_height_spin)
         return group
@@ -568,7 +579,8 @@ class SettingsEditorWidget(QWidget):
         self.lod_target_buckets_spin.setValue(int(hdf5_settings["lod_target_buckets"]))
         self.lod_bucket_growth_spin.setValue(int(hdf5_settings["lod_bucket_growth"]))
         plot_settings = sanitize_plot_settings(section_mapping(self.settings_data, PLOT_SECTION))
-        self.multi_selected_line_width_spin.setValue(int(plot_settings["multi_selected_line_width"]))
+        self.series_line_width_spin.setValue(int(plot_settings["series_line_width"]))
+        self.selected_series_line_width_spin.setValue(int(plot_settings["selected_series_line_width"]))
         self.multi_series_lane_height_spin.setValue(int(plot_settings["multi_series_lane_height_percent"]))
         self.multi_filmstrip_height_spin.setValue(int(plot_settings["multi_filmstrip_height_pixels"]))
         self.first_marker_color_button.set_color(str(plot_settings["first_marker_color"]))
@@ -578,6 +590,10 @@ class SettingsEditorWidget(QWidget):
         self.selection_color_button.set_color(str(plot_settings["selection_color"]))
         self.sync_marker_color_button.set_color(str(plot_settings["sync_marker_color"]))
         self.selection_opacity_spin.setValue(int(plot_settings["selection_opacity_percent"]))
+        self.track_selection_color_button.set_color(str(plot_settings["track_selection_color"]))
+        self.track_selection_opacity_spin.setValue(int(plot_settings["track_selection_opacity_percent"]))
+        self.track_selection_layer_combo.setCurrentIndex(
+            max(0, self.track_selection_layer_combo.findData(plot_settings["track_selection_layer"])))
         self.values_box_opacity_spin.setValue(int(plot_settings["values_box_opacity_percent"]))
         self.legend_width_spin.setValue(int(plot_settings["legend_width_percent"]))
         self.series_name_hover_delay_spin.setValue(int(plot_settings["series_name_hover_delay_ms"]))
@@ -679,7 +695,8 @@ class SettingsEditorWidget(QWidget):
         data[PLOT_SECTION] = sanitize_plot_settings({
             **section_mapping(data, PLOT_SECTION),
             "minimum_diagnostic_width_pixels": self.minimum_diagnostic_width_pixels_spin.value(),
-            "multi_selected_line_width": self.multi_selected_line_width_spin.value(),
+            "series_line_width": self.series_line_width_spin.value(),
+            "selected_series_line_width": self.selected_series_line_width_spin.value(),
             "multi_series_lane_height_percent": self.multi_series_lane_height_spin.value(),
             "multi_filmstrip_height_pixels": self.multi_filmstrip_height_spin.value(),
             "first_marker_color": self.first_marker_color_button.color(),
@@ -689,6 +706,9 @@ class SettingsEditorWidget(QWidget):
             "selection_color": self.selection_color_button.color(),
             "sync_marker_color": self.sync_marker_color_button.color(),
             "selection_opacity_percent": self.selection_opacity_spin.value(),
+            "track_selection_color": self.track_selection_color_button.color(),
+            "track_selection_opacity_percent": self.track_selection_opacity_spin.value(),
+            "track_selection_layer": self.track_selection_layer_combo.currentData(),
             "values_box_opacity_percent": self.values_box_opacity_spin.value(),
             "series_colors": [button.color() for button in self.series_color_buttons],
             "legend_width_percent": self.legend_width_spin.value(),

@@ -55,7 +55,10 @@ DEFAULT_HDF5_SETTINGS: dict[str, Any] = {
 # painted blue, and red and green because the markers use them.
 SERIES_COLOR_DEFAULTS = ("#ff9800", "#9c27b0", "#d81b60", "#00897b", "#9e9d24", "#757575")
 DEFAULT_PLOT_SETTINGS: dict[str, Any] = {
-    "multi_selected_line_width": 5,
+    # Line width of every series, track and lane outline in every card, and of the
+    # selected one (a click on a series selects it).
+    "series_line_width": 2,
+    "selected_series_line_width": 5,
     # Height of one Multi-series lane, as a percentage of the card height.
     "multi_series_lane_height_percent": 20,
     # Height of a video filmstrip lane in a Multi-series card, in screen pixels.
@@ -70,6 +73,11 @@ DEFAULT_PLOT_SETTINGS: dict[str, Any] = {
     # Fill between the markers; bands drawn over a line use twice this opacity.
     "selection_color": "#2196f3",
     "selection_opacity_percent": 22,
+    # The selection on X/Y, 3D plot, Map and 3D Map cards: the stretch between the markers
+    # recolored, and drawn above everything ("always_top"), above its trace ("own_trace") or not ("off").
+    "track_selection_color": "#2196f3",
+    "track_selection_opacity_percent": 100,
+    "track_selection_layer": "always_top",
     # A Video card's stored sync data marker.
     "sync_marker_color": "#8e49e6",
     # Background opacity of the per-series values boxes.
@@ -107,6 +115,8 @@ DEFAULT_LODGAZILLA_SETTINGS: dict[str, Any] = {
     "time_axis_display": "none",
     # The Plot navigator's Legends button.
     "show_legends": False,
+    # The Plot navigator's Markers button: off, no card places markers.
+    "show_markers": False,
     "show_plot_navigator_time_row": True,
     "plot_navigator_expanded": True,
     # The AI panel below the Navigator is open (at its minimum height) or one row.
@@ -453,7 +463,10 @@ def load_plot_settings(settings_path: str | Path | None = DEFAULT_APP_SETTINGS_P
 
 def sanitize_plot_settings(raw_settings: dict[str, Any]) -> dict[str, Any]:
     return {
-        "multi_selected_line_width": bounded_int(raw_settings.get("multi_selected_line_width"), 1, 20, 5),
+        "series_line_width": bounded_int(raw_settings.get("series_line_width"), 1, 20, 2),
+        # Older settings named it after the Multi-series card.
+        "selected_series_line_width": bounded_int(
+            raw_settings.get("selected_series_line_width", raw_settings.get("multi_selected_line_width")), 1, 20, 5),
         "multi_series_lane_height_percent": bounded_int(
             raw_settings.get("multi_series_lane_height_percent"), 2, 50, 20
         ),
@@ -473,6 +486,11 @@ def sanitize_plot_settings(raw_settings: dict[str, Any]) -> dict[str, Any]:
         "marker_opacity_percent": bounded_int(raw_settings.get("marker_opacity_percent"), 10, 100, 100),
         "selection_color": color_setting(raw_settings.get("selection_color"), "#2196f3"),
         "selection_opacity_percent": bounded_int(raw_settings.get("selection_opacity_percent"), 5, 100, 22),
+        "track_selection_color": color_setting(raw_settings.get("track_selection_color"), "#2196f3"),
+        "track_selection_opacity_percent": bounded_int(raw_settings.get("track_selection_opacity_percent"), 5, 100, 100),
+        "track_selection_layer": (str(raw_settings.get("track_selection_layer"))
+                                  if raw_settings.get("track_selection_layer") in ("always_top", "own_trace", "off")
+                                  else "always_top"),
         "sync_marker_color": color_setting(raw_settings.get("sync_marker_color"), "#8e49e6"),
         "values_box_opacity_percent": bounded_int(raw_settings.get("values_box_opacity_percent"), 0, 100, 70),
         "series_colors": series_color_setting(raw_settings.get("series_colors")),
@@ -547,6 +565,7 @@ def sanitize_lodgazilla_settings(raw_settings: dict[str, Any]) -> dict[str, Any]
         if str(raw_settings.get("time_axis_display", "none")) in TIME_AXIS_DISPLAY_MODES
         else "none",
         "show_legends": bool(raw_settings.get("show_legends", False)),
+        "show_markers": bool(raw_settings.get("show_markers", False)),
         "show_plot_navigator_time_row": bool(
             raw_settings.get("show_plot_navigator_time_row", True)
         ),

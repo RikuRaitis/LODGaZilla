@@ -23,6 +23,10 @@ from src.gui.plots.selection_info import SelectionDurationInfo
 from src.gui.plots.series import SelectionStatisticsLoader
 
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class SelectionDurationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

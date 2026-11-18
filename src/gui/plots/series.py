@@ -30,7 +30,8 @@ from src.gui.plots.base import SERIES_COLORS, assign_series_colors, series_legen
 from src.gui.plots.interactive import InteractivePlotWidget
 from src.gui.plots.diagnostic_areas import CLIPPING, SAMPLE_LOSS, DiagnosticAreas
 from src.gui.plots.selection_info import SelectionDurationInfo
-from src.gui.plots.series_hover import install_series_name_hover, name_at_canvas_point
+from src.gui.plots.series_hover import install_series_name_hover, item_at_canvas_point, name_at_canvas_point
+from src.gui.plots.series_style import SELECT_TOLERANCE_PIXELS, series_line_width
 from src.gui.plots.theme import apply_plot_palette
 from src.gui.plots.marker_info import MarkerInfoEntry, marker_entries_from_samples
 from src.gui.plots.markers import FIRST_MARKER, SECOND_MARKER
@@ -801,7 +802,9 @@ class SeriesPlotWidget(QWidget):
         # would only repeat that information and consume vertical space.
         self.plot_item.setLabel("bottom", "")
         self.primary_color = DEFAULT_SERIES_COLORS[0]
-        self.curve = pg.PlotCurveItem(pen=pg.mkPen(self.primary_color, width=1))
+        # The selected series' source, drawn at the selected width.
+        self.selected_entry: tuple[Path, str] | None = None
+        self.curve = pg.PlotCurveItem(pen=pg.mkPen(self.primary_color, width=series_line_width()))
         self.curve.setZValue(10)
         self.markers = pg.ScatterPlotItem(
             symbol="o",
@@ -901,7 +904,7 @@ class SeriesPlotWidget(QWidget):
         # The visible window of every entry is loaded once, below.
         self._set_primary_series(primary_path, primary_name, self.primary_plot_mode, reload_diagnostics=False)
         for (h5_path, series_name), color in zip(normalized_entries[1:], colors[1:]):
-            curve = pg.PlotCurveItem(pen=pg.mkPen(color, width=1))
+            curve = pg.PlotCurveItem(pen=pg.mkPen(color, width=self._line_width((h5_path, series_name))))
             markers = pg.ScatterPlotItem(
                 symbol="o", size=5, pen=pg.mkPen(color), brush=pg.mkBrush(color)
             )
@@ -911,6 +914,7 @@ class SeriesPlotWidget(QWidget):
             self.plot_item.addItem(markers)
             self.additional_series.append(AdditionalSeries(h5_path, series_name, color, curve, markers))
         self._series_entries = normalized_entries
+        self.apply_line_widths()
         self._reload_failure_regions()
         self.update_visible_data(auto_range=True)
         return self.all_current_data()
@@ -941,6 +945,34 @@ class SeriesPlotWidget(QWidget):
             items += [(entry.curve, name), (entry.markers, name)]
         return name_at_canvas_point(self.plot_widget, position, items)
 
+    def entry_at(self, position) -> tuple[Path, str] | None:  # type: ignore[no-untyped-def]
+        """The source of the series drawn within SELECT_TOLERANCE_PIXELS of a canvas position."""
+        items = []
+        if self._series_entries:
+            items += [(self.curve, self._series_entries[0]), (self.markers, self._series_entries[0])]
+        for entry in self.additional_series:
+            source = (entry.h5_path, entry.series_name)
+            items += [(entry.curve, source), (entry.markers, source)]
+        return item_at_canvas_point(self.plot_widget, position, items, SELECT_TOLERANCE_PIXELS)
+
+    def _line_width(self, source) -> int:  # type: ignore[no-untyped-def]
+        return series_line_width(selected=source is not None and source == self.selected_entry)
+
+    def set_selected_entry(self, source) -> None:  # type: ignore[no-untyped-def]
+        """Draw this series (its source) at the selected width, or none."""
+        self.selected_entry = source
+        self.apply_line_widths()
+
+    def apply_line_widths(self) -> None:
+        """Every line at the series width, the selected one wider and in front."""
+        primary = self._series_entries[0] if self._series_entries else None
+        self.curve.setPen(pg.mkPen(self.primary_color, width=self._line_width(primary)))
+        self.curve.setZValue(15 if primary is not None and primary == self.selected_entry else 10)
+        for entry in self.additional_series:
+            source = (entry.h5_path, entry.series_name)
+            entry.curve.setPen(pg.mkPen(entry.color, width=self._line_width(source)))
+            entry.curve.setZValue(15 if source == self.selected_entry else 10)
+
     def set_entry_colors(self, colors: dict[tuple[Path, str], str]) -> None:
         """Use these colors for the sources when they are next shown."""
         self._entry_colors.update({(Path(path), str(name)): str(color) for (path, name), color in colors.items()})
@@ -953,7 +985,8 @@ class SeriesPlotWidget(QWidget):
 
     def _apply_primary_color(self, color: str) -> None:
         self.primary_color = color
-        self.curve.setPen(pg.mkPen(color, width=1))
+        primary = self._series_entries[0] if self._series_entries else None
+        self.curve.setPen(pg.mkPen(color, width=self._line_width(primary)))
         self.markers.setPen(pg.mkPen(color))
         self.markers.setBrush(pg.mkBrush(color))
 
@@ -965,7 +998,7 @@ class SeriesPlotWidget(QWidget):
         elif 0 <= index - 1 < len(self.additional_series):
             entry = self.additional_series[index - 1]
             entry.color = color
-            entry.curve.setPen(pg.mkPen(color, width=1))
+            entry.curve.setPen(pg.mkPen(color, width=self._line_width((entry.h5_path, entry.series_name))))
             entry.markers.setPen(pg.mkPen(color))
             entry.markers.setBrush(pg.mkBrush(color))
         self._apply_diagnostic_colors()

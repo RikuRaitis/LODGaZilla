@@ -119,9 +119,13 @@ from src.app.card_modules import CardModuleLoader, LazyAttribute, card_modules_l
 from src.app.startup import start_application
 from src.data.navigator_data import read_h5_navigator_data
 from src.gui.plots.navigator import PlotNavigatorEntry, PlotNavigatorWidget
-from src.gui.plots.markers import SECOND_MARKER, set_marker_style, set_selection_style, set_sync_marker_color
+from src.gui.plots.markers import (
+    SECOND_MARKER, markers_shown, set_marker_style, set_markers_shown, set_selection_style, set_sync_marker_color,
+    set_track_selection_style,
+)
 from src.gui.plots.base import set_series_colors
 from src.gui.plots.legend import PlotLegendWidget, set_legend_width_percent, set_legends_shown
+from src.gui.plots.series_style import set_series_line_widths
 from src.gui.plots.series_hover import set_series_name_hover_delay
 from src.app.internal_log import InternalLogger, InternalLogPanel, NativeStderrLogCapture
 from src.gui.ai.panel import CREATE_PLUGIN, NOT_CONNECTED_REPLY, AIPanel
@@ -138,7 +142,10 @@ from src.data.folder_info import (
     source_entry, video_attachment_path, write_info_file,
 )
 from src.contracts.jobs import SOURCE_FILES_PARAMETER, SOURCE_OUTPUT_EVENT
-from src.jobs.source_detection import STATE_INCOMPLETE, STATE_CURRENT, STATE_OUTDATED, STATE_UNSUPPORTED, ExportSpec, SourceDetection
+from src.jobs.source_detection import (
+    STATE_CURRENT, STATE_INCOMPLETE, STATE_MISSING, STATE_NEW, STATE_OUTDATED, STATE_UNSUPPORTED, ExportSpec,
+    SourceDetection,
+)
 from src.data.workspace_file import (
     UMW_FILE_FILTER, UMW_SUFFIX, WorkspaceFileError, read_workspace_file, updated_recent_workspaces,
     write_workspace_file,
@@ -669,6 +676,7 @@ class PlotWorkspace(QScrollArea):
         plot.wheel_scrolled.connect(self.scroll_workspace)
         plot.time_offset_changed.connect(self.on_time_offset_changed)
         plot.legend_shown_changed.connect(self.on_card_legend_shown_changed)
+        plot.center_view_requested.connect(self.center_card_view)
         if isinstance(plot, TIME_CARD_TYPES):
             install_offset_x_link(plot.plot_view_box())
             # The plot area also changes without a layout change: a workspace scroll bar
@@ -1187,7 +1195,23 @@ class PlotWorkspace(QScrollArea):
         elif plot is self.active_plot:
             self._show_card_markers_in_navigator(plot)
 
+    def set_markers_shown(self, shown: bool) -> None:
+        """Allow markers, or hide them: every card's markers and selection, and the Plot
+        navigator's, are cleared, and no card places one until they are shown again."""
+        set_markers_shown(shown)
+        if shown:
+            return
+        self.clear_marker_from_plot_navigator()
+        self.clear_second_marker_from_plot_navigator()
+        for plot in self.plots():
+            if isinstance(plot, TWO_MARKER_CARD_TYPES):
+                for index in (SECOND_MARKER, 0):
+                    plot.clear_vertical_marker(index)
+        self.plot_navigator_changed.emit(None)
+
     def place_marker_from_plot_navigator(self, timestamp: float) -> None:
+        if not markers_shown():
+            return
         self._place_marker_from_plot_navigator(timestamp, 0)
         self._global_marker_timestamp = float(timestamp)
         self.global_marker_changed.emit(self._global_marker_timestamp)
@@ -1200,6 +1224,8 @@ class PlotWorkspace(QScrollArea):
         self.global_marker_changed.emit(None)
 
     def place_second_marker_from_plot_navigator(self, timestamp: float) -> None:
+        if not markers_shown():
+            return
         self._place_marker_from_plot_navigator(timestamp, SECOND_MARKER)
         self._global_second_marker_timestamp = float(timestamp)
         self.global_second_marker_changed.emit(self._global_second_marker_timestamp)
@@ -1256,6 +1282,24 @@ class PlotWorkspace(QScrollArea):
         set_legends_shown(self.legends_shown)
         for plot in self.plots():
             plot.set_legend_shown(self.legends_shown, notify=False)
+
+    def center_card_view(self, plot: PlotBaseWidget) -> None:
+        """A time card's Center view: its time range on the Plot navigator (all its data, or the
+        trimmed part), in its own time, and the vertical axis fitted to the data."""
+        if not hasattr(plot, "plot_view_box"):
+            return
+        view = plot.plot_view_box()
+        shown = self._plot_navigator_ranges.get(plot) or self._plot_navigator_full_ranges.get(plot)
+        if shown is None:
+            shown = self._plot_time_range(plot)
+        if shown is not None:
+            start, stop = sorted(shown)
+            offset = plot.time_offset
+            view.setXRange(start - offset, stop - offset, padding=0)
+        else:
+            view.enableAutoRange(axis=view.XAxis)
+        if plot.center_view_fits_y:
+            view.enableAutoRange(axis=view.YAxis)
 
     def all_legends_shown(self) -> bool:
         """Whether every open card with a legend shows it; with none, the default for new cards."""
@@ -1325,12 +1369,17 @@ class PlotWorkspace(QScrollArea):
         set_marker_style(str(plot_settings["first_marker_color"]), str(plot_settings["second_marker_color"]),
                          int(plot_settings["marker_width"]), int(plot_settings["marker_opacity_percent"]))
         set_selection_style(str(plot_settings["selection_color"]), int(plot_settings["selection_opacity_percent"]))
+        set_track_selection_style(str(plot_settings["track_selection_color"]),
+                                  int(plot_settings["track_selection_opacity_percent"]),
+                                  str(plot_settings["track_selection_layer"]))
         set_sync_marker_color(str(plot_settings["sync_marker_color"]))
         set_value_box_opacity(int(plot_settings["values_box_opacity_percent"]))
         set_series_colors(plot_settings["series_colors"])
         set_legend_width_percent(int(plot_settings["legend_width_percent"]))
+        set_series_line_widths(int(plot_settings["series_line_width"]), int(plot_settings["selected_series_line_width"]))
         set_series_name_hover_delay(int(plot_settings["series_name_hover_delay_ms"]))
         for plot in self.plots():
+            plot.apply_series_widths()
             for legend in plot.findChildren(PlotLegendWidget):
                 if legend.isVisible():
                     legend.reposition()
@@ -1899,7 +1948,10 @@ class PlotWorkspace(QScrollArea):
                 card.plot_view_box().setXRange(float(view[0][0]), float(view[0][1]), padding=0)
 
     def _restore_markers(self, cards) -> None:  # type: ignore[no-untyped-def]
-        """Place saved markers as if clicked: linked markers once, unlinked ones on each card."""
+        """Place saved markers as if clicked: linked markers once, unlinked ones on each card.
+        While markers are hidden (the Plot navigator's Markers button) none are placed."""
+        if not markers_shown():
+            return
         marked = [(card, record["markers"]) for card, record in cards
                   if isinstance(card, TWO_MARKER_CARD_TYPES) and any(value is not None for value in record.get("markers", []))]
         for card, markers in marked[:1] if self.link_markers else marked:
@@ -2133,6 +2185,8 @@ class LODGaZillaWindow(QMainWindow):
         self.plot_navigator = PlotNavigatorWidget()
         # The File bar's Settings button, last after the workspace buttons.
         self.navigator.controls.settings_requested.connect(lambda: self.show_settings())
+        self.batch_menu = self.navigator.controls.batch_menu
+        self.batch_menu.aboutToShow.connect(self.populate_batch_menu)
         startup_mark("plot navigator construction completed")
         self.plot_workspace.plot_navigator_changed.connect(self.plot_navigator.set_entries)
         self.plot_workspace.global_marker_changed.connect(self.plot_navigator.set_marker)
@@ -2164,6 +2218,7 @@ class LODGaZillaWindow(QMainWindow):
         self.plot_navigator.marker_info_display_changed.connect(self.set_marker_info_display)
         self.plot_navigator.time_axis_display_changed.connect(self.set_time_axis_display)
         self.plot_navigator.legends_visibility_changed.connect(self.set_legends_shown)
+        self.plot_navigator.markers_visibility_changed.connect(self.set_markers_shown)
         # A card's own Legend button changes only the Legends button's look, not the saved default.
         self.plot_workspace.legends_state_changed.connect(self.plot_navigator.set_legends_shown)
         self.plot_navigator.snap_to_nearest_changed.connect(self.set_snap_to_nearest)
@@ -3045,6 +3100,75 @@ class LODGaZillaWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 return
         self.run_source(folder, row)
+
+    def batch_rows(self, *, missing_only: bool, plugin_id: str | None = None, kind: str = SOURCE_IMPORT):
+        """The Source data rows a Batch action runs: those its plugin can run, every folder.
+
+        ``missing_only`` keeps rows not generated yet (or whose output is gone); otherwise
+        generated ones too. Imports are by an importer plugin (not Magic drop); ``plugin_id``
+        keeps one plugin's rows."""
+        wanted = {STATE_NEW, STATE_MISSING} if missing_only else {STATE_NEW, STATE_MISSING, STATE_CURRENT,
+                                                                 STATE_OUTDATED}
+        return [(folder, row) for folder, row in self.navigator.all_source_rows()
+                if row.kind == kind and not row.member and not row.draft and row.plugin_id
+                and row.state in wanted and (plugin_id is None or row.plugin_id == plugin_id)]
+
+    def populate_batch_menu(self) -> None:
+        """The Batch button's menu: generate the missing H5 files, with one plugin, or all again."""
+        menu = self.batch_menu
+        menu.clear()
+        menu.setToolTipsVisible(True)
+        missing = self.batch_rows(missing_only=True)
+        action = menu.addAction(f"Generate missing H5 files ({len(missing)})",
+                                lambda: self.run_batch(self.batch_rows(missing_only=True)))
+        action.setToolTip("Every file an importer plugin can read that has no H5 file yet; "
+                          "files already generated stay as they are")
+        action.setEnabled(bool(missing))
+        # Submenus are parented to their menu: one from addMenu(title) is deleted with its
+        # Python wrapper when this function returns.
+        plugins = QMenu("Generate with plugin", menu)
+        menu.addMenu(plugins)
+        importers = self.plugin_manager.enabled_importers()
+        exports = [(descriptor, operation) for descriptor, operation in self.plugin_manager.operations("folder")
+                   if operation.kind == "export"]
+        for descriptor in importers:
+            self._add_batch_plugin_menu(plugins, descriptor.title, descriptor.plugin_id, SOURCE_IMPORT)
+        for descriptor, operation in exports:
+            self._add_batch_plugin_menu(plugins, descriptor.title, descriptor.plugin_id, SOURCE_EXPORT)
+        plugins.setEnabled(bool(importers or exports))
+        menu.addSeparator()
+        every = self.batch_rows(missing_only=False)
+        action = menu.addAction(f"Re-generate all ({len(every)})…", lambda: self.run_batch(
+            self.batch_rows(missing_only=False), confirm="Re-generate all H5 files"))
+        action.setEnabled(bool(every))
+
+    def _add_batch_plugin_menu(self, parent: QMenu, title: str, plugin_id: str, kind: str) -> None:
+        submenu = QMenu(title, parent)
+        parent.addMenu(submenu)
+        missing = self.batch_rows(missing_only=True, plugin_id=plugin_id, kind=kind)
+        every = self.batch_rows(missing_only=False, plugin_id=plugin_id, kind=kind)
+        action = submenu.addAction(f"Generate missing ({len(missing)})", lambda: self.run_batch(
+            self.batch_rows(missing_only=True, plugin_id=plugin_id, kind=kind)))
+        action.setEnabled(bool(missing))
+        action = submenu.addAction(f"Re-generate all ({len(every)})…", lambda: self.run_batch(
+            self.batch_rows(missing_only=False, plugin_id=plugin_id, kind=kind),
+            confirm=f"Re-generate all with {title}"))
+        action.setEnabled(bool(every))
+
+    def run_batch(self, rows, *, confirm: str = "") -> None:  # type: ignore[no-untyped-def]
+        """Run each row's import or export; ``confirm`` first asks, as it replaces generated files."""
+        if not rows:
+            return
+        if confirm:
+            done = sum(row.state in {STATE_CURRENT, STATE_OUTDATED} for _folder, row in rows)
+            answer = QMessageBox.question(
+                self, "Batch", f"{confirm}?\n\nThis runs {len(rows)} import or export(s) and replaces "
+                f"{done} generated file(s). It can take a long time on a large data folder.")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.internal_logger.info(f"Batch: starting {len(rows)} import or export(s).")
+        for folder, row in rows:
+            self.run_source(folder, row)
 
     def run_source(self, folder: Path, row) -> None:  # type: ignore[no-untyped-def]
         """Import or export one Source data row with its plugin."""
@@ -3947,6 +4071,8 @@ class LODGaZillaWindow(QMainWindow):
         self.plot_workspace.set_time_axis_display(str(self.lodgazilla_settings["time_axis_display"]))
         self.plot_workspace.set_legends_shown(bool(self.lodgazilla_settings["show_legends"]))
         self.plot_navigator.set_legends_shown(bool(self.lodgazilla_settings["show_legends"]))
+        self.plot_workspace.set_markers_shown(bool(self.lodgazilla_settings["show_markers"]))
+        self.plot_navigator.set_markers_shown(bool(self.lodgazilla_settings["show_markers"]))
         self.plot_navigator.set_icon_size(int(self.lodgazilla_settings["plot_navigator_icon_size"]))
         self.plot_navigator.set_colors(dict(self.lodgazilla_settings["plot_navigator_colors"]))
         self.plot_navigator.set_show_time_row(bool(self.lodgazilla_settings["show_plot_navigator_time_row"]))
@@ -4020,6 +4146,11 @@ class LODGaZillaWindow(QMainWindow):
     def set_legends_shown(self, shown: bool) -> None:
         if self._update_lodgazilla_settings(lambda settings: settings.__setitem__("show_legends", bool(shown))):
             self.plot_workspace.set_legends_shown(bool(shown))
+
+    def set_markers_shown(self, shown: bool) -> None:
+        """The Plot navigator's Markers button: placing markers allowed, or none on any card."""
+        if self._update_lodgazilla_settings(lambda settings: settings.__setitem__("show_markers", bool(shown))):
+            self.plot_workspace.set_markers_shown(bool(shown))
 
     def set_snap_to_nearest(self, enabled: bool) -> None:
         if self._update_lodgazilla_settings(

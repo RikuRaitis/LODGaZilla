@@ -119,3 +119,29 @@ class QtMessageFilterTests(unittest.TestCase):
             "js: Uncaught TypeError: x is undefined",
             "qt.multimedia: Expected value to be of type number, but found null instead",
         ])
+
+
+class CollapseArrowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_the_collapse_arrow_sits_on_top_of_the_scroll_bar(self):
+        from PySide6.QtCore import QPoint
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logger = InternalLogger(Path(temp_dir) / "log.txt")
+            panel = InternalLogPanel(logger)
+            panel.resize(500, 200)
+            panel.show()
+            self.app.processEvents()
+            button, bar, text = panel.expanded_button, panel.entries.verticalScrollBar(), panel.entries.viewport()
+            self.assertTrue(button.isVisible() and bar.isVisible())
+            top_left = button.mapTo(panel, QPoint(0, 0))
+            # Right of the text, at the top, above the scroll bar.
+            self.assertGreaterEqual(top_left.x(), text.mapTo(panel, QPoint(text.width(), 0)).x())
+            self.assertLessEqual(top_left.y(), panel.entries.mapTo(panel, QPoint(0, 0)).y() + 2)
+            self.assertLessEqual(top_left.y() + button.height(), bar.mapTo(panel, QPoint(0, 0)).y() + 1)
+            button.click()
+            self.assertFalse(panel.is_expanded)
+            panel.close()
+            logger.close()

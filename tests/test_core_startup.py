@@ -62,12 +62,11 @@ class CoreStartupTests(unittest.TestCase):
                 self.assertIn(f"Loading data folder {folder.name}…", log_text)
                 self.assertIn(f"Loaded data folder {folder.name}", log_text)
                 self.assertTrue(window.plot_navigator.plugin_bar.isHidden())
-                # No Batch button: the tree buttons are Refresh, the diagnostics and Hide irrelevant series.
+                # The tree buttons: Refresh, Batch, the diagnostics and Hide irrelevant series.
                 controls = window.navigator.controls
-                self.assertFalse(hasattr(controls, "batch_button"))
                 row = controls.icon_row.layout()
                 buttons = [row.itemAt(index).widget() for index in range(row.count()) if row.itemAt(index).widget()]
-                self.assertEqual(buttons, [controls.refresh_button, controls.sample_loss_button,
+                self.assertEqual(buttons, [controls.refresh_button, controls.batch_button, controls.sample_loss_button,
                                            controls.clipping_button, controls.hide_irrelevant_button])
                 # They sit at the right end of the File bar; the workspace buttons stay at its left.
                 bar = controls.file_bar.layout()

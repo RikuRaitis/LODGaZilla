@@ -16,18 +16,22 @@ COMMON = (
     ("Click", "Make this the active card."),
     ("Click the card controls icon", "Make this the active card and show its controls, this help among them; "
                                      "they hide when another card becomes active."),
+    ("Click the legend icon", "Show or hide this card's legend. The Plot navigator's Legends button sets every card."),
     ("Click the clock icon", "Set the card's time offset; it only moves what the card shows. Not on image cards."),
+    ("Markers", "Placed only while the Plot navigator's Markers button is on."),
     ("Wheel", "Scroll the plot workspace."),
 )
 
 # Shared by the time cards: Line, Multi-series, Sample interval, Event/state and Frequency.
 _TIME = (
     ("Left-click", "Place the red first marker."),
-    ("Right-click", "Place the green second marker. The area between the markers is the selection."),
+    ("Right-click", "Place the green second marker. The area between the markers is the selection, shaded "
+                    "in its color (Settings, Plot)."),
     ("Double-click (left / right)", "Remove the first / second marker."),
     ("Drag a marker line", "Move that marker."),
     ("Drag the plot", "Pan time."),
     ("Ctrl+wheel over the plot", "Zoom time."),
+    ("Center view button", "Show the card's whole time range again."),
     ("Drag the time axis", "Pan time."),
     ("Right-click the time axis", "Choose real date/time or time from log start."),
 )
@@ -61,16 +65,28 @@ _FREQUENCY_LEGEND = (
     ("Click the legend color", "Change the strongest-frequency line color."),
     ("Drop a series on the legend", "Show that series instead."),
 )
+# A left click also selects the series under it (series_style.SELECT_TOLERANCE_PIXELS).
+_SELECT = (
+    ("Left-click a series", "Select it: drawn wider, its Legend row highlighted. Elsewhere, select none."),
+)
 _POINT_MARKERS = (
     ("Left-click", "Place the red first marker on the nearest point."),
-    ("Right-click", "Place the green second marker on the nearest point. The stretch between the markers is "
-                    "the selection."),
+    ("Right-click", "Place the green second marker on the nearest point. The stretch of each trace between "
+                    "the markers is the selection, drawn in its own color at the trace's width; Settings, Plot "
+                    "sets its color and whether it is drawn on top, on its own trace or not at all."),
+)
+# Cards that draw every Nth sample and choose how series are drawn.
+_SAMPLES = (
+    ("Sample limit selector", "Set the most points drawn per graph, trace or track; it shows the share drawn."),
+)
+_DRAW_STYLE = (
+    ("Auto / Lines / Points", "Draw the series the card's own way, as lines only, or as points only."),
 )
 
 MOUSE_HELP = {
-    "line": _TIME + _Y_AXIS + _VALUES + _LEGEND + _NAMES,
-    "interval": _TIME + _Y_AXIS + _VALUES + _LEGEND + _NAMES,
-    "event": _TIME + _VALUES + _LEGEND + _NAMES,
+    "line": _TIME + _SELECT + _Y_AXIS + _DRAW_STYLE + _VALUES + _LEGEND + _NAMES,
+    "interval": _TIME + _SELECT + _Y_AXIS + _DRAW_STYLE + _VALUES + _LEGEND + _NAMES,
+    "event": _TIME + _SELECT + _VALUES + _LEGEND + _NAMES,
     "frequency": _TIME + _Y_AXIS + (
         ("FFT settings button", "Change the FFT window, scale and strongest-frequency line."),
     ) + _VALUES + _FREQUENCY_LEGEND + _NAMES,
@@ -83,14 +99,15 @@ MOUSE_HELP = {
         ("Ctrl+wheel over the left axis", "Scale the selected series, or all numeric series if none is selected."),
     ) + tuple(row for row in _TIME if row[0] != "Left-click") + (
         ("Drag a filmstrip legend row", "Move the video to another Multi-series card."),
-    ) + _VALUES + _LEGEND + _NAMES,
-    "xy": _POINT_MARKERS + (
+    ) + _DRAW_STYLE + _VALUES + _LEGEND + _NAMES,
+    "xy": _POINT_MARKERS + _SELECT + (
         ("Double-click (left / right)", "Remove the first / second marker."),
         ("Drag the plot", "Pan."),
         ("Right-drag the plot", "Zoom each axis."),
         ("Ctrl+wheel over the plot", "Zoom."),
-    ) + _VALUES + _GROUP_LEGEND + _NAMES,
-    "xyz": _POINT_MARKERS + (
+        ("Center view button", "Show every graph again."),
+    ) + _DRAW_STYLE + _SAMPLES + _VALUES + _GROUP_LEGEND + _NAMES,
+    "xyz": _POINT_MARKERS + _SELECT + (
         ("Double-click (left / right)", "Remove the first / second marker."),
         ("Drag the view", "Rotate the camera."),
         ("Ctrl+drag the view", "Pan the camera."),
@@ -98,24 +115,34 @@ MOUSE_HELP = {
         ("Ctrl+wheel over the view", "Stretch or shrink the selected axis; with none selected, zoom the camera."),
         ("Equal scale button", "Draw one metre the same length on every axis; latitude and longitude in metres."),
         ("Fit button", "Stretch every axis to fill the box again."),
-        ("Reset camera button", "Return to the initial view."),
+        ("Center view button", "Return the camera to the whole trace."),
+        ("Use shader", "Draw the traces at the Series line widths (otherwise 1 px)."),
         ("Axes selector", "Draw the axes through 0, 0, 0, or along the corner of the data box."),
-    ) + _VALUES + _GROUP_LEGEND + _NAMES,
-    "gnss": _POINT_MARKERS + (
+    ) + _DRAW_STYLE + _SAMPLES + _VALUES + _GROUP_LEGEND + _NAMES,
+    "gnss": _POINT_MARKERS + _SELECT + (
         ("Double-click", "Remove the first marker."),
         ("Right-click twice quickly", "Remove the second marker."),
         ("Drag the map", "Pan."),
         ("Shift+drag the map", "Zoom to the dragged box."),
         ("Ctrl+wheel over the map", "Zoom."),
         ("Street / Satellite", "Change the map type."),
-    ) + _VALUES + _GROUP_LEGEND + _NAMES,
-    "gnss_3d": _POINT_MARKERS + (
+        ("Center view button", "Show every track again."),
+        ("Scale bar", "Show or hide the metric scale at the bottom right."),
+    ) + _DRAW_STYLE + _SAMPLES + _VALUES + _GROUP_LEGEND + _NAMES,
+    "gnss_3d": _POINT_MARKERS + _SELECT + (
         ("Double-click", "Remove the first marker."),
         ("Right-click twice quickly", "Remove the second marker."),
         ("Drag the map", "Pan."),
         ("Right-drag the map", "Tilt and rotate; drag upward to tilt toward the ground."),
         ("Ctrl+wheel over the map", "Zoom."),
-    ) + _VALUES + _GROUP_LEGEND + _NAMES,
+        ("Map slider", "Fade the map; below 100% the track shows through the terrain, 0% hides the map."),
+        ("Height slider", "Exaggerate the altitudes 1–10x."),
+        ("Offset slider or field", "Raise or lower the track, in metres."),
+        ("Follow ground", "Draw the track on the ground, ignoring its altitude."),
+        ("Auto button", "Set the offset that puts the track's lowest point on the ground."),
+        ("Center view button", "Show the whole track again."),
+        ("Scale bar", "Show or hide the metric scale at the bottom right."),
+    ) + _DRAW_STYLE + _SAMPLES + _VALUES + _GROUP_LEGEND + _NAMES,
     "video": (
         ("Drag the video (360°)", "Look around."),
         ("Ctrl+drag the video", "Roll the view."),

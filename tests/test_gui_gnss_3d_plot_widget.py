@@ -16,6 +16,8 @@ from PySide6.QtGui import QWheelEvent
 from PySide6.QtQml import QJSEngine
 from PySide6.QtTest import QTest
 from tests.qt_wait import qt_wait
+from src.gui.plots.markers import set_track_selection_style, track_selection_rgba
+from src.gui.plots.series_style import series_line_width
 from PySide6.QtWidgets import QApplication, QWidget
 
 from src.gui.plots.gnss_3d import Gnss3DPlotWidget
@@ -44,6 +46,7 @@ const QWebChannel = class {
     const record = name => (...args) => bridgeCalls.push([name, ...args]);
     ready({objects: {gnssBridge: {
       select_timestamp: record('select_timestamp'), clear_marker: record('clear_marker'),
+      select_track: record('select_track'),
       select_second_timestamp: record('select_second_timestamp'),
       clear_second_marker: record('clear_second_marker'), notify_view_changed: () => {},
       report_auto_settings: record('report_auto_settings'),
@@ -145,6 +148,10 @@ class ScriptMapView(QWidget):
         return result.toVariant()
 
 
+from tests.markers_shown import with_markers_shown  # noqa: E402
+
+
+@with_markers_shown
 class Gnss3DControlsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -221,7 +228,24 @@ class Gnss3DControlsTests(unittest.TestCase):
         self.assertEqual(self.js("map.overlay.props.layers[2].props.data.map(d=>d.position)"),
                          [[25, 61, 0], [26, 62, -5]])
         # The selection covers the track between the markers.
-        self.assertEqual(self.js("map.overlay.props.layers[1].props.data"), [[[25, 61, 0], [26, 62, -5]]])
+        self.assertEqual(self.js("map.overlay.props.layers[1].props.data.map(d=>d.path)"), [[[25, 61, 0], [26, 62, -5]]])
+        # At the track's width, in the selection color, above everything by default.
+        self.assertEqual(self.js("map.overlay.props.layers[1].props.getWidth({index:0})"), series_line_width())
+        self.assertEqual(self.js("map.overlay.props.layers[1].props.getColor"), list(track_selection_rgba()))
+        self.assertEqual(self.js("map.overlay.props.layers[1].props.parameters.depthCompare"), "always")
+        # On its own trace it takes the track's depth test; Off draws none.
+        try:
+            set_track_selection_style("#ff0000", 50, "own_trace")
+            self.widget.apply_marker_style()
+            self.assertEqual(self.js("map.overlay.props.layers[1].props.parameters.depthCompare"), "less-equal")
+            self.assertEqual(self.js("map.overlay.props.layers[1].props.getColor"), [255, 0, 0, 128])
+            set_track_selection_style("#ff0000", 50, "off")
+            self.widget.apply_marker_style()
+            self.assertEqual(self.js("map.overlay.props.layers.map(layer=>layer.props.id)"),
+                             ["gnss-3d-route", "gnss-3d-markers"])
+        finally:
+            set_track_selection_style("#2196f3", 100, "always_top")
+            self.widget.apply_marker_style()
         self.assertTrue(self.js("map.doubleClickZoomDisabled"))
         # A values box per track at each marker, beside its point on screen.
         self.widget.show_marker_data(2.0, 0)
@@ -237,8 +261,9 @@ class Gnss3DControlsTests(unittest.TestCase):
         for _ in range(2):
             self.js("map.events.mousedown({originalEvent:{button:2},point:{x:2400,y:6000}})")
             self.js("map.events.contextmenu({point:{x:2400,y:6000}})")
-        self.assertEqual(self.js("bridgeCalls"), [["select_timestamp", 1], ["select_second_timestamp", 1],
-                                                  ["clear_second_marker"]])
+        # The left click also reports the track under it: none this far from the track (-1).
+        self.assertEqual(self.js("bridgeCalls"), [["select_track", -1], ["select_timestamp", 1],
+                                                  ["select_second_timestamp", 1], ["clear_second_marker"]])
         # The bridge's requests reach the card as marker changes.
         placed = []
         self.widget.second_marker_placed.connect(placed.append)

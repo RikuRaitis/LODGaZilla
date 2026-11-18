@@ -1,5 +1,6 @@
 """Navigator plot actions populated from the shared card planner."""
 
+from PySide6.QtWidgets import QMenu
 from src.data.plot_policy import CARD_TITLES, PlotSource, compatible_cards, plan_cards
 from src.jobs.plot_drop import SelectionInspection, inspect_menu_sources
 
@@ -77,7 +78,9 @@ def populate_plot_menu(menu, workspace, sources, *, group=False):
         if len(numeric) == len(items) == 3:
             targets = [plot for plot in workspace.plots() if getattr(plot, "drop_card_type", None) == "xyz"]
             if targets:
-                submenu = menu.addMenu("Existing 3D cards")
+                # Parented to the menu: one from addMenu(title) is deleted with its Python wrapper.
+                submenu = QMenu("Existing 3D cards", menu)
+                menu.addMenu(submenu)
                 for index, plot in enumerate(targets):
                     submenu.addAction(f"3D card {index + 1} ({len(plot.traces)} traces)",
                                       lambda checked=False, plot=plot: plot.add_trace(numeric))

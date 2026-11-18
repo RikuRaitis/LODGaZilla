@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
 
 from src.gui.plots.interactive import InteractivePlotWidget
 from src.gui.plots.selection_info import SelectionDurationInfo
-from src.gui.plots.series_hover import install_series_name_hover, name_at_canvas_point
+from src.gui.plots.series_hover import install_series_name_hover, item_at_canvas_point, name_at_canvas_point
+from src.gui.plots.series_style import SELECT_TOLERANCE_PIXELS, series_line_width
 from src.gui.plots.base import (
     SERIES_COLORS, PlotBaseWidget, apply_view_range_state, assign_series_colors, series_legend_name, state_entry,
     view_range_state,
@@ -170,8 +171,10 @@ def _merge_below_pixel(starts, ends, values, plot_item):  # type: ignore[no-unty
     return starts[first], merged_ends, values[first]
 
 
-def render_event_state_lane(plot_item, lane, data, color):
-    """Draw the shared timeline bars and labels; return their graphics items."""
+def render_event_state_lane(plot_item, lane, data, color, outline_width=None):
+    """Draw the shared timeline bars and labels; return their graphics items. The bars'
+    outline is ``outline_width`` pixels, by default the series line width."""
+    outline_width = series_line_width() if outline_width is None else outline_width
     items = []
     times = np.asarray(data["time"], dtype=float)
     values = np.asarray(data["value"], dtype=float)
@@ -222,7 +225,8 @@ def render_event_state_lane(plot_item, lane, data, color):
             brush.setAlpha(170)
             boxes = pg.BarGraphItem(
                 x0=starts[mask], x1=ends[mask], y0=np.full(np.count_nonzero(mask), lane - EVENT_STATE_HALF_HEIGHT),
-                y1=np.full(np.count_nonzero(mask), lane + EVENT_STATE_HALF_HEIGHT), brush=brush, pen=pg.mkPen(state_color, width=1),
+                y1=np.full(np.count_nonzero(mask), lane + EVENT_STATE_HALF_HEIGHT), brush=brush,
+                pen=pg.mkPen(state_color, width=outline_width),
             )
             plot_item.addItem(boxes)
             items.append(boxes)
@@ -231,7 +235,8 @@ def render_event_state_lane(plot_item, lane, data, color):
         brush.setAlpha(170)
         boxes = pg.BarGraphItem(
             x0=starts, x1=ends, y0=np.full(len(starts), lane - EVENT_STATE_HALF_HEIGHT),
-            y1=np.full(len(starts), lane + EVENT_STATE_HALF_HEIGHT), brush=brush, pen=pg.mkPen(color, width=1),
+            y1=np.full(len(starts), lane + EVENT_STATE_HALF_HEIGHT), brush=brush,
+            pen=pg.mkPen(color, width=outline_width),
         )
         plot_item.addItem(boxes)
         items.append(boxes)
@@ -262,6 +267,9 @@ def render_event_state_lane(plot_item, lane, data, color):
 
 class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
     """Compact one-lane-per-series timeline for indexed events and states."""
+    has_center_view = True
+    # Its lanes keep their own heights: Center view changes only the time axis.
+    center_view_fits_y = False
     help_topic = "event"
 
     accepts_series_drop = True
@@ -339,6 +347,9 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.content_layout.addWidget(self.plot_widget, stretch=1)
         # Each lane's bars, with its series name, for the name shown while the pointer rests on one.
         self._lane_hover_items: list[tuple[object, str]] = []
+        # Each lane's bars and its series' source, for selecting a lane with a click.
+        self._lane_bars: list[tuple[object, tuple | None]] = []
+        self.plot_widget.plot_left_clicked.connect(self._select_series_at)
         install_series_name_hover(self.plot_widget.viewport(),
                                   lambda position: name_at_canvas_point(self.plot_widget, position, self._lane_hover_items))
         self.on_series_changed()
@@ -487,6 +498,8 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
 
     def _render_timeline(self, loaded: list[object]) -> None:
         """Draw one lane per successfully loaded series; `loaded` follows `series`."""
+        if self.selected_series is not None and self.selected_series not in self.series:
+            self._selected_series = None
         self._clear_items()
         names = [str(data["name"]) for data in loaded if isinstance(data, dict)]
         if names != [label.text() for label in self._lane_axis_labels]:
@@ -530,6 +543,7 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
             # hint in it, stay as they are.
             self._shown_legend_entries = entries
             self.legend.set_entries(entries)
+            self.show_selected_series_in_legend()
 
     def _effective_load_range(
         self, visible_range: tuple[float, float] | None = None
@@ -624,10 +638,29 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
             self._window_reload_in_progress = False
 
     def _draw_lane(self, lane, data, color, series_index):
-        items = render_event_state_lane(self.plot_item, lane, data, color)
+        source = self.series[series_index] if 0 <= series_index < len(self.series) else None
+        items = render_event_state_lane(self.plot_item, lane, data, color,
+                                        series_line_width(selected=source is not None and source == self.selected_series))
         self._items.extend(items)
-        name = series_legend_name(*self.series[series_index]) if 0 <= series_index < len(self.series) else ""
-        self._lane_hover_items.extend((item, name) for item in items if isinstance(item, pg.BarGraphItem))
+        name = series_legend_name(*source) if source is not None else ""
+        bars = [item for item in items if isinstance(item, pg.BarGraphItem)]
+        self._lane_hover_items.extend((item, name) for item in bars)
+        self._lane_bars.extend((item, source) for item in bars)
+
+    def _select_series_at(self, position) -> None:  # type: ignore[no-untyped-def]
+        """A left click on a lane selects its series; elsewhere none."""
+        self.select_series(item_at_canvas_point(self.plot_widget, position.toPoint(), self._lane_bars,
+                                                SELECT_TOLERANCE_PIXELS))
+
+    def apply_series_widths(self) -> None:
+        """Every lane's outline at the series width, the selected lane's wider."""
+        for bar, source in self._lane_bars:
+            pen = pg.mkPen(bar.opts["pen"])
+            pen.setWidth(series_line_width(selected=source is not None and source == self.selected_series))
+            bar.setOpts(pen=pen)
+
+    def selected_legend_rows(self):  # type: ignore[no-untyped-def]
+        return tuple(index for index, source in enumerate(self.series) if source == self.selected_series), None
 
     def _legend_entries(self) -> list[tuple[str, str, int, str | None]]:
         entries: list[tuple[str, str, int, str | None]] = []
@@ -640,6 +673,7 @@ class EventStatePlotWidget(TimeCardMarkers, PlotBaseWidget):
             self.plot_item.removeItem(item)
         self._items.clear()
         self._lane_hover_items = []
+        self._lane_bars = []
 
     def _clear_lane_axis_labels(self) -> None:
         for label in self._lane_axis_labels:

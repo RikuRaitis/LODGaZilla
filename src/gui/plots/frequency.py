@@ -10,6 +10,7 @@ from PySide6.QtCore import QRectF, QSize, QThread, QTimer, Signal
 from PySide6.QtGui import QActionGroup, QColor, QFontMetrics
 from PySide6.QtWidgets import QColorDialog, QDialog, QInputDialog, QMenu, QToolButton
 
+from src.gui.plots.series_style import series_line_width
 from src.data.frequency import FFTSettings, FFT_WINDOW_SIZES, colour_values
 from src.gui.plots.base import PlotBaseWidget, apply_view_range_state, series_legend_name, view_range_state
 from src.gui.plots.card_markers import TimeCardMarkers
@@ -76,6 +77,7 @@ class FrequencyLegend(PlotLegendWidget):
 
 
 class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
+    has_center_view = True
     help_topic = "frequency"
     accepts_series_drop = True
 
@@ -115,7 +117,7 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.plot_item.disableAutoRange()
         self.image = pg.ImageItem(axisOrder="row-major")
         self.plot_item.addItem(self.image)
-        self.peak_line = pg.PlotDataItem(pen=pg.mkPen(self.peak_line_color, width=2), connect="finite")
+        self.peak_line = pg.PlotDataItem(pen=pg.mkPen(self.peak_line_color, width=series_line_width()), connect="finite")
         self.peak_line.setZValue(self.image.zValue() + 1)
         self.plot_item.addItem(self.peak_line, ignoreBounds=True)
         self.colour_bar = pg.ColorBarItem(values=(-80, 0), colorMap=pg.colormap.get("viridis"), interactive=False)
@@ -193,7 +195,7 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         peak = state.get("peak_line", {})
         self.set_peak_line_visible(peak.get("visible", self.show_peak_line))
         self.peak_line_color = str(peak.get("color", self.peak_line_color))
-        self.peak_line.setPen(pg.mkPen(self.peak_line_color, width=2))
+        self.peak_line.setPen(pg.mkPen(self.peak_line_color, width=series_line_width()))
         self.legend.show_series()
         try:
             self.set_peak_line_threshold(peak.get("threshold", self.peak_line_threshold))
@@ -398,11 +400,15 @@ class FrequencyPlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.show_peak_line = bool(visible)
         self.peak_line.setVisible(self.show_peak_line)
 
+    def apply_series_widths(self):
+        """The strongest-frequency line at the series width; this card has one series, so no selection."""
+        self.peak_line.setPen(pg.mkPen(self.peak_line_color, width=series_line_width()))
+
     def choose_peak_line_color(self):
         color = QColorDialog.getColor(QColor(self.peak_line_color), self, "Strongest-frequency line colour")
         if color.isValid():
             self.peak_line_color = color.name()
-            self.peak_line.setPen(pg.mkPen(color, width=2))
+            self.peak_line.setPen(pg.mkPen(color, width=series_line_width()))
             self.legend.show_series()
 
     def choose_peak_line_threshold(self):

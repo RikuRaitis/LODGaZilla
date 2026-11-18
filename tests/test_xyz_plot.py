@@ -195,16 +195,17 @@ class XYZCardTests(unittest.TestCase):
         self.workspace.show()
         card.controls_button.click()
         self.app.processEvents()
-        self.assertFalse(card.reset_button.icon().isNull())
-        self.assertEqual(card.reset_button.text(), "")
-        self.assertEqual(card.reset_button.toolTip(), "Reset camera")
-        self.assertLess(card.reset_button.geometry().right(), card.close_button.x())
-        self.assertEqual(card.reset_button.y(), card.close_button.y())
-        self.assertIs(card.childAt(card.reset_button.geometry().center()), card.reset_button)
+        button = card.center_view_button
+        self.assertFalse(button.icon().isNull())
+        self.assertEqual(button.text(), "")
+        self.assertEqual(button.toolTip(), "Center view: show all the data again")
+        self.assertLess(button.geometry().right(), card.close_button.x())
+        self.assertEqual(button.y(), card.close_button.y())
+        self.assertIs(card.childAt(button.geometry().center()), button)
         self.assertEqual(card.content_layout.count(), 1)
         self.assertIs(card.content_layout.itemAt(0).widget(), card.view)
         card.view.camera["azimuth"] = 123
-        QTest.mouseClick(card.reset_button, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(card.center_view_button, Qt.MouseButton.LeftButton)
         self.assertEqual(card.view.camera["azimuth"], 45)
         self.assertEqual(card.view.camera["distance"], 6)
         card.view.camera["azimuth"] = 123
@@ -384,6 +385,30 @@ class XYZCardTests(unittest.TestCase):
         self.assertAlmostEqual(factors[1], 1.0)
         self.assertAlmostEqual(factors[0], 1105.74 / 1113.2, places=2)
         self.assertAlmostEqual(factors[2], 50 / 1113.2, places=3)
+
+    def test_use_shader_draws_traces_with_wide_lines(self):
+        from src.gui.plots.series_style import series_line_width
+        from src.gui.plots.wide_lines import WideLinePlotItem
+        card = self.workspace.add_xyz_plot(*self.entries)
+        self.wait_loaded(card)
+        # Off by default: plain lines, which OpenGL's core profile draws 1 px wide.
+        self.assertFalse(card.use_shader or card.use_shader_check.isChecked())
+        self.assertFalse(any(isinstance(item, WideLinePlotItem) for item in card.view.items))
+        card.use_shader_check.setChecked(True)
+        card.select_series(0)
+        wide = [item for item in card.view.items if isinstance(item, WideLinePlotItem)]
+        self.assertEqual([item.width for item in wide], [series_line_width(selected=True)])
+        # In Auto the points are wider than their line, so they show on it.
+        import pyqtgraph.opengl as gl
+        sizes = [item.size for item in card.view.items if isinstance(item, gl.GLScatterPlotItem)]
+        self.assertIn(series_line_width(selected=True) + 3, sizes)
+        self.assertNotIn(3, sizes)
+        from PySide6.QtGui import QVector3D
+        card.view.opts = {"center": QVector3D(), "distance": 6, "elevation": 25, "azimuth": 45, "fov": 60}
+        self.assertTrue(card.workspace_state()["use_shader"])
+        card.restore_workspace_state({})
+        self.assertFalse(card.use_shader_check.isChecked())
+        self.assertNotIn("use_shader", card.workspace_state())
 
     def test_axes_buttons_choose_the_axes_position(self):
         card = self.workspace.add_xyz_plot(*self.entries)

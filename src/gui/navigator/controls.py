@@ -242,12 +242,19 @@ class NavigatorControlsWidget(QWidget):
         # Settings, last in the File bar's left group.
         self.settings_button = self._icon_button("Settings")
         self.settings_button.clicked.connect(self.settings_requested.emit)
+        # Batch: imports and exports for the whole data folder; the main window fills the menu
+        # when it is about to show.
+        self.batch_button = self._icon_button("Batch: generate H5 files for the whole data folder")
+        self.batch_menu = QMenu(self.batch_button)
+        self.batch_button.setMenu(self.batch_menu)
+        self.batch_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.batch_button.setStyleSheet("QToolButton::menu-indicator { image: none; }")
         # Tree actions, at the right end of the File bar.
         self.icon_row = QWidget()
         icon_layout = QHBoxLayout(self.icon_row)
         icon_layout.setContentsMargins(0, 0, 0, 0)
         icon_layout.setSpacing(2)
-        for button in (self.refresh_button, self.sample_loss_button, self.clipping_button,
+        for button in (self.refresh_button, self.batch_button, self.sample_loss_button, self.clipping_button,
                        self.hide_irrelevant_button):
             icon_layout.addWidget(button)
         # The File bar: the workspace files at the left edge, the tree actions at the right.
@@ -326,7 +333,8 @@ class NavigatorControlsWidget(QWidget):
                              (self.recent_workspaces_button, "workspace-open-recent"),
                              (self.save_workspace_button, "workspace-save"),
                              (self.save_workspace_as_button, "workspace-save-as"),
-                             (self.settings_button, "settings")):
+                             (self.settings_button, "settings"),
+                             (self.batch_button, "batch-h5")):
             button.setIcon(navigator_asset_icon(self, icon))
         hiding = self.hide_irrelevant_button.isChecked()
         self.hide_irrelevant_button.setIcon(

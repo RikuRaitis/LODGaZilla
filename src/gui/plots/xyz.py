@@ -4,9 +4,11 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFont, QVector3D
-from PySide6.QtWidgets import QApplication, QButtonGroup, QHBoxLayout, QToolButton, QWidget
+from PySide6.QtGui import QColor, QFont, QVector3D
+from PySide6.QtWidgets import QApplication, QButtonGroup, QCheckBox, QHBoxLayout, QToolButton, QWidget
 
+from OpenGL import GL
+from src.gui.plots.wide_lines import WideLinePlotItem
 from src.data.axis_scale import clamp_stretch, equal_scale_factors
 from src.data.xyz import XYZ_MAXIMUM_POINTS, AxisSource, XYZData
 from src.gui.plots.base import PlotBaseWidget
@@ -16,9 +18,10 @@ from src.gui.plots.theme import canvas_background
 from src.gui.plots.legend import PlotLegendWidget
 from src.gui.plots.legend_groups import group_display_name
 from src.gui.plots.series_hover import HIT_TOLERANCE_PIXELS, distance_squared, install_series_name_hover
+from src.gui.plots.series_style import SELECT_TOLERANCE_PIXELS, series_line_width
 from src.gui.plots.marker_info import MarkerInfoEntry
 from src.gui.plots.markers import (
-    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, selection_rgba,
+    FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, track_selection_layer, track_selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.jobs.xyz import XYZLoadCoordinator
@@ -28,6 +31,12 @@ from src.jobs.xyz import XYZLoadCoordinator
 AXES_ORIGIN = "origin"
 AXES_CORNER = "corner"
 AXES_POSITIONS = {AXES_ORIGIN: "Axes at 0, 0, 0", AXES_CORNER: "Axes at corner"}
+# The selection "Always on top": no depth test, blended by its opacity.
+ON_TOP_GL_OPTIONS = {GL.GL_DEPTH_TEST: False, GL.GL_BLEND: True, GL.GL_CULL_FACE: False,
+                     "glBlendFunc": (GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)}
+# With Use shader, Auto draws a trace's points this much wider than its line.
+AUTO_POINT_MARGIN_PIXELS = 3
+AUTO_POINT_LIGHTER_PERCENT = 160
 # A click within this many pixels of an axis line selects it; Ctrl+wheel then stretches it this much per step.
 AXIS_HIT_PIXELS = 8.0
 AXIS_STRETCH_PER_WHEEL_STEP = 1.15
@@ -118,6 +127,7 @@ class XYZView(gl.GLViewWidget):
 
 class XYZPlotWidget(PointMarkers, PlotBaseWidget):
     """One or more 3D traces, each aligning three scalar sources by timestamp."""
+    has_center_view = True
     help_topic = "xyz"
 
     series_changed = Signal()
@@ -151,20 +161,13 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self._marker_items = []
         # Each trace's selection stretch, sync point and two marker points, reused.
         self._trace_marker_items: dict[int, dict] = {}
+        # The selection drawn again above everything (Always on top), per trace.
+        self._selection_on_top: dict[int, dict] = {}
         self._init_point_markers()
         self._value_box_times: dict[int, float | None] = {FIRST_MARKER: None, SECOND_MARKER: None}
         self.loader = XYZLoadCoordinator(self)
         self.loader.loaded.connect(self._loaded)
 
-        self.reset_button = QToolButton(self)
-        self.reset_button.setToolTip("Reset camera")
-        self.reset_button.setAccessibleName("Reset camera")
-        self.reset_button.setAutoRaise(True)
-        self.reset_button.setFixedSize(self.close_button.size())
-        self.reset_button.setIconSize(QSize(20, 20))
-        self.reset_button.setIcon(plot_control_icon(self, "reset-camera"))
-        self.reset_button.clicked.connect(self.reset_camera)
-        self.header_controls.append(self.reset_button)
         # The Axes selector: two buttons, axes through 0, 0, 0 or along the corner; the chosen
         # one is highlighted, like the Draw style selector.
         from src.gui.plots.theme import palette_overlay_stylesheet
@@ -198,6 +201,20 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             " QToolButton:checked { background: rgba(33, 150, 243, 0.40); }")
         self.axes_selector.adjustSize()
         self.header_controls.append(self.axes_selector)
+        # Use shader: trace lines at the Series line widths, drawn by shaders (off by default;
+        # without it OpenGL draws them 1 px wide).
+        self.use_shader = False
+        self.use_shader_panel = QWidget(self)
+        shader_layout = QHBoxLayout(self.use_shader_panel)
+        shader_layout.setContentsMargins(5, 0, 5, 0)
+        self.use_shader_check = QCheckBox("Use shader", self.use_shader_panel)
+        self.use_shader_check.setToolTip("Use shader")
+        self.use_shader_check.toggled.connect(self.set_use_shader)
+        shader_layout.addWidget(self.use_shader_check)
+        self.use_shader_panel.setStyleSheet(palette_overlay_stylesheet())
+        self.use_shader_panel.setFixedHeight(self.close_button.height() - 2)
+        self.use_shader_panel.adjustSize()
+        self.header_controls.append(self.use_shader_panel)
         # Each axis's stretch; Ctrl+wheel changes the selected axis's (a click on its line selects
         # it). Equal scale and Fit set all three at once.
         self.axis_stretch = np.ones(3)
@@ -234,6 +251,36 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self.reset_camera()
         self.add_trace((x_entry, y_entry, z_entry))
 
+    def trace_at(self, position, tolerance=SELECT_TOLERANCE_PIXELS):  # type: ignore[no-untyped-def]
+        """The index of the trace drawn within ``tolerance`` pixels of a view position, or None."""
+        best, found = tolerance ** 2, None
+        for index, positions in enumerate(self._scene_positions):
+            if positions is None or not len(positions) or index >= len(self.traces):
+                continue
+            pixels = self.view.project(positions)
+            distance = distance_squared((pixels[:, 0], pixels[:, 1]), position.x(), position.y(),
+                                        lines=self.draw_style != "points")
+            if distance <= best:
+                best, found = distance, index
+        return found
+
+    def set_use_shader(self, enabled: bool) -> None:
+        """Draw the traces at the Series line widths with shaders, or as plain 1 px lines."""
+        enabled = bool(enabled)
+        if self.use_shader_check.isChecked() != enabled:
+            self.use_shader_check.setChecked(enabled)
+            return
+        if enabled != self.use_shader:
+            self.use_shader = enabled
+            self._render()
+
+    def apply_series_widths(self):
+        """Every trace at the series width, the selected one wider (the scene is drawn again)."""
+        self._render()
+
+    def selected_legend_rows(self):  # type: ignore[no-untyped-def]
+        return (), self.selected_series
+
     def series_name_at(self, position):
         """The trace drawn under a view position, named by its sources, for the hover name."""
         best, found = HIT_TOLERANCE_PIXELS ** 2, None
@@ -258,6 +305,9 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
 
     def on_series_changed(self):
         self._fixed_extent = None
+        # The traces may have moved or gone: the selection does not follow them.
+        self._selected_series = None
+        self.show_selected_series_in_legend()
         self._request()
 
     def set_axis_component(self, key, component):
@@ -326,6 +376,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         center = low / 2 + high / 2
         scale = high / 2 - low / 2
         self._scene_positions = []
+        self._trace_items: dict[int, dict] = {}
         for index, result in enumerate(self.results):
             if not isinstance(result, XYZData):
                 self._scene_positions.append(None)
@@ -336,14 +387,28 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             pairs = np.stack((positions[:-1], positions[1:]), axis=1)
             pairs = pairs[valid[:-1] & valid[1:]].reshape(-1, 3)
             color = pg.glColor(self.traces[index].color)
+            # What the selection recolors: each segment's first sample, and each point's sample.
+            trace = self._trace_items[index] = {
+                "segments": np.flatnonzero(valid[:-1] & valid[1:]), "samples": np.flatnonzero(valid),
+                "pairs": pairs.astype(np.float32), "color": color, "line": None, "points": None,
+                "width": series_line_width(selected=index == self.selected_series), "point_size": 0}
             if self.draw_style != "points":
-                self._add_item(gl.GLLinePlotItem(pos=pairs.astype(np.float32), color=color, width=2, mode="lines",
-                                                 antialias=True, glOptions="opaque"))
+                # Use shader draws lines of the set widths; OpenGL's core profile draws plain lines 1 px.
+                line_class = WideLinePlotItem if self.use_shader else gl.GLLinePlotItem
+                trace["line"] = self._add_item(line_class(pos=trace["pairs"], color=color, width=trace["width"],
+                                                          mode="lines", antialias=True, glOptions="opaque"))
             if self.draw_style != "lines":
-                # Points alone are drawn larger, so the trace still reads.
-                self._add_item(gl.GLScatterPlotItem(pos=positions[valid].astype(np.float32), color=color,
-                                                    size=4 if self.draw_style == "points" else 3, pxMode=True,
-                                                    glOptions="opaque"))
+                # Points alone are drawn larger, so the trace still reads. In Auto with Use shader the
+                # lines are wide, so the points are wider still, or the line would cover them.
+                size, point_color = (4 if self.draw_style == "points" else 3), color
+                if self.use_shader and self.draw_style != "points":
+                    # A lighter shade of the trace, so the points stand out on their line.
+                    size = series_line_width(selected=index == self.selected_series) + AUTO_POINT_MARGIN_PIXELS
+                    point_color = pg.glColor(QColor(self.traces[index].color).lighter(AUTO_POINT_LIGHTER_PERCENT))
+                trace["point_color"], trace["point_size"] = point_color, size
+                trace["points"] = self._add_item(gl.GLScatterPlotItem(
+                    pos=positions[valid].astype(np.float32), color=point_color, size=size, pxMode=True,
+                    glOptions="opaque"))
         self._draw_axes(low, high)
         self._update_equal_scale_button()
         self._update_legend()
@@ -497,6 +562,67 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             self.view.removeItem(item)
         self._marker_items.clear()
         self._trace_marker_items.clear()
+        self._selection_on_top.clear()
+
+    def _draw_selection(self) -> None:
+        """Each trace's stretch between the markers in the selection color, at the trace's own
+        width (Settings > Plot, Selection drawn): recolored in place, so the trace's own depth
+        decides ("On its own trace"); also drawn again with no depth test ("Always on top");
+        or left as it is ("Off")."""
+        selection = self.selection_range()
+        layer, rgba = track_selection_layer(), tuple(value / 255 for value in track_selection_rgba())
+        for index, trace in getattr(self, "_trace_items", {}).items():
+            selected = None
+            if selection is not None and layer != "off":
+                window = self._selected_slice(index, selection)
+                selected = (window.start, window.stop)
+            segments = trace["segments"]
+            inside = (np.zeros(len(segments), dtype=bool) if selected is None
+                      else (segments >= selected[0]) & (segments + 1 < selected[1]))
+            if trace["line"] is not None:
+                if inside.any():
+                    colors = np.tile(np.asarray(trace["color"], dtype=np.float32), (len(segments) * 2, 1))
+                    colors[np.repeat(inside, 2)] = rgba
+                    trace["line"].setData(color=colors)
+                else:
+                    trace["line"].setData(color=trace["color"])
+            samples = trace["samples"]
+            points_inside = (np.zeros(len(samples), dtype=bool) if selected is None
+                             else (samples >= selected[0]) & (samples < selected[1]))
+            if trace["points"] is not None:
+                if points_inside.any():
+                    colors = np.tile(np.asarray(trace["point_color"], dtype=np.float32), (len(samples), 1))
+                    colors[points_inside] = rgba
+                    trace["points"].setData(color=colors)
+                else:
+                    trace["points"].setData(color=trace["point_color"])
+            self._draw_selection_on_top(index, trace, inside, points_inside, rgba,
+                                        on_top=layer == "always_top" and selected is not None)
+
+    def _draw_selection_on_top(self, index, trace, inside, points_inside, rgba, *, on_top) -> None:  # type: ignore[no-untyped-def]
+        """For "Always on top": the stretch once more, with no depth test, above everything."""
+        items = self._selection_on_top.setdefault(index, {})
+        line_pairs = trace["pairs"].reshape(-1, 2, 3)[inside].reshape(-1, 3) if on_top else np.empty((0, 3))
+        if trace["line"] is not None and len(line_pairs):
+            if "line" not in items:
+                line_class = WideLinePlotItem if self.use_shader else gl.GLLinePlotItem
+                items["line"] = self._add_marker_item(line_class(
+                    pos=line_pairs.astype(np.float32), mode="lines", antialias=True, glOptions=ON_TOP_GL_OPTIONS))
+            items["line"].setData(pos=line_pairs.astype(np.float32), color=rgba, width=trace["width"])
+            items["line"].setVisible(True)
+        elif "line" in items:
+            items["line"].setVisible(False)
+        positions = self._scene_positions[index]
+        points = (positions[trace["samples"][points_inside]] if on_top and positions is not None
+                  else np.empty((0, 3)))
+        if trace["points"] is not None and len(points):
+            if "points" not in items:
+                items["points"] = self._add_marker_item(gl.GLScatterPlotItem(
+                    pos=points.astype(np.float32), pxMode=True, glOptions=ON_TOP_GL_OPTIONS))
+            items["points"].setData(pos=points.astype(np.float32), color=rgba, size=trace["point_size"])
+            items["points"].setVisible(True)
+        elif "points" in items:
+            items["points"].setVisible(False)
 
     def _draw_markers(self):
         """Marker points in their colors, and each trace's stretch between the markers.
@@ -504,16 +630,13 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         Each trace keeps its marker items and only updates them, so moving a marker
         costs no new GL items; the stretch between markers is a slice, not a mask.
         """
-        selection = self.selection_range()
-        selection_color = tuple(value / 255 for value in selection_rgba(2.0))
+        self._draw_selection()
         for trace_index, positions in enumerate(self._scene_positions):
             if positions is None:
                 continue
             items = self._trace_marker_items.get(trace_index)
             if items is None:
                 items = self._trace_marker_items[trace_index] = {
-                    "selection": self._add_marker_item(gl.GLLinePlotItem(
-                        pos=np.zeros((2, 3), dtype=np.float32), width=6, mode="line_strip", antialias=True)),
                     "sync": self._add_marker_item(gl.GLScatterPlotItem(
                         pos=np.zeros((1, 3), dtype=np.float32), pxMode=True, glOptions="translucent")),
                     FIRST_MARKER: self._add_marker_item(gl.GLScatterPlotItem(
@@ -521,15 +644,6 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
                     SECOND_MARKER: self._add_marker_item(gl.GLScatterPlotItem(
                         pos=np.zeros((1, 3), dtype=np.float32), pxMode=True, glOptions="translucent")),
                 }
-            stretch = None
-            if selection is not None:
-                stretch = positions[self._selected_slice(trace_index, selection)]
-                stretch = stretch[np.all(np.isfinite(stretch), axis=1)]
-            if stretch is not None and len(stretch) > 1:
-                items["selection"].setData(pos=stretch.astype(np.float32), color=selection_color)
-                items["selection"].setVisible(True)
-            else:
-                items["selection"].setVisible(False)
             for key, time_value, color, size in (
                     ("sync", self._sync_time, sync_marker_color(), 16),
                     (FIRST_MARKER, self._marker_times[FIRST_MARKER], marker_color(FIRST_MARKER), 10 + 2 * marker_width()),
@@ -559,6 +673,9 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             self.select_axis(None if axis == self.selected_axis else axis)
             return
         self.select_axis(None)
+        if button == Qt.MouseButton.LeftButton:
+            # Then the trace under the click, or none; the first marker is placed as usual.
+            self.select_series(self.trace_at(position))
         best = None
         for trace_index, positions in enumerate(self._scene_positions):
             if positions is None or not len(positions):
@@ -640,6 +757,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
     def _add_item(self, item):
         self.view.addItem(item)
         self._items.append(item)
+        return item
 
     def _update_legend(self):
         labels = {}
@@ -657,6 +775,8 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         opts = self.view.opts
         center = opts["center"]
         state = {**super().workspace_state(), "axes_position": self.axes_position}
+        if self.use_shader:
+            state["use_shader"] = True
         if not np.all(self.axis_stretch == 1):
             state["axis_stretch"] = [float(value) for value in self.axis_stretch]
         return {**state, "camera": {
@@ -666,6 +786,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
     def restore_workspace_state(self, state):
         super().restore_workspace_state(state)
         self.set_axes_position(str(state.get("axes_position", AXES_ORIGIN)))
+        self.set_use_shader(state.get("use_shader") is True)
         stretch = state.get("axis_stretch")
         if isinstance(stretch, list) and len(stretch) == 3 and all(isinstance(value, (int, float)) for value in stretch):
             self.set_axis_stretch(stretch)
@@ -678,14 +799,19 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         except (KeyError, TypeError, ValueError):
             pass
 
+    def center_view(self):
+        """The shared Center view button: the camera back to the whole trace."""
+        self.reset_camera()
+
     def reset_camera(self):
         self.view.setCameraPosition(pos=QVector3D(0, 0, 0), distance=6, elevation=25, azimuth=45)
 
     def apply_theme(self):
-        self.reset_button.setIcon(plot_control_icon(self, "reset-camera"))
         for position, button in self.axes_buttons.items():
             button.setIcon(plot_control_icon(self, f"axes-{position}"))
         self.equal_scale_button.setIcon(plot_control_icon(self, "axes-equal"))
+        from src.gui.plots.theme import palette_overlay_stylesheet
+        self.use_shader_panel.setStyleSheet(palette_overlay_stylesheet())
         self.fit_axes_button.setIcon(plot_control_icon(self, "axes-fit"))
         self.value_boxes.apply_style()
         self._render()

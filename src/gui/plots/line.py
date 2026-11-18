@@ -18,6 +18,7 @@ from src.gui.plots.series import SeriesPlotWidget, TimeAxisMetadata
 
 class LinePlotWidget(TimeCardMarkers, PlotBaseWidget):
     """An LOD-aware line plot hosted inside the reusable plot-card frame."""
+    has_center_view = True
     help_topic = "line"
 
     marker_placed = Signal(float)
@@ -67,6 +68,7 @@ class LinePlotWidget(TimeCardMarkers, PlotBaseWidget):
         self.content_layout.addWidget(self.series_plot, stretch=1)
         self.content_layout.addWidget(self.error_label)
         self.legend = FloatingLegend(self.series_plot.plot_widget, self)
+        self.series_plot.plot_widget.plot_left_clicked.connect(self._select_series_at)
         self.on_series_changed()
 
     def resizeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
@@ -95,13 +97,26 @@ class LinePlotWidget(TimeCardMarkers, PlotBaseWidget):
             self._show_load_error(str(error))
         else:
             self.error_label.hide()
+            if self.selected_series is not None and self.selected_series not in self.series:
+                self.select_series(None)
             self.legend.set_entries(self.series, self.series_plot.series_colors())
+            self.show_selected_series_in_legend()
             self.legend.updateGeometry()
             self.legend.update()
             self.series_plot.plot_widget.update()
             # A series drop is handled while Qt is still dispatching its drag
             # event. Reposition once that event has completed as well.
             QTimer.singleShot(0, self.legend, self.legend.reposition)
+
+    def _select_series_at(self, position) -> None:  # type: ignore[no-untyped-def]
+        """A left click selects the line under it, or none when no line is that close."""
+        self.select_series(self.series_plot.entry_at(position.toPoint()))
+
+    def apply_series_widths(self) -> None:
+        self.series_plot.set_selected_entry(self.selected_series)
+
+    def selected_legend_rows(self):  # type: ignore[no-untyped-def]
+        return tuple(index for index, entry in enumerate(self.series) if entry == self.selected_series), None
 
     def _show_load_error(self, error: str) -> None:
         if self.series:
