@@ -128,7 +128,7 @@ class ImageAttachmentTests(unittest.TestCase):
 
         with mock.patch("src.app.lodgazilla.QMenu", RecordingMenu):
             LODGaZillaWindow.show_media_group_context_menu(window, self.folder, [], QPoint())
-        self.assertEqual(shown["attach"], ["Video…", "Images…", "Audio…"])
+        self.assertEqual(shown["attach"], ["Video…", "Images…", "Audio…", "3D model…"])
         window.attach_images_to_folder.assert_called_once_with(self.folder)
 
     def test_cancel_and_failed_save_leave_links_unchanged(self):

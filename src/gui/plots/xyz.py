@@ -1,15 +1,22 @@
 """Cartesian 3D card with independently assigned X/Y/Z sources per trace."""
 
+import logging
+from pathlib import Path
+
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QVector3D
-from PySide6.QtWidgets import QApplication, QButtonGroup, QCheckBox, QHBoxLayout, QToolButton, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QToolButton, QWidget,
+)
 
 from OpenGL import GL
 from src.gui.plots.wide_lines import WideLinePlotItem
 from src.data.axis_scale import clamp_stretch, equal_scale_factors
+from src.data.folder_info import attachment_path, read_existing_info_file
+from src.data.model3d import PLACE_GNSS, PLACE_ORIGIN, PLACEMENTS, calibration_text, enu_to_data, model_matrix
 from src.data.xyz import XYZ_MAXIMUM_POINTS, AxisSource, XYZData
 from src.gui.plots.base import PlotBaseWidget
 from src.gui.plots.card_markers import PointMarkers
@@ -24,7 +31,11 @@ from src.gui.plots.markers import (
     FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, track_selection_layer, track_selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
+from src.gui.plots.model_item import ModelPartItem
+from src.jobs.model3d import LoadedModel, ModelLoadCoordinator
 from src.jobs.xyz import XYZLoadCoordinator
+
+_log = logging.getLogger(__name__)
 
 
 # Where the 3D plot draws its axes: through the data's 0, 0, 0, or along the box's minimum corner.
@@ -40,6 +51,18 @@ AUTO_POINT_LIGHTER_PERCENT = 160
 # A click within this many pixels of an axis line selects it; Ctrl+wheel then stretches it this much per step.
 AXIS_HIT_PIXELS = 8.0
 AXIS_STRETCH_PER_WHEEL_STEP = 1.15
+# The placement buttons' short labels; PLACEMENTS names them in full.
+PLACEMENT_LABELS = {PLACE_ORIGIN: "0, 0, 0", PLACE_GNSS: "GNSS"}
+NO_MODEL = "No 3D model"
+
+
+def model_panel_stylesheet() -> str:
+    """The Model selector's panel: the placement buttons highlighted like the Axes selector."""
+    from src.gui.plots.theme import palette_overlay_stylesheet
+    return (palette_overlay_stylesheet()
+            + " QToolButton { border: none; border-radius: 3px; background: transparent; padding: 0 4px; }"
+            " QToolButton:hover { background: palette(midlight); }"
+            " QToolButton:checked { background: rgba(33, 150, 243, 0.40); }")
 
 
 def axes_origin(low, high, position: str):  # type: ignore[no-untyped-def]
@@ -235,6 +258,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             self.header_controls.append(button)
         self._equal_scale_reason = "No data"
         self._update_equal_scale_button()
+        self._init_model_controls()
         self.view = self.view_class(self)
         self.view.setMinimumHeight(100)
         self.view.scroll_requested.connect(self.wheel_scrolled)
@@ -246,6 +270,10 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self.content_layout.addWidget(self.view, 1)
         self.legend = PlotLegendWidget(self.view)
         self.legend.set_group_model(self.grouped_series)
+        # The shown model's name and calibration, at the view's bottom left.
+        self.model_note = QLabel(self.view)
+        self.model_note.setStyleSheet(palette_overlay_stylesheet() + " QLabel { padding: 2px 6px; }")
+        self.model_note.hide()
         # A trace's sources are named while the pointer rests on it.
         install_series_name_hover(self.view, self.series_name_at)
         self.reset_camera()
@@ -308,7 +336,247 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         # The traces may have moved or gone: the selection does not follow them.
         self._selected_series = None
         self.show_selected_series_in_legend()
+        self.refresh_models()
         self._request()
+
+    # --- 3D models ------------------------------------------------------------------------------
+
+    def _init_model_controls(self) -> None:
+        """The Model selector and placement buttons; shown only while the card's folders have models."""
+        # The model folders attached to the folders of the card's traces, and the one shown.
+        self.models: list[Path] = []
+        self.model_folder: Path | None = None
+        self.model_placement = PLACE_ORIGIN
+        # A placement the user (or a workspace) chose; until then a model starts at its GNSS
+        # position when the axes allow it.
+        self._placement_chosen = False
+        self._equal_scale_pending = False
+        self._loaded_model: LoadedModel | None = None
+        self._model_items: list[ModelPartItem] = []
+        self._model_reason = ""
+        self.model_loader = ModelLoadCoordinator(self)
+        self.model_loader.loaded.connect(self._model_loaded)
+        self.model_panel = QWidget(self)
+        self.model_panel.setAccessibleName("3D model")
+        layout = QHBoxLayout(self.model_panel)
+        layout.setContentsMargins(5, 0, 2, 0)
+        layout.setSpacing(2)
+        # One model: a checkbox; several: a list with No 3D model first.
+        self.model_check = QCheckBox("3D model", self.model_panel)
+        self.model_check.toggled.connect(
+            lambda checked: self.show_model(self.models[0] if checked and self.models else None))
+        self.model_combo = QComboBox(self.model_panel)
+        self.model_combo.setAccessibleName("3D model")
+        self.model_combo.activated.connect(self._model_chosen)
+        layout.addWidget(self.model_check)
+        layout.addWidget(self.model_combo)
+        group = QButtonGroup(self.model_panel)
+        group.setExclusive(True)
+        self.placement_buttons: dict[str, QToolButton] = {}
+        for mode, title in PLACEMENTS.items():
+            button = QToolButton(self.model_panel)
+            button.setText(PLACEMENT_LABELS[mode])
+            button.setCheckable(True)
+            button.setAutoRaise(True)
+            button.setToolTip(title)
+            button.setAccessibleName(title)
+            button.clicked.connect(lambda _checked=False, mode=mode: self.set_model_placement(mode))
+            group.addButton(button)
+            layout.addWidget(button)
+            self.placement_buttons[mode] = button
+        self.placement_buttons[self.model_placement].setChecked(True)
+        self.model_panel.setStyleSheet(model_panel_stylesheet())
+        self.model_panel.setFixedHeight(self.close_button.height() - 2)
+        self.header_controls.append(self.model_panel)
+        self.model_panel.hide()
+
+    def _model_folders(self) -> list[Path]:
+        """The folders of the card's traces, which hold its sources' H5 files."""
+        folders = []
+        for trace in self.traces:
+            for axis in trace.axes:
+                if axis is not None and axis.path.parent not in folders:
+                    folders.append(axis.path.parent)
+        return folders
+
+    def refresh_models(self) -> None:
+        """Offer the models attached to the card's folders (read from their small info files)."""
+        models: list[Path] = []
+        for folder in self._model_folders():
+            try:
+                info = read_existing_info_file(folder)
+            except (OSError, ValueError):
+                continue
+            for link in info.models if info is not None else []:
+                path = attachment_path(folder, link)
+                if path not in models:
+                    models.append(path)
+        self.models = models
+        if self.model_folder is not None and self.model_folder not in models:
+            self.show_model(None)
+        self._show_model_controls()
+
+    def _show_model_controls(self) -> None:
+        self.model_check.blockSignals(True)
+        self.model_check.setChecked(self.model_folder is not None)
+        self.model_check.blockSignals(False)
+        self.model_combo.clear()
+        self.model_combo.addItem(NO_MODEL)
+        for folder in self.models:
+            self.model_combo.addItem(folder.name)
+        if self.model_folder in self.models:
+            self.model_combo.setCurrentIndex(self.models.index(self.model_folder) + 1)
+        tip = "3D model"
+        if self._loaded_model is not None:
+            tip = f"{self._loaded_model.folder.name}: {calibration_text(self._loaded_model.placement)}"
+        elif self._model_reason:
+            tip = self._model_reason
+        self.model_check.setToolTip(tip)
+        self.model_combo.setToolTip(tip)
+        self.model_check.setVisible(len(self.models) == 1)
+        self.model_combo.setVisible(len(self.models) > 1)
+        for mode, button in self.placement_buttons.items():
+            button.setChecked(mode == self.model_placement)
+        self.model_panel.adjustSize()
+        if getattr(self, "_header_controls_shown", False):
+            self.model_panel.setVisible(bool(self.models))
+            self._layout_header_controls()
+
+    def _restore_header_control_states(self) -> None:
+        super()._restore_header_control_states()
+        self.model_panel.setVisible(bool(self.models))
+
+    def _model_chosen(self, index: int) -> None:
+        self.show_model(self.models[index - 1] if 0 < index <= len(self.models) else None)
+
+    def show_model(self, folder: Path | None) -> None:
+        """Show one of the attached models in the card, or none; it loads in the background."""
+        folder = Path(folder).resolve() if folder is not None else None
+        if folder == self.model_folder:
+            self._show_model_controls()
+            return
+        self._clear_model_items()
+        self._loaded_model = None
+        self._model_reason = ""
+        self.model_folder = folder
+        if folder is None:
+            self.model_loader.cancel()
+        else:
+            self._model_reason = f"Loading 3D model {folder.name}..."
+            self.model_loader.request(folder)
+        self._show_model_note()
+        self._show_model_controls()
+
+    def _model_loaded(self, result) -> None:  # type: ignore[no-untyped-def]
+        if self._disposed:
+            return
+        if not isinstance(result, LoadedModel):
+            _log.warning("%s", result)
+            self._model_reason = str(result)
+            self.model_folder = None
+            self._show_model_note(str(result))
+            self._show_model_controls()
+            return
+        if result.folder.resolve() != self.model_folder:
+            return
+        self._loaded_model = result
+        self._model_reason = ""
+        for part in result.model.parts:
+            image = result.images[part.image] if part.image is not None and part.image < len(result.images) else None
+            item = ModelPartItem(part, image)
+            self._model_items.append(item)
+            self.view.addItem(item)
+        if not self._placement_chosen:
+            self.model_placement = PLACE_GNSS if self._placement_reason(PLACE_GNSS) == "" else PLACE_ORIGIN
+            # A model at its GNSS position keeps its true shape only with Equal scale.
+            self._equal_scale_pending = self.model_placement == PLACE_GNSS
+        self._update_model()
+        self._show_model_controls()
+
+    def set_model_placement(self, mode: str) -> None:
+        """Place the model's anchor at the plot's 0, 0, 0 or at its GNSS position."""
+        if mode not in PLACEMENTS:
+            return
+        self._placement_chosen = True
+        if mode != self.model_placement:
+            self.model_placement = mode
+            self._equal_scale_pending = mode == PLACE_GNSS
+            self._update_model()
+        self._show_model_controls()
+
+    def _data_axes(self):  # type: ignore[no-untyped-def]
+        """The plot's units and roles (from its first trace) and its data range."""
+        data = next((result for result in self.results if isinstance(result, XYZData)), None)
+        units, roles = (data.units, data.roles) if data is not None else (("", "", ""), ("", "", ""))
+        low, high = self._extent if self._extent is not None else (np.zeros(3), np.ones(3))
+        return units, roles, low, high
+
+    def _placement_reason(self, mode: str) -> str:
+        """Why the model cannot be placed this way now, or ""."""
+        if self._loaded_model is None:
+            return ""
+        units, roles, low, high = self._data_axes()
+        return enu_to_data(self._loaded_model.placement, mode, units, roles, low, high)[1]
+
+    def _update_model(self) -> None:
+        """Place the shown model in the plot's box, as the traces are drawn now."""
+        gnss_reason = self._placement_reason(PLACE_GNSS)
+        gnss_button = self.placement_buttons[PLACE_GNSS]
+        gnss_button.setEnabled(not gnss_reason)
+        gnss_button.setToolTip(PLACEMENTS[PLACE_GNSS] + (f": {gnss_reason}" if gnss_reason else ""))
+        if self._loaded_model is None or not self._model_items:
+            return
+        units, roles, low, high = self._data_axes()
+        matrix, reason = model_matrix(self._loaded_model.placement, self.model_placement, units, roles, low, high,
+                                      self.axis_stretch)
+        for item in self._model_items:
+            item.setVisible(matrix is not None)
+            if matrix is not None:
+                item.set_model_matrix(matrix)
+        self._show_model_note(reason)
+        if matrix is not None and self._equal_scale_pending and not self._loading:
+            self._equal_scale_pending = False
+            # After this drawing: Equal scale draws the scene again.
+            QTimer.singleShot(0, self, self.equal_scale)
+
+    def _show_model_note(self, problem: str = "") -> None:
+        """The shown model's name and calibration status (as its makers ask), or why it is not shown."""
+        if not hasattr(self, "model_note"):
+            return
+        if self._loaded_model is not None:
+            text = f"3D model {self._loaded_model.folder.name}: {calibration_text(self._loaded_model.placement)}"
+            if problem:
+                text += f". Not shown: {problem}"
+        elif problem or self._model_reason:
+            text = problem or self._model_reason
+        else:
+            self.model_note.hide()
+            return
+        self.model_note.setText(text)
+        self.model_note.adjustSize()
+        self.model_note.move(6, max(0, self.view.height() - self.model_note.height() - 6))
+        self.model_note.show()
+        self.model_note.raise_()
+
+    def _clear_model_items(self) -> None:
+        """Remove the model from the view and free its GPU buffers."""
+        if not self._model_items:
+            return
+        make_current = getattr(self.view, "makeCurrent", None)
+        if make_current is not None:
+            make_current()
+        for item in self._model_items:
+            try:
+                item.release()
+            except Exception as error:  # noqa: BLE001 - a lost context has freed them already.
+                _log.debug("3D model buffers were not released: %s", error)
+            if item in getattr(self.view, "items", []):
+                self.view.removeItem(item)
+        if make_current is not None:
+            done_current = getattr(self.view, "doneCurrent", None)
+            if done_current is not None:
+                done_current()
+        self._model_items = []
 
     def set_axis_component(self, key, component):
         if component not in {"value", "time"} or not 0 <= key < len(self.traces) * 3:
@@ -411,6 +679,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
                     glOptions="opaque"))
         self._draw_axes(low, high)
         self._update_equal_scale_button()
+        self._update_model()
         self._update_legend()
         # New scene positions: the marker items are made again for them.
         self._clear_marker_items()
@@ -779,6 +1048,8 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             state["use_shader"] = True
         if not np.all(self.axis_stretch == 1):
             state["axis_stretch"] = [float(value) for value in self.axis_stretch]
+        if self.model_folder is not None:
+            state["model"] = {"path": str(self.model_folder), "placement": self.model_placement}
         return {**state, "camera": {
             "center": [center.x(), center.y(), center.z()], "distance": opts["distance"],
             "elevation": opts["elevation"], "azimuth": opts["azimuth"], "fov": opts["fov"]}}
@@ -790,6 +1061,15 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         stretch = state.get("axis_stretch")
         if isinstance(stretch, list) and len(stretch) == 3 and all(isinstance(value, (int, float)) for value in stretch):
             self.set_axis_stretch(stretch)
+        model = state.get("model")
+        if isinstance(model, dict) and isinstance(model.get("path"), str):
+            # The saved stretch and camera stay: no Equal scale on loading.
+            if model.get("placement") in PLACEMENTS:
+                self.model_placement = model["placement"]
+            self._placement_chosen = True
+            path = Path(model["path"]).resolve()
+            if path in self.models:
+                self.show_model(path)
         camera = state.get("camera")
         try:
             self.view.opts["fov"] = float(camera["fov"])
@@ -814,16 +1094,22 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self.use_shader_panel.setStyleSheet(palette_overlay_stylesheet())
         self.fit_axes_button.setIcon(plot_control_icon(self, "axes-fit"))
         self.value_boxes.apply_style()
+        self.model_panel.setStyleSheet(model_panel_stylesheet())
+        self.model_note.setStyleSheet(palette_overlay_stylesheet() + " QLabel { padding: 2px 6px; }")
         self._render()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "legend"):
             self.legend.reposition()
+        if hasattr(self, "model_note") and self.model_note.isVisible():
+            self.model_note.move(6, max(0, self.view.height() - self.model_note.height() - 6))
 
     def dispose(self):
         self._disposed = True
         self.loader.shutdown()
+        self.model_loader.shutdown()
+        self._clear_model_items()
 
 
 def _trace_key(trace):

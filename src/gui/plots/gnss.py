@@ -12,7 +12,7 @@ from PySide6.QtCore import QEvent, QObject, Qt, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QHBoxLayout, QLabel, QRadioButton, QStackedLayout, QWidget,
+    QButtonGroup, QCheckBox, QHBoxLayout, QLabel, QRadioButton, QStackedLayout, QToolButton, QWidget,
 )
 
 from src.gui.plots.series_style import SELECT_TOLERANCE_PIXELS, series_line_width
@@ -56,6 +56,8 @@ class GnssBridge(QObject):
     scroll_requested = Signal(int)
     # A left click on the map: the index of the track under it, or -1 when none is that close.
     track_clicked = Signal(int)
+    # A drawn track moved or rotated in the card: its index, Δlat, Δlon (degrees) and angle.
+    track_moved = Signal(int, float, float, float)
 
     @Slot(float)
     def select_timestamp(self, timestamp: float) -> None:
@@ -84,6 +86,10 @@ class GnssBridge(QObject):
     @Slot(int)
     def select_track(self, index: int) -> None:
         self.track_clicked.emit(int(index))
+
+    @Slot(int, float, float, float)
+    def move_track(self, index: int, dlat: float, dlon: float, angle: float) -> None:
+        self.track_moved.emit(int(index), float(dlat), float(dlon), float(angle))
 
     @Slot(int)
     def scroll_workspace(self, delta: int) -> None:
@@ -354,17 +360,31 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.scale_bar_check.setToolTip("Scale bar")
         self.scale_bar_check.toggled.connect(self._set_scale_bar)
         scale_layout.addWidget(self.scale_bar_check)
-        # Both panels are as tall as the card's other header controls (the Draw style buttons
+        # Tracks moved or rotated in this card (Ctrl+drag, Shift+drag), by their sources:
+        # (Δlat, Δlon, angle). Kept for the card's lifetime only, never saved.
+        self._track_transforms: dict[tuple, tuple[float, float, float]] = {}
+        # The group index of each drawn track (a track that failed to load is not drawn).
+        self._track_groups: list[int] = []
+        # Shown only while a track is moved: puts every track back where it was recorded.
+        self.reset_position_button = QToolButton(self)
+        self.reset_position_button.setText("Reset position")
+        self.reset_position_button.setToolTip("Reset position")
+        self.reset_position_button.setAccessibleName("Reset position")
+        self.reset_position_button.clicked.connect(self.reset_track_positions)
+        # The panels are as tall as the card's other header controls (the Draw style buttons
         # and the Sample limit selector).
-        for panel in (self.map_type, self.scale_bar_panel):
+        for panel in (self.map_type, self.scale_bar_panel, self.reset_position_button):
             panel.setStyleSheet(palette_overlay_stylesheet())
             panel.setFixedHeight(self.close_button.height() - 2)
             panel.adjustSize()
             self.header_controls.append(panel)
+        self.reset_position_button.hide()
         # Keep the legend a sibling of the WebEngine view.  A child overlay of
         # QWebEngineView can be drawn above Chromium while still letting its
         # mouse events fall through to the web page.
         self.legend = PlotLegendWidget(self.map_container, top_offset=MAP_LEGEND_TOP)
+        # A moved track's Legend heading says so: the map no longer shows where it was recorded.
+        self.legend.group_note = lambda index: "(moved)" if self._track_key(index) in self._track_transforms else ""
         self.legend.set_group_model(self.grouped_series)
         # Values boxes are siblings of the web view, like the legend, so they draw above it.
         self.value_boxes = ValueBoxLayer(self.map_container)
@@ -425,12 +445,19 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         apply_map_background(self)
         self.map_type.setStyleSheet(palette_overlay_stylesheet())
         self.scale_bar_panel.setStyleSheet(palette_overlay_stylesheet())
+        self.reset_position_button.setStyleSheet(palette_overlay_stylesheet())
         self.value_boxes.apply_style()
 
     def on_series_changed(self) -> None:
         # A track removed from the card cannot stay selected.
         if self.selected_series is not None and self.selected_series >= len(self.grouped_series.groups):
             self.select_series(None)
+        # Nor stay moved; a track that is still here keeps its move, wherever it now is.
+        if hasattr(self, "_track_transforms"):
+            keys = {self._track_key(index) for index in range(len(self.grouped_series.groups))}
+            if any(key not in keys for key in self._track_transforms):
+                self._track_transforms = {key: value for key, value in self._track_transforms.items() if key in keys}
+                self._show_moved_tracks()
         if hasattr(self, "value_boxes"):
             # The boxes return on the reloaded tracks (Sample limit, trim): keep their times.
             for marker in (FIRST_MARKER, SECOND_MARKER):
@@ -446,11 +473,13 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         fit = not self._track_data
         self._track_data = []
         self._track_names = []
+        self._track_groups = []
         for index, track in enumerate(results):
             if isinstance(track, dict):
                 track["color"] = self.grouped_series.groups[index].color
                 self._track_data.append(track)
                 self._track_names.append(group_display_name(self.grouped_series.groups[index]))
+                self._track_groups.append(index)
         if self.map_view is not None:
             if self._map_ready:
                 self._push_tracks(fit)
@@ -470,7 +499,62 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         # A new page starts in Auto; another style is sent along.
         if self.draw_style != "auto":
             script = f"drawStyle={json.dumps(self.draw_style)};{script}"
+        # Moved tracks are drawn moved again (Sample limit, Draw style, trim, reorder).
+        transforms = (self._drawn_track_transforms() if getattr(self, "_track_transforms", None)
+                      else [None] * len(self._track_data))
+        for track, transform in zip(self._track_data, transforms):
+            track["transform"] = transform
         self.map_view.page().runJavaScript(f"{script}setTracks({script_json(self._track_data)}, {str(fit).lower()});")
+
+    def _drawn_track_transforms(self) -> list[dict | None]:
+        """Each drawn track's move and rotation for the page, or None."""
+        transforms = []
+        for group_index in self._track_groups:
+            value = self._track_transforms.get(self._track_key(group_index))
+            transforms.append(None if value is None else dict(zip(("dlat", "dlon", "angle"), value)))
+        return transforms
+
+    def _track_moved(self, track_index: int, dlat: float, dlon: float, angle: float) -> None:
+        """The page moved or rotated a drawn track; keep it so redraws keep it too."""
+        if not 0 <= track_index < len(self._track_groups):
+            return
+        key = self._track_key(self._track_groups[track_index])
+        if abs(dlat) < 1e-12 and abs(dlon) < 1e-12 and abs(angle) < 1e-9:
+            self._track_transforms.pop(key, None)
+        else:
+            self._track_transforms[key] = (float(dlat), float(dlon), float(angle))
+        self._show_moved_tracks()
+        self._refresh_value_box_positions()
+
+    def reset_track_positions(self) -> None:
+        """Every track back where it was recorded."""
+        if not self._track_transforms:
+            return
+        self._track_transforms = {}
+        self._show_moved_tracks()
+        if self.map_view is not None and self._map_ready and self._track_data:
+            self._push_tracks(False)
+            self._marker_revision += 1
+            self._flush_marker()
+        self._refresh_value_box_positions()
+
+    @property
+    def moved_tracks(self) -> dict[tuple, tuple[float, float, float]]:
+        """The tracks moved in this card, by their sources: (Δlat, Δlon, angle in degrees)."""
+        return dict(self._track_transforms)
+
+    def _show_moved_tracks(self) -> None:
+        """The Legend's "(moved)" notes and the Reset position button follow the moved tracks."""
+        self.legend.refresh_groups()
+        self.legend.set_selected(*self.selected_legend_rows())
+        if getattr(self, "_header_controls_shown", False):
+            self.reset_position_button.setVisible(bool(self._track_transforms))
+            self.reset_position_button.adjustSize()
+            self._layout_header_controls()
+
+    def _restore_header_control_states(self) -> None:
+        super()._restore_header_control_states()
+        self.reset_position_button.setVisible(bool(self._track_transforms))
 
     def apply_draw_style(self, style: str) -> None:
         """Redraw the tracks in the new style, keeping the view; the markers and selection return."""
@@ -535,6 +619,7 @@ class GnssPlotWidget(MapMarkersMixin, PlotBaseWidget):
         self.map_view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.bridge.scroll_requested.connect(self.wheel_scrolled)
         self.bridge.track_clicked.connect(lambda index: self.select_series(index if index >= 0 else None))
+        self.bridge.track_moved.connect(self._track_moved)
         self.map_view.wheel_scrolled.connect(self.wheel_scrolled)
         self.map_view.loadFinished.connect(self._on_map_loaded)
         self.map_view.loadStarted.connect(lambda: setattr(self, '_map_ready', False))
@@ -809,6 +894,41 @@ def track_selection_script(selected) -> str:  # type: ignore[no-untyped-def]
     return f"setTrackSelection({index},{series_line_width()},{series_line_width(selected=True)});"
 
 
+# A track moved and rotated in the Map card, as the page draws it. Points are [lat, lon, time].
+# The track turns in local metres around its bounding-box centre and is placed at the moved
+# centre, so moving it north or south keeps its true shape and size.
+TRACK_TRANSFORM_JS = r"""
+const EARTH_RADIUS_M=6371000,DEGREE=Math.PI/180;
+function boxCenter(pts){
+  if(!pts.length)return [0,0];
+  let minLat=Infinity,maxLat=-Infinity,minLon=Infinity,maxLon=-Infinity;
+  for(const p of pts){minLat=Math.min(minLat,p[0]);maxLat=Math.max(maxLat,p[0]);minLon=Math.min(minLon,p[1]);maxLon=Math.max(maxLon,p[1])}
+  return [(minLat+maxLat)/2,(minLon+maxLon)/2];
+}
+function wrapLongitude(lon){return ((lon+540)%360+360)%360-180}
+function clampLatitude(lat){return Math.max(-85,Math.min(85,lat))}
+function normalAngle(angle){angle=((angle+180)%360+360)%360-180;return angle===-180?180:angle}
+function movePoints(pts,center,t){
+  if(!t||!pts.length||(!t.dlat&&!t.dlon&&!t.angle))return pts;
+  let lat0=center[0],lon0=center[1],lat1=lat0+(t.dlat||0),lon1=lon0+(t.dlon||0);
+  let k0=Math.cos(lat0*DEGREE),k1=Math.max(1e-9,Math.cos(lat1*DEGREE));
+  let a=(t.angle||0)*DEGREE,ca=Math.cos(a),sa=Math.sin(a);
+  return pts.map(p=>{
+    // East and north from the centre, in degrees of latitude; counterclockwise for a positive angle.
+    let east=(p[1]-lon0)*k0,north=p[0]-lat0;
+    let e=east*ca-north*sa,n=east*sa+north*ca;
+    return [lat1+n,wrapLongitude(lon1+e/k1),p[2]];
+  });
+}
+function distanceText(metres){return Math.abs(metres)>=1000?(Math.abs(metres)/1000).toFixed(2)+' km':Math.abs(metres).toFixed(1)+' m'}
+function moveText(center,t){
+  let north=t.dlat*DEGREE*EARTH_RADIUS_M,east=t.dlon*DEGREE*EARTH_RADIUS_M*Math.cos((center[0]+t.dlat)*DEGREE);
+  return distanceText(east)+(east<0?' W':' E')+', '+distanceText(north)+(north<0?' S':' N');
+}
+function angleText(angle){return angle.toFixed(1)+'°'}
+"""
+
+
 def map_html(*, background: str = "#000000") -> str:
     """Return the empty map page; tracks are pushed with ``setTracks`` once ready."""
     return f'''<!doctype html>
@@ -884,34 +1004,49 @@ function trackAt(x,y,tol){{
 function nearest(e){{return all.reduce((a,p)=>map.distance(e.latlng,L.latLng(p[0],p[1]))<map.distance(e.latlng,L.latLng(a[0],a[1]))?p:a)}}
 function select(e,index){{if(!all.length||!bridge)return;let point=nearest(e);if(index===0)bridge.select_timestamp(point[2]);else bridge.select_second_timestamp(point[2])}}
 function fitTracks(){{if(all.length)map.fitBounds(all.map(p=>p.slice(0,2)),{{padding:[20,20]}})}}
-function setTracks(nextTracks,fit=false){{
-tracks=nextTracks;
-trackLayers.forEach(layer=>map.removeLayer(layer));
-trackLayers=[];trackPoints=[];all=[];trackLines=[];clearMarkers();
-tracks.forEach((track,trackIndex)=>{{
-  let pts=track.lat.map((lat,j)=>[lat,track.lon[j],track.time[j]]);
-  let color=track.color||'#2196f3';
-  trackPoints.push(pts);
-  // A loop, not all.push(...pts): spreading 200k+ points overflows the call stack.
-  for(const p of pts)all.push(p);
-  if(drawStyle==='points')trackLayers.push(L.layerGroup(pts.map(p=>L.circleMarker(p.slice(0,2),
+{TRACK_TRANSFORM_JS}
+// Each track's recorded points, its bounding-box centre and its move and rotation in this
+// card ({{dlat,dlon,angle}} or null); trackPoints holds the points as drawn.
+let basePoints=[],trackCenters=[],trackTransforms=[],tinyTracks=[];
+function rebuildAll(){{all=[];for(const pts of trackPoints)for(const p of pts)all.push(p)}}
+// One track's layers, drawn from its points as moved.
+function drawTrack(i){{
+  (trackLayers[i]||[]).forEach(layer=>map.removeLayer(layer));
+  let layers=trackLayers[i]=[];trackLines[i]=null;
+  let pts=trackPoints[i],color=tracks[i].color||'#2196f3';
+  if(drawStyle==='points')layers.push(L.layerGroup(pts.map(p=>L.circleMarker(p.slice(0,2),
     {{renderer:pointRenderer,radius:2.5,stroke:false,fillColor:color,fillOpacity:1,interactive:false}}))).addTo(map));
   else{{
-    let line=L.polyline(pts.map(p=>p.slice(0,2)),{{color:color,weight:trackIndex===selectedTrack?selectedTrackWidth:trackWidth}}).addTo(map);
-    trackLayers.push(line);trackLines[trackIndex]=line;
+    let line=L.polyline(pts.map(p=>p.slice(0,2)),{{color:color,weight:i===selectedTrack?selectedTrackWidth:trackWidth}}).addTo(map);
+    layers.push(line);trackLines[i]=line;
   }}
+  if(tinyTracks[i]){{
+    let p=pts[Math.floor(pts.length/2)];
+    layers.push(L.circleMarker(p.slice(0,2),{{radius:6,color:color,weight:2,fillColor:color,fillOpacity:0.8}}).addTo(map));
+  }}
+}}
+function setTracks(nextTracks,fit=false){{
+tracks=nextTracks;
+trackLayers.forEach(layers=>layers.forEach(layer=>map.removeLayer(layer)));
+trackLayers=[];trackPoints=[];basePoints=[];trackCenters=[];trackTransforms=[];tinyTracks=[];trackLines=[];clearMarkers();
+tracks.forEach((track,trackIndex)=>{{
+  let pts=track.lat.map((lat,j)=>[lat,track.lon[j],track.time[j]]);
+  basePoints.push(pts);trackCenters.push(boxCenter(pts));trackTransforms.push(track.transform||null);
   // A stationary or very short GNSS recording can be smaller than one pixel
   // even at Leaflet's maximum zoom.  The H5 data is still a valid track, so
   // give it a visible representative point instead of making it look empty.
+  let tiny=false;
   if(pts.length){{
     let origin=L.latLng(pts[0][0],pts[0][1]);
     let span=0;for(const p of pts)span=Math.max(span,map.distance(origin,L.latLng(p[0],p[1])));
-    if(pts.length===1||span<1){{
-      let p=pts[Math.floor(pts.length/2)];
-      trackLayers.push(L.circleMarker(p.slice(0,2),{{radius:6,color:color,weight:2,fillColor:color,fillOpacity:0.8}}).addTo(map));
-    }}
+    tiny=pts.length===1||span<1;
   }}
+  tinyTracks.push(tiny);
+  trackPoints.push(movePoints(pts,trackCenters[trackIndex],trackTransforms[trackIndex]));
+  drawTrack(trackIndex);
 }});
+// A loop, not all.push(...pts): spreading 200k+ points overflows the call stack.
+rebuildAll();
 if(fit&&all.length){{
   if(restoreView){{map.setView(restoreView.center,restoreView.zoom,{{animate:false}});restoreView=null}}
   else map.fitBounds(all.map(p=>p.slice(0,2)),{{padding:[20,20]}});
@@ -936,7 +1071,10 @@ new QWebChannel(qt.webChannelTransport,c=>bridge=c.objects.gnssBridge);
 function setMapType(t){{if(t==='Satellite'){{map.removeLayer(street);satellite.addTo(map)}}else{{map.removeLayer(satellite);street.addTo(map)}}}}
 function nearestTimestamp(points,t){{return points.reduce((a,p)=>Math.abs(p[2]-t)<Math.abs(a[2]-t)?p:a)}}
 function pointAtTimestamp(points,t){{if(!points.length||t<points[0][2]||t>points[points.length-1][2])return null;return nearestTimestamp(points,t)}}
+// The last setMarkers call, drawn again while a track moves.
+let markerArgs=null;
 function setMarkers(times,colors,width,selectionColor,mode='always_top',syncTime=null,syncColor=null){{
+  markerArgs=[times,colors,width,selectionColor,mode,syncTime,syncColor];
   clearMarkers();selectionMode=mode;
   if(syncTime!==null)trackPoints.forEach(points=>{{
     let p=pointAtTimestamp(points,syncTime);
@@ -965,5 +1103,76 @@ function setMarkers(times,colors,width,selectionColor,mode='always_top',syncTime
 }}
 function clearMarkers(){{markers.concat(selectionLayers).forEach(layer=>{{if(layer)map.removeLayer(layer)}});markers=[];selectionLayers=[]}}
 function markerScreenPositions(t){{return trackPoints.map(points=>{{let p=pointAtTimestamp(points,t);if(!p)return null;let point=map.latLngToContainerPoint(p.slice(0,2));return [point.x,point.y]}})}}
+// Ctrl+drag moves the selected track and Shift+drag rotates it around its box centre, in
+// this card only. The press never reaches Leaflet, so the map does not pan or box-zoom;
+// with no track selected, Ctrl+drag pans and Shift+drag box-zooms as before.
+let trackDrag=null,dragFrame=0,swallowClick=false;
+let dragInfo=document.createElement('div');
+dragInfo.style.cssText='position:absolute;z-index:1000;display:none;pointer-events:none;padding:2px 6px;'
+  +'font:12px sans-serif;color:#fff;background:rgba(0,0,0,0.7);border-radius:3px;white-space:nowrap';
+map.getContainer().appendChild(dragInfo);
+function currentTransform(i){{return Object.assign({{dlat:0,dlon:0,angle:0}},trackTransforms[i]||{{}})}}
+function trackCenterPoint(i){{
+  let c=trackCenters[i],t=currentTransform(i);
+  return map.latLngToContainerPoint([c[0]+t.dlat,c[1]+t.dlon]);
+}}
+function pointerAngle(point,center){{return Math.atan2(center.y-point.y,point.x-center.x)*180/Math.PI}}
+document.addEventListener('mousedown',e=>{{
+  swallowClick=false;
+  if(e.button!==0||!(e.ctrlKey||e.shiftKey)||selectedTrack<0||!basePoints[selectedTrack]||!basePoints[selectedTrack].length)return;
+  if(!map.getContainer().contains(e.target)||e.target.closest('.leaflet-control'))return;
+  e.preventDefault();e.stopPropagation();
+  let point=map.mouseEventToContainerPoint(e);
+  trackDrag={{index:selectedTrack,rotate:!e.ctrlKey,start:point,startLatLng:map.containerPointToLatLng(point),
+    startTransform:currentTransform(selectedTrack),center:trackCenterPoint(selectedTrack),moved:false}};
+}},true);
+document.addEventListener('mousemove',e=>{{
+  if(!trackDrag)return;
+  e.preventDefault();e.stopPropagation();
+  // The button was released outside the page.
+  if(!(e.buttons&1)){{endTrackDrag();return}}
+  let point=map.mouseEventToContainerPoint(e),d=trackDrag,t0=d.startTransform;
+  if(!d.moved&&Math.abs(point.x-d.start.x)+Math.abs(point.y-d.start.y)<3)return;
+  d.moved=true;
+  let t=Object.assign({{}},t0);
+  if(d.rotate){{
+    t.angle=normalAngle(t0.angle+pointerAngle(point,d.center)-pointerAngle(d.start,d.center));
+  }}else{{
+    let latLng=map.containerPointToLatLng(point);
+    t.dlat=clampLatitude(trackCenters[d.index][0]+t0.dlat+latLng.lat-d.startLatLng.lat)-trackCenters[d.index][0];
+    t.dlon=t0.dlon+latLng.lng-d.startLatLng.lng;
+  }}
+  trackTransforms[d.index]=t;
+  dragInfo.textContent=d.rotate?angleText(t.angle):moveText(trackCenters[d.index],t);
+  dragInfo.style.left=(point.x+14)+'px';dragInfo.style.top=(point.y+14)+'px';dragInfo.style.display='block';
+  if(!dragFrame)dragFrame=requestAnimationFrame(()=>{{dragFrame=0;redrawMovedTrack()}});
+}},true);
+function redrawMovedTrack(){{
+  if(!trackDrag)return;
+  let i=trackDrag.index;
+  trackPoints[i]=movePoints(basePoints[i],trackCenters[i],trackTransforms[i]);
+  drawTrack(i);
+  if(markerArgs)setMarkers(...markerArgs);else orderTracks();
+  if(bridge)bridge.notify_view_changed();
+}}
+function endTrackDrag(){{
+  let d=trackDrag;
+  if(!d)return false;
+  if(dragFrame){{cancelAnimationFrame(dragFrame);dragFrame=0}}
+  if(d.moved){{
+    redrawMovedTrack();rebuildAll();
+    let t=trackTransforms[d.index];
+    if(bridge)bridge.move_track(d.index,t.dlat,t.dlon,t.angle);
+  }}
+  trackDrag=null;dragInfo.style.display='none';
+  return d.moved;
+}}
+document.addEventListener('mouseup',e=>{{
+  if(!trackDrag||e.button!==0)return;
+  e.preventDefault();e.stopPropagation();
+  swallowClick=endTrackDrag();
+}},true);
+// The click that ends a move or rotation neither selects a track nor places a marker.
+document.addEventListener('click',e=>{{if(swallowClick){{swallowClick=false;e.preventDefault();e.stopPropagation()}}}},true);
 window.gnssReady = true;
 </script></body></html>'''

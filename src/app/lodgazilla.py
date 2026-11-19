@@ -2306,6 +2306,7 @@ class LODGaZillaWindow(QMainWindow):
         self.navigator.video_context_menu_requested.connect(self.show_video_context_menu)
         self.navigator.image_activated.connect(self.plot_workspace.add_image_plot)
         self.navigator.image_context_menu_requested.connect(self.show_image_context_menu)
+        self.navigator.model_context_menu_requested.connect(self.show_model_context_menu)
         self.plot_workspace.video_offset_saved.connect(
             lambda _folder: self.navigator.refresh_tree()
         )
@@ -3455,6 +3456,62 @@ class LODGaZillaWindow(QMainWindow):
         self.navigator.refresh_tree(rescan=True)
         self.internal_logger.info(f"Image links saved for {folder.name}")
 
+    def attach_model_to_folder(self, folder: Path) -> None:
+        """Link a 3D model folder (placement.json and its model file) to ``folder``."""
+        from src.data.model3d import ModelError, calibration_text, model_folder_files
+        selected = QFileDialog.getExistingDirectory(self, "Attach 3D model folder", str(folder))
+        if not selected:
+            return
+        model_folder = Path(selected).resolve()
+        try:
+            placement, _model_path = model_folder_files(model_folder)
+        except ModelError as error:
+            QMessageBox.warning(self, "Attach 3D model", str(error))
+            return
+        try:
+            info = read_info_file(folder)
+            if model_folder not in {attachment_path(folder, model) for model in info.models}:
+                try:
+                    relative_path = Path(os.path.relpath(model_folder, folder.resolve())).as_posix()
+                except ValueError:
+                    # Windows cannot make a relative path across drive letters.
+                    relative_path = model_folder.as_posix()
+                info.models.append({"path": relative_path})
+                write_info_file(folder, info)
+        except (OSError, ValueError) as error:
+            self.on_metadata_write_failed(folder, str(error))
+            return
+        self.navigator.refresh_tree(rescan=True)
+        self.refresh_card_models()
+        self.internal_logger.info(f"3D model linked to {folder.name}: {model_folder.name} "
+                                  f"({calibration_text(placement)})")
+
+    def show_model_context_menu(self, folder: Path, model_folder: Path, position) -> None:  # type: ignore[no-untyped-def]
+        menu = QMenu(self)
+        menu.addAction("Show in file manager", lambda: self.show_folder_in_file_manager(model_folder))
+        menu.addAction("Remove link", lambda: self.remove_model_link(folder, model_folder))
+        menu.exec(self.navigator.tree.viewport().mapToGlobal(position))
+
+    def remove_model_link(self, folder: Path, model_folder: Path) -> None:
+        """Unlink a 3D model; its files stay where they are."""
+        try:
+            info = read_info_file(folder)
+            info.models = [model for model in info.models
+                           if attachment_path(folder, model) != model_folder.resolve()]
+            write_info_file(folder, info)
+        except (OSError, ValueError) as error:
+            self.on_metadata_write_failed(folder, str(error))
+            return
+        self.navigator.refresh_tree(rescan=True)
+        self.refresh_card_models()
+        self.internal_logger.info(f"Removed 3D model link from {folder.name}: {model_folder.name}")
+
+    def refresh_card_models(self) -> None:
+        """3D plot cards offer the models now attached to their folders."""
+        for plot in self.plot_workspace.plots():
+            if isinstance(plot, XYZPlotWidget):
+                plot.refresh_models()
+
     def show_image_context_menu(self, folder: Path, image_path: Path, position) -> None:  # type: ignore[no-untyped-def]
         menu = QMenu(self)
         populate_plot_menu(menu, self.plot_workspace,
@@ -3531,6 +3588,7 @@ class LODGaZillaWindow(QMainWindow):
         attach_menu.addAction("Video…", lambda: self.attach_video_to_folder(folder))
         attach_menu.addAction("Images…", lambda: self.attach_images_to_folder(folder))
         attach_menu.addAction("Audio…", lambda: self.attach_audio_to_folder(folder))
+        attach_menu.addAction("3D model…", lambda: self.attach_model_to_folder(folder))
 
     def show_media_group_context_menu(self, folder: Path, entries, position) -> None:  # type: ignore[no-untyped-def]
         """A folder's Media group: plot its audio series, if any, and attach more media."""

@@ -153,6 +153,93 @@ class GroupedLegendTests(unittest.TestCase):
         gnss.map_view.page.return_value.runJavaScript.assert_called_once_with("fitTracks();")
         gnss.map_view = None
 
+    def test_track_transform_keeps_the_track_shape(self):
+        from PySide6.QtQml import QJSEngine
+        from src.gui.plots.gnss import TRACK_TRANSFORM_JS
+        engine = QJSEngine()
+        # Top-level const bindings stay local to one evaluate call: check in the same call.
+        result = engine.evaluate(TRACK_TRANSFORM_JS + r"""
+            function metres(a,b){let k=Math.cos((a[0]+b[0])/2*DEGREE);
+              return Math.hypot((b[0]-a[0])*DEGREE*EARTH_RADIUS_M,(b[1]-a[1])*k*DEGREE*EARTH_RADIUS_M)}
+            let pts=[[60,24,0],[60.01,24,1],[60.01,24.02,2]],c=boxCenter(pts);
+            let same=movePoints(pts,c,{dlat:0,dlon:0,angle:0});
+            let turned=movePoints(pts,c,{dlat:0,dlon:0,angle:90});
+            let north=movePoints(pts,c,{dlat:10,dlon:5,angle:0});
+            JSON.stringify({same:same===pts,center:c,
+              sides:[metres(pts[0],pts[1]),metres(pts[1],pts[2])],
+              turned:[metres(turned[0],turned[1]),metres(turned[1],turned[2])],
+              north:[metres(north[0],north[1]),metres(north[1],north[2])],
+              turnedCenter:boxCenter(turned),northCenter:boxCenter(north),times:turned.map(p=>p[2]),
+              angle:[normalAngle(190),normalAngle(-180)],wrap:wrapLongitude(181),
+              text:moveText([0,0],{dlat:0,dlon:-0.001}),angleText:angleText(15)})
+        """)
+        self.assertFalse(result.isError(), result.toString())
+        data = json.loads(result.toString())
+        self.assertTrue(data["same"])
+        self.assertEqual(data["times"], [0, 1, 2])
+        # Rotating and moving north keep every side's length in metres (within 1%).
+        for key in ("turned", "north"):
+            for side, original in zip(data[key], data["sides"]):
+                self.assertAlmostEqual(side, original, delta=original * 0.01)
+        self.assertAlmostEqual(data["turnedCenter"][0], data["center"][0], places=6)
+        self.assertAlmostEqual(data["northCenter"][0], data["center"][0] + 10, places=6)
+        self.assertAlmostEqual(data["northCenter"][1], data["center"][1] + 5, places=6)
+        self.assertEqual(data["angle"], [-170, 180])
+        self.assertAlmostEqual(data["wrap"], -179)
+        self.assertEqual(data["text"], "111.2 m W, 0.0 m N")
+        self.assertEqual(data["angleText"], "15.0°")
+
+    def test_map_page_moves_and_rotates_only_the_selected_track(self):
+        from src.gui.plots.gnss import map_html
+        html = map_html()
+        # Ctrl moves, Shift rotates, only with a track selected; the press never reaches Leaflet.
+        self.assertIn("!(e.ctrlKey||e.shiftKey)||selectedTrack<0", html)
+        self.assertIn("rotate:!e.ctrlKey", html)
+        self.assertIn("e.preventDefault();e.stopPropagation();", html)
+        self.assertIn("bridge.move_track(d.index,t.dlat,t.dlon,t.angle)", html)
+        self.assertIn("trackTransforms.push(track.transform||null)", html)
+        self.assertIn("function movePoints(", html)
+
+    def test_moved_tracks_last_for_the_card_only(self):
+        card = self.make_card("gnss")
+        card.grouped_series.insert((AxisSource(self.path, self.names[1]), AxisSource(self.path, self.names[0])))
+        self.wait_loaded(card)
+        self.app.processEvents()
+        self.assertEqual(card._track_groups, [0, 1])
+        card.controls_button.click()
+        self.app.processEvents()
+        self.assertTrue(card.reset_position_button.isHidden())
+        # The page reports a move of the second track: its heading says so, Reset position shows.
+        card._track_moved(1, 0.5, -0.25, 30.0)
+        key = card._track_key(1)
+        self.assertEqual(card.moved_tracks, {key: (0.5, -0.25, 30.0)})
+        self.assertEqual(card._drawn_track_transforms(), [None, {"dlat": 0.5, "dlon": -0.25, "angle": 30.0}])
+        headings = [entry.group for entry in card.legend.entries]
+        self.assertIn("Track 2 (moved)", headings)
+        self.assertIn("Track 1", headings)
+        self.assertFalse(card.reset_position_button.isHidden())
+        # Not saved in workspaces.
+        self.assertNotIn("transform", json.dumps(card.workspace_state(), default=str))
+        # A reorder keeps the move with its track; a removed track drops it.
+        card.grouped_series.reorder(1, 0)
+        self.wait_loaded(card)
+        self.assertEqual(card._track_key(0), key)
+        self.assertEqual(list(card.moved_tracks), [key])
+        self.assertEqual(card._drawn_track_transforms()[0], {"dlat": 0.5, "dlon": -0.25, "angle": 30.0})
+        self.assertEqual([entry.group for entry in card.legend.entries][0], "Track 1 (moved)")
+        card.remove_series_at(0)
+        self.wait_loaded(card)
+        self.assertEqual(card.moved_tracks, {})
+        self.assertTrue(card.reset_position_button.isHidden())
+        # Reset position puts every track back; moving back to zero also clears it.
+        card._track_moved(0, 0.1, 0.0, 0.0)
+        card._track_moved(0, 0.0, 0.0, 0.0)
+        self.assertEqual(card.moved_tracks, {})
+        card._track_moved(0, 0.1, 0.0, 0.0)
+        card.reset_position_button.click()
+        self.assertEqual(card.moved_tracks, {})
+        self.assertEqual([entry.group for entry in card.legend.entries][0], "Track 1")
+
     def test_map_header_controls_share_one_height(self):
         card = self.make_card("gnss")
         card.controls_button.click()

@@ -22,6 +22,8 @@ class FolderInfoData:
     # Audio H5 links: "path" (the H5), optional "source" (the original audio or
     # video file), "offset_seconds", and "video" when it is a video's soundtrack.
     audio: list[dict[str, str]] = field(default_factory=list)
+    # 3D model links: "path" is a folder holding placement.json and its model (src/data/model3d.py).
+    models: list[dict[str, str]] = field(default_factory=list)
     # The Source data records: what was imported or exported, from what, by which
     # plugin (``source_entry`` builds one; ``source_entry_key`` is its identity).
     sources: list[dict[str, str]] = field(default_factory=list)
@@ -80,6 +82,15 @@ def normalise_info_mapping(data: object) -> FolderInfoData:
             link["path"] = link["path"].strip()
             link.setdefault("offset_seconds", "0")
             audio.append(link)
+    raw_models = data.get("models", [])
+    if not isinstance(raw_models, list):
+        raise ValueError("Folder models JSON section must contain an array.")
+    models = []
+    for entry in raw_models:
+        link = normalise_plugin_mapping(entry)
+        if link.get("path", "").strip():
+            link["path"] = link["path"].strip()
+            models.append(link)
     raw_sources = data.get("sources", [])
     if not isinstance(raw_sources, list):
         raise ValueError("Folder sources JSON section must contain an array.")
@@ -95,7 +106,7 @@ def normalise_info_mapping(data: object) -> FolderInfoData:
     readonly = {key: value for key, value in readonly.items() if key not in editable}
     readonly.setdefault("serial number", "")
     return FolderInfoData(editable=editable, readonly=readonly, plugin=plugin, videos=videos, images=images,
-                          audio=audio, sources=list(sources.values()))
+                          audio=audio, models=models, sources=list(sources.values()))
 
 
 SOURCE_IMPORT = "import"
@@ -240,7 +251,8 @@ def write_info_file(folder: str | Path, data: FolderInfoData | dict[str, str]) -
 
 
 def _info_payload(data: FolderInfoData) -> dict:
-    return {name: getattr(data, name) for name in ("editable", "readonly", "plugin", "videos", "images", "audio", "sources")}
+    return {name: getattr(data, name)
+            for name in ("editable", "readonly", "plugin", "videos", "images", "audio", "models", "sources")}
 
 
 def _read_info(path: Path) -> FolderInfoData:

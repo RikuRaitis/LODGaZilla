@@ -8,6 +8,14 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Added
 
+- 3D models: **Attach > 3D model…** links a model folder (`placement.json` and its `.glb`)
+  to a data folder, listed in its Media group. The 3D plot card shows it from a **3D model**
+  checkbox (a list for several models), placed at the plot's **0, 0, 0** or at its **GNSS**
+  position, with its calibration status shown.
+- Map card: with a track selected, **Ctrl+drag** moves it and **Shift+drag** rotates it
+  around its centre, for display in that card only (not saved). Its legend heading says
+  **(moved)**, and **Reset position** in the card's controls puts every track back. With no
+  track selected, Ctrl+drag still pans and Shift+drag still zooms to a box.
 - 3D plot: **Use shader** in the card's controls (off by default) draws the traces at the
   Series line widths, the selected one wider; without it they stay 1 px, as OpenGL draws lines.
 - The selection on X/Y, 3D plot, Map and 3D Map cards recolors the stretch between the

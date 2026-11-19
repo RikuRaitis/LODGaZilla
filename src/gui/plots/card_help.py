@@ -118,12 +118,20 @@ MOUSE_HELP = {
         ("Center view button", "Return the camera to the whole trace."),
         ("Use shader", "Draw the traces at the Series line widths (otherwise 1 px)."),
         ("Axes selector", "Draw the axes through 0, 0, 0, or along the corner of the data box."),
+        ("3D model checkbox or list", "Show a 3D model attached to the folder of the card's data "
+                                      "(Attach, 3D model on the folder's menu)."),
+        ("0, 0, 0 / GNSS buttons", "Place the model's anchor at the plot's 0, 0, 0 (east, north and up along "
+                                   "X, Y and Z, in metres), or at its GNSS position on latitude and longitude axes."),
     ) + _DRAW_STYLE + _SAMPLES + _VALUES + _GROUP_LEGEND + _NAMES,
     "gnss": _POINT_MARKERS + _SELECT + (
         ("Double-click", "Remove the first marker."),
         ("Right-click twice quickly", "Remove the second marker."),
         ("Drag the map", "Pan."),
-        ("Shift+drag the map", "Zoom to the dragged box."),
+        ("Ctrl+drag with a track selected", "Move that track, in this card only; its legend heading says "
+                                            "(moved). With none selected, pan."),
+        ("Shift+drag with a track selected", "Rotate that track around its centre, in this card only. "
+                                             "With none selected, zoom to the dragged box."),
+        ("Reset position button", "Put every moved track back where it was recorded."),
         ("Ctrl+wheel over the map", "Zoom."),
         ("Street / Satellite", "Change the map type."),
         ("Center view button", "Show every track again."),

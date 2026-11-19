@@ -95,6 +95,8 @@ class PlotLegendWidget(QFrame):
         self._headers: list[QWidget] = []
         self.group_headers: list[QWidget] = []
         self.group_model = None
+        # The card's note after a group heading, such as "(moved)": a callable of the group index.
+        self.group_note = None
         # The card's selected series: the row keys, or the group index, highlighted.
         self._selected_keys: frozenset = frozenset()
         self._selected_group: int | None = None
@@ -180,6 +182,8 @@ class PlotLegendWidget(QFrame):
             return
         entries = []
         for index, group in enumerate(model.groups):
+            note = self.group_note(index) if self.group_note is not None else ""
+            heading = f"{model.title} {index + 1}" + (f" {note}" if note else "")
             for axis_index, (role, axis) in enumerate(zip(model.roles, group.axes)):
                 key = index * model.width + axis_index
                 text = "empty" if axis is None else series_legend_name(axis.path, axis.name)
@@ -190,7 +194,7 @@ class PlotLegendWidget(QFrame):
                 entries.append(LegendEntry(
                     key, text, group.color, (axis.path, axis.name) if axis else None,
                     removable=False, draggable=axis is not None,
-                    group=f"{model.title} {index + 1}", role=role, replaceable=True,
+                    group=heading, role=role, replaceable=True,
                     component=axis.component if axis else "value", component_editable=model.allow_time and axis is not None,
                     group_index=index,
                 ))

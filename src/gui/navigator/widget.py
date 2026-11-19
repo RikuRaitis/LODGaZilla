@@ -127,6 +127,8 @@ ITEM_VIDEO_OFFSET_ROLE = Qt.ItemDataRole.UserRole + 14
 ITEM_IMAGE_PATH_ROLE = Qt.ItemDataRole.UserRole + 15
 # A Source data row's SourceRow (src/jobs/source_detection.py).
 ITEM_SOURCE_ROLE = Qt.ItemDataRole.UserRole + 16
+# A Model attachment row's model folder (the folder holding placement.json).
+ITEM_MODEL_PATH_ROLE = Qt.ItemDataRole.UserRole + 17
 ROW_TYPE_VIRTUAL = "virtual"
 ROW_TYPE_FOLDER = "folder"
 ROW_TYPE_GROUP = "series_group"
@@ -137,6 +139,7 @@ ROW_TYPE_ERROR = "error"
 ROW_TYPE_MESSAGE = "message"
 ROW_TYPE_VIDEO = "video"
 ROW_TYPE_IMAGE = "image"
+ROW_TYPE_MODEL = "model"
 ROW_TYPE_SOURCE_GROUP = "source_group"
 ROW_TYPE_SOURCE = "source"
 SOURCE_GROUP_NAME = "Source data"
@@ -820,6 +823,8 @@ class DataNavigatorWidget(QWidget):
     video_context_menu_requested = Signal(Path, Path, QPoint)
     image_activated = Signal(Path, Path)
     image_context_menu_requested = Signal(Path, Path, QPoint)
+    # A Model attachment row: its folder and the model folder.
+    model_context_menu_requested = Signal(Path, Path, QPoint)
     series_context_menu_requested = Signal(Path, str, QPoint)
     folder_context_menu_requested = Signal(Path, QPoint)
     # A Source data row: its folder and SourceRow (src/jobs/source_detection.py).
@@ -2489,6 +2494,8 @@ class DataNavigatorWidget(QWidget):
             detail = str(item.data(0, ITEM_VIDEO_PATH_ROLE) or "")
         elif item_type == ROW_TYPE_IMAGE:
             detail = str(item.data(0, ITEM_IMAGE_PATH_ROLE) or "")
+        elif item_type == ROW_TYPE_MODEL:
+            detail = str(item.data(0, ITEM_MODEL_PATH_ROLE) or "")
         elif item_type == ROW_TYPE_SOURCE:
             row = item.data(0, ITEM_SOURCE_ROLE)
             if isinstance(row, SourceRow):
@@ -2613,6 +2620,7 @@ class DataNavigatorWidget(QWidget):
             self.add_folder_source_rows(item, folder)
             self.add_folder_video_row(item, folder, info, series_group_nodes)
             self.add_folder_image_rows(item, folder, info, series_group_nodes)
+            self.add_folder_model_rows(item, folder, info, series_group_nodes)
             folder_nodes[folder] = item
 
         h5_files = self.add_linked_audio(folder_nodes, h5_files, series_group_nodes)
@@ -2651,6 +2659,7 @@ class DataNavigatorWidget(QWidget):
             self.add_folder_source_rows(item, folder)
             self.add_folder_video_row(item, folder, info, series_group_nodes)
             self.add_folder_image_rows(item, folder, info, series_group_nodes)
+            self.add_folder_model_rows(item, folder, info, series_group_nodes)
             folder_nodes[folder] = item
 
         h5_files = self.add_linked_audio(folder_nodes, h5_files, series_group_nodes)
@@ -2844,6 +2853,27 @@ class DataNavigatorWidget(QWidget):
             item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
             item.setData(0, ITEM_IMAGE_PATH_ROLE, str(image_path))
             item.setToolTip(0, str(image_path))
+            self.reapply_item_values(item)
+            folder_item.addChild(item)
+
+    def add_folder_model_rows(
+        self,
+        folder_item: QTreeWidgetItem,
+        folder: Path,
+        info: FolderInfoData | None,
+        nodes: dict[tuple[str, ...], QTreeWidgetItem] | None = None,
+    ) -> None:
+        """A Model attachment row per linked 3D model folder, in the Media group."""
+        if info is None or not info.models:
+            return
+        folder_item = self.media_group_item(folder_item, folder, nodes)
+        for model in info.models:
+            model_path = attachment_path(folder, model)
+            item = self.make_item({COLUMN_DATA: model_path.name})
+            item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_MODEL)
+            item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
+            item.setData(0, ITEM_MODEL_PATH_ROLE, str(model_path))
+            item.setToolTip(0, f"3D model: {model_path}")
             self.reapply_item_values(item)
             folder_item.addChild(item)
 
@@ -3171,6 +3201,13 @@ class DataNavigatorWidget(QWidget):
         if column >= 0 and item not in self.tree.selectedItems():
             self.tree.setCurrentItem(item, column)
         item_type = item.data(0, ITEM_TYPE_ROLE)
+        if item_type == ROW_TYPE_MODEL:
+            self.model_context_menu_requested.emit(
+                Path(str(item.data(0, ITEM_PATH_ROLE))),
+                Path(str(item.data(0, ITEM_MODEL_PATH_ROLE))),
+                position,
+            )
+            return
         if item_type == ROW_TYPE_IMAGE:
             self.image_context_menu_requested.emit(
                 Path(str(item.data(0, ITEM_PATH_ROLE))),

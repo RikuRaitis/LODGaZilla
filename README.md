@@ -213,7 +213,7 @@ Right-click a column header to choose which columns are shown. Right-click a fol
 for:
 
 - **Multi-series**: all the folder's series in one card.
-- **Attach**: link a video, images or audio to the folder. Removing a link later never
+- **Attach**: link a video, images, audio or a 3D model to the folder. Removing a link later never
   deletes the file. A folder's **Media** group has the same **Attach** menu.
 - **Show in file manager.**
 - **Copy folder location**: puts the folder's full path on the clipboard.
@@ -480,6 +480,17 @@ fixed-point numbers (unit `raw`, degrees × 10⁷) are read as the Map card read
 length unit; otherwise Equal scale is greyed out and its tooltip names the axis.
 **Fit** <picture><source media="(prefers-color-scheme: dark)" srcset="assets/plot_icons/dark/axes-fit.svg"><img src="assets/plot_icons/light/axes-fit.svg" width="20" alt="fit axes"></picture> fills the box again. The stretch is saved in workspaces.
 
+**3D models.** Link a 3D model to a folder with **Attach > 3D model…** and choose the
+model's folder: it holds a `placement.json` (schema 2) and the binary glTF (`.glb`) file it
+names. The model is listed in the folder's Media group. A 3D plot card of that folder's data
+then shows a **3D model** checkbox in its controls, or a list when the folder has several
+models. **0, 0, 0** places the model's anchor at the plot's 0, 0, 0, with east, north and up
+along X, Y and Z in metres; **GNSS** places it at its latitude and longitude when two axes
+are latitude and longitude (the third takes its height, from 0 when the model's altitude is
+unknown), and applies Equal scale once so the model keeps its shape. A note at the view's
+bottom left names the model and whether its placement is calibrated. The model's water is
+drawn as a still, see-through surface.
+
 ### Map
 
 ![Map card](docs/images/card_map.png)
@@ -488,6 +499,12 @@ GNSS tracks on a street or satellite map. Recognised latitude and longitude seri
 open here by default. A card can hold several tracks. A scale bar at the bottom right
 shows a distance at the current zoom; **Scale bar** in the card's controls hides it. The
 map data's credit (© OpenStreetMap, or Esri for satellite) is small at the top right.
+
+To compare two tracks, select one with a click, then **Ctrl+drag** to move it or
+**Shift+drag** to rotate it around its centre. The move is only for display in that
+card: it is not saved in workspaces or data, and the values boxes still show the
+recorded coordinates. A moved track's legend heading says **(moved)**; **Reset position**
+in the card's controls puts every track back.
 
 ### 3D Map
 
