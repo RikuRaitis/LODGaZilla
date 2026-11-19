@@ -42,7 +42,10 @@ in vec4 v_color[];
 out vec4 g_color;
 out float g_edge;
 // The band sits a hair behind its trace, so points and markers on the trace stay in front of it.
-const float DEPTH_BIAS = 0.0005;
+// A few steps of the depth buffer: pyqtgraph's near plane is a millionth of its far one, so the
+// depth scale is very uneven and a larger bias (0.0005 was a quarter of the camera distance) hid
+// the band behind a 3D model's surfaces that the trace runs inside, while its points showed.
+const float DEPTH_BIAS = 0.000001;
 void emit_corner(vec4 position, vec2 offset, float edge, vec4 color) {
     gl_Position = vec4(position.xy + offset * position.w, position.z + DEPTH_BIAS * position.w, position.w);
     g_edge = edge;

@@ -29,6 +29,7 @@ from src.gui.plots.markers import (
     FIRST_MARKER, SECOND_MARKER, sync_marker_color, marker_color, marker_width, track_selection_layer, track_selection_rgba,
 )
 from src.gui.plots.value_boxes import ValueBoxLayer
+from src.gui.plots.value_slider import ValueSlider
 from src.gui.plots.icons import plot_control_icon
 from src.gui.plots.theme import apply_map_background, canvas_background, palette_overlay_stylesheet
 from src.gui.plots.base import PlotBaseWidget, series_legend_name
@@ -59,37 +60,6 @@ MAX_TRACK_OFFSET = 1000.0
 # Auto: heights exaggerated this much.
 AUTO_EXAGGERATION = 3.0
 LOG = logging.getLogger("lodgazilla.gnss_3d")
-
-
-class ValueSlider(QSlider):
-    """A horizontal slider that shows its value, read-only, over its middle."""
-
-    def __init__(self, text_for_value, parent: QWidget | None = None) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(Qt.Orientation.Horizontal, parent)
-        self._text_for_value = text_for_value
-        self.valueChanged.connect(self.update)
-
-    def value_text(self) -> str:
-        return self._text_for_value(self.value())
-
-    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
-        super().paintEvent(event)
-        painter = QPainter(self)
-        font = painter.font()
-        font.setPointSizeF(font.pointSizeF() * 0.85)
-        painter.setFont(font)
-        text = self.value_text()
-        box = QRectF(painter.fontMetrics().boundingRect(text)).adjusted(-3, -1, 3, 1)
-        box.moveCenter(QRectF(self.rect()).center())
-        background = self.palette().color(QPalette.ColorRole.Window)
-        background.setAlpha(210)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(background)
-        painter.drawRoundedRect(box, 3, 3)
-        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
-        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
-        painter.end()
 
 
 class Gnss3DBridge(GnssBridge):

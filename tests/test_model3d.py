@@ -341,7 +341,7 @@ class ModelCardTests(unittest.TestCase):
         from PySide6.QtGui import QVector3D
         card.view.opts = {"center": QVector3D(), "distance": 6.0, "elevation": 25.0, "azimuth": 45.0, "fov": 60.0}
         state = card.workspace_state()
-        self.assertEqual(state["model"], {"path": str(self.first.resolve()), "placement": PLACE_ORIGIN})
+        self.assertEqual(state["model"], {"path": str(self.first.resolve()), "placement": PLACE_ORIGIN, "opacity": 100})
         json.dumps(state)
         card.model_check.setChecked(False)
         self.assertIsNone(card.model_folder)
@@ -350,6 +350,50 @@ class ModelCardTests(unittest.TestCase):
         card.restore_workspace_state(state)
         self.wait_until(lambda: card._loaded_model is not None)
         self.assertEqual(card.model_placement, PLACE_ORIGIN)
+
+    def test_model_opacity_lets_the_traces_inside_show_through(self):
+        from PySide6.QtGui import QVector3D
+        from src.gui.plots.model_item import ModelPartItem
+        card = self.make_card()
+        card.controls_button.click()
+        qt_wait(20)
+        self.assertFalse(card.model_opacity_slider.isHidden())
+        card.model_check.setChecked(True)
+        self.wait_until(lambda: card._loaded_model is not None)
+        items = [item for item in card.view.items if isinstance(item, ModelPartItem)]
+        rock, water = items
+        # At 100% the rock is opaque and drawn before the traces; the water (its own alpha) after them.
+        self.assertEqual((rock.translucent, rock.depthValue()), (False, -10))
+        self.assertEqual((water.translucent, water.depthValue()), (True, 10))
+        # Below 100% every part is see-through and drawn after the traces, which show through it.
+        card.model_opacity_slider.setValue(40)
+        self.assertEqual(card.model_opacity, 40)
+        self.assertTrue(all(item.translucent and item.opacity == 0.4 and item.depthValue() == 10
+                            for item in items))
+        self.assertTrue(all(item.visible() for item in items))
+        # 0% hides the model; 100% gives back each part's own look.
+        card.set_model_opacity(0)
+        self.assertFalse(any(item.visible() for item in items))
+        card.set_model_opacity(100)
+        self.assertEqual((rock.translucent, rock.depthValue(), water.translucent), (False, -10, True))
+        # Saved and restored with the workspace.
+        card.set_model_opacity(55)
+        card.view.opts = {"center": QVector3D(), "distance": 6.0, "elevation": 25.0, "azimuth": 45.0, "fov": 60.0}
+        state = card.workspace_state()
+        self.assertEqual(state["model"]["opacity"], 55)
+        card.set_model_opacity(100)
+        card.restore_workspace_state(state)
+        self.assertEqual((card.model_opacity, card.model_opacity_slider.value()), (55, 55))
+
+    def test_wide_lines_stay_in_front_of_a_model_around_them(self):
+        """The shader lines' depth bias is a few depth-buffer steps, not part of the camera distance."""
+        import re
+        from src.gui.plots.wide_lines import GEOMETRY_SHADER
+        bias = float(re.search(r"DEPTH_BIAS = ([0-9.eE+-]+);", GEOMETRY_SHADER).group(1))
+        # pyqtgraph's near plane is 0.001 x the camera distance: an NDC bias b moves the band back
+        # about b / 0.002 camera distances at the camera's centre.
+        self.assertLess(bias / 0.002, 0.01)
+        self.assertGreater(bias, 2 / 2 ** 24)  # Still more than one step of a 24-bit depth buffer.
 
     def test_several_models_are_a_list_and_an_unlinked_model_goes(self):
         info = read_info_file(self.folder)

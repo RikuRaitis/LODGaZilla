@@ -11,7 +11,8 @@ All notable changes to LODGaZilla are listed here. The format follows
 - 3D models: **Attach > 3D model…** links a model folder (`placement.json` and its `.glb`)
   to a data folder, listed in its Media group. The 3D plot card shows it from a **3D model**
   checkbox (a list for several models), placed at the plot's **0, 0, 0** or at its **GNSS**
-  position, with its calibration status shown.
+  position, with its calibration status shown. A **Model opacity** slider makes the model
+  see-through, so traces inside it show.
 - Map card: with a track selected, **Ctrl+drag** moves it and **Shift+drag** rotates it
   around its centre, for display in that card only (not saved). Its legend heading says
   **(moved)**, and **Reset position** in the card's controls puts every track back. With no

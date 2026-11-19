@@ -44,6 +44,7 @@ uniform sampler2D u_texture;
 uniform float u_use_texture;
 uniform vec4 u_base;
 uniform float u_alpha_cutoff;
+uniform float u_opacity;
 in vec3 v_normal;
 in vec4 v_color;
 in vec2 v_uv;
@@ -53,7 +54,7 @@ void main() {
     if (u_use_texture > 0.5) color *= texture(u_texture, v_uv);
     if (color.a < u_alpha_cutoff) discard;
     float light = abs(dot(normalize(v_normal), normalize(vec3(0.5, -0.5, 1.0))));
-    fragColor = vec4(color.rgb * (0.5 + 0.5 * light), color.a);
+    fragColor = vec4(color.rgb * (0.5 + 0.5 * light), color.a * u_opacity);
 }
 """
 
@@ -101,7 +102,10 @@ class ModelPartItem(GLGraphicsItem):
         super().__init__()
         self.part = part
         self.image = image if part.image is not None else None
-        self.translucent = part.alpha_mode == "BLEND" or part.base_color[3] < 0.999
+        # See-through in the model itself (water), or made so by the card's Model opacity.
+        self._own_translucent = part.alpha_mode == "BLEND" or part.base_color[3] < 0.999
+        self.opacity = 1.0
+        self.translucent = self._own_translucent
         self.alpha_cutoff = part.alpha_cutoff if part.alpha_mode == "MASK" else 0.03
         self.model_matrix = np.eye(4)
         self._normal_matrix = np.eye(3)
@@ -109,11 +113,20 @@ class ModelPartItem(GLGraphicsItem):
         self._index_buffer: QOpenGLBuffer | None = None
         self._texture = None
         self._uploaded = False
-        options = {GL.GL_DEPTH_TEST: True, GL.GL_CULL_FACE: False, GL.GL_BLEND: self.translucent}
-        if self.translucent:
-            options["glBlendFunc"] = (GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        self._apply_translucency()
+
+    def set_opacity(self, opacity: float) -> None:
+        """The part's opacity, 0 to 1; below 1 the traces inside the model show through it."""
+        self.opacity = min(1.0, max(0.0, float(opacity)))
+        self._apply_translucency()
+        self.update()
+
+    def _apply_translucency(self) -> None:
+        self.translucent = self._own_translucent or self.opacity < 0.999
+        options = {GL.GL_DEPTH_TEST: True, GL.GL_CULL_FACE: False, GL.GL_BLEND: self.translucent,
+                   "glBlendFunc": (GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA) if self.translucent else None}
         self.setGLOptions(options)
-        # Opaque parts first, so translucent ones (water) blend over them and over the traces.
+        # Opaque parts first; see-through ones after the traces, so the traces show through them.
         self.setDepthValue(10 if self.translucent else -10)
 
     def set_model_matrix(self, matrix: np.ndarray) -> None:
@@ -204,6 +217,7 @@ class ModelPartItem(GLGraphicsItem):
                 GL.glUniformMatrix3fv(GL.glGetUniformLocation(program, "u_normal"), 1, False, normal)
                 GL.glUniform4f(GL.glGetUniformLocation(program, "u_base"), *self.part.base_color)
                 GL.glUniform1f(GL.glGetUniformLocation(program, "u_alpha_cutoff"), float(self.alpha_cutoff))
+                GL.glUniform1f(GL.glGetUniformLocation(program, "u_opacity"), float(self.opacity))
                 GL.glUniform1f(GL.glGetUniformLocation(program, "u_use_texture"), float(self._texture is not None))
                 GL.glActiveTexture(GL.GL_TEXTURE0)
                 GL.glBindTexture(GL.GL_TEXTURE_2D, self._texture or 0)

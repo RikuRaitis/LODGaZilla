@@ -122,6 +122,7 @@ MOUSE_HELP = {
                                       "(Attach, 3D model on the folder's menu)."),
         ("0, 0, 0 / GNSS buttons", "Place the model's anchor at the plot's 0, 0, 0 (east, north and up along "
                                    "X, Y and Z, in metres), or at its GNSS position on latitude and longitude axes."),
+        ("Model opacity slider", "Make the 3D model see-through, so the traces inside it show; 0% hides it."),
     ) + _DRAW_STYLE + _SAMPLES + _VALUES + _GROUP_LEGEND + _NAMES,
     "gnss": _POINT_MARKERS + _SELECT + (
         ("Double-click", "Remove the first marker."),

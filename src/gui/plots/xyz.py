@@ -32,6 +32,7 @@ from src.gui.plots.markers import (
 )
 from src.gui.plots.value_boxes import ValueBoxItem, ValueBoxLayer
 from src.gui.plots.model_item import ModelPartItem
+from src.gui.plots.value_slider import ValueSlider
 from src.jobs.model3d import LoadedModel, ModelLoadCoordinator
 from src.jobs.xyz import XYZLoadCoordinator
 
@@ -347,6 +348,8 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         self.models: list[Path] = []
         self.model_folder: Path | None = None
         self.model_placement = PLACE_ORIGIN
+        # The shown model's opacity in percent; below 100 the traces inside it show through.
+        self.model_opacity = 100
         # A placement the user (or a workspace) chose; until then a model starts at its GNSS
         # position when the axes allow it.
         self._placement_chosen = False
@@ -385,6 +388,14 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             layout.addWidget(button)
             self.placement_buttons[mode] = button
         self.placement_buttons[self.model_placement].setChecked(True)
+        self.model_opacity_slider = ValueSlider(lambda value: f"{value}%", self.model_panel)
+        self.model_opacity_slider.setRange(0, 100)
+        self.model_opacity_slider.setValue(self.model_opacity)
+        self.model_opacity_slider.setFixedWidth(90)
+        self.model_opacity_slider.setToolTip("Model opacity")
+        self.model_opacity_slider.setAccessibleName("Model opacity")
+        self.model_opacity_slider.valueChanged.connect(self.set_model_opacity)
+        layout.addWidget(self.model_opacity_slider)
         self.model_panel.setStyleSheet(model_panel_stylesheet())
         self.model_panel.setFixedHeight(self.close_button.height() - 2)
         self.header_controls.append(self.model_panel)
@@ -484,6 +495,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         for part in result.model.parts:
             image = result.images[part.image] if part.image is not None and part.image < len(result.images) else None
             item = ModelPartItem(part, image)
+            item.set_opacity(self.model_opacity / 100)
             self._model_items.append(item)
             self.view.addItem(item)
         if not self._placement_chosen:
@@ -492,6 +504,17 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             self._equal_scale_pending = self.model_placement == PLACE_GNSS
         self._update_model()
         self._show_model_controls()
+
+    def set_model_opacity(self, percent: int) -> None:
+        """The model's opacity, 0-100%: below 100 the traces inside it show through; 0 hides it."""
+        percent = max(0, min(100, int(percent)))
+        if self.model_opacity_slider.value() != percent:
+            self.model_opacity_slider.setValue(percent)
+            return
+        self.model_opacity = percent
+        for item in self._model_items:
+            item.set_opacity(percent / 100)
+        self._update_model()
 
     def set_model_placement(self, mode: str) -> None:
         """Place the model's anchor at the plot's 0, 0, 0 or at its GNSS position."""
@@ -530,7 +553,7 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         matrix, reason = model_matrix(self._loaded_model.placement, self.model_placement, units, roles, low, high,
                                       self.axis_stretch)
         for item in self._model_items:
-            item.setVisible(matrix is not None)
+            item.setVisible(matrix is not None and self.model_opacity > 0)
             if matrix is not None:
                 item.set_model_matrix(matrix)
         self._show_model_note(reason)
@@ -1049,7 +1072,8 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
         if not np.all(self.axis_stretch == 1):
             state["axis_stretch"] = [float(value) for value in self.axis_stretch]
         if self.model_folder is not None:
-            state["model"] = {"path": str(self.model_folder), "placement": self.model_placement}
+            state["model"] = {"path": str(self.model_folder), "placement": self.model_placement,
+                              "opacity": self.model_opacity}
         return {**state, "camera": {
             "center": [center.x(), center.y(), center.z()], "distance": opts["distance"],
             "elevation": opts["elevation"], "azimuth": opts["azimuth"], "fov": opts["fov"]}}
@@ -1066,6 +1090,8 @@ class XYZPlotWidget(PointMarkers, PlotBaseWidget):
             # The saved stretch and camera stay: no Equal scale on loading.
             if model.get("placement") in PLACEMENTS:
                 self.model_placement = model["placement"]
+            if isinstance(model.get("opacity"), (int, float)):
+                self.set_model_opacity(int(model["opacity"]))
             self._placement_chosen = True
             path = Path(model["path"]).resolve()
             if path in self.models:

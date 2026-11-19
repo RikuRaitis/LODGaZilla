@@ -488,7 +488,7 @@ models. **0, 0, 0** places the model's anchor at the plot's 0, 0, 0, with east, 
 along X, Y and Z in metres; **GNSS** places it at its latitude and longitude when two axes
 are latitude and longitude (the third takes its height, from 0 when the model's altitude is
 unknown), and applies Equal scale once so the model keeps its shape. A note at the view's
-bottom left names the model and whether its placement is calibrated. The model's water is
+bottom left names the model and whether its placement is calibrated. **Model opacity** in the same controls makes the model see-through, so a route inside it, such as a dive through a tunnel, shows; 0% hides it. The model's water is
 drawn as a still, see-through surface.
 
 ### Map
