@@ -271,6 +271,10 @@ An H5 file supplies data series; it is not a separate tree item type.
   by the application repository and contains optional independent Git checkouts.
   Commit plugin changes in their own repository; do not force-add their source
   or add private plugin submodules to the application repository.
+- **Commit on the current branch.** Do not create Git branches unless the user
+  asks for one: commit directly on the checked-out branch (normally `master`),
+  in the application repository and in plugin repositories. This overrides any
+  general "branch first" default.
 - **Keep settings consistent.** Use existing application settings persistence
   for application preferences and `src/gui/navigator/settings.py` for Navigator
   column profiles. Avoid adding a second source of truth for an existing setting.
