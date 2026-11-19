@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 import json
 import math
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QItemSelectionModel, QMimeData, QPersistentModelIndex, QPoint, QRect, QSignalBlocker, Qt, QThread, QTimer, Signal
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
+    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
@@ -86,12 +88,17 @@ from src.gui.navigator.settings import (
 )
 from src.app.startup_profile import mark as startup_mark
 from src.jobs.navigator_snapshot import (
+    FolderLinks,
+    PHASE_DATA,
+    PHASE_FINDING,
+    PHASE_SOURCES,
     FileSignature as _FileSignature,
     NavigatorSnapshotJob,
     NavigatorSnapshotResult,
     NavigatorSourceSnapshot as _NavigatorSourceSnapshot,
     build_navigator_snapshot,
     file_signature as _file_signature,
+    folder_links,
 )
 from src.jobs.source_detection import (
     STATE_INCOMPLETE,
@@ -129,6 +136,13 @@ ITEM_IMAGE_PATH_ROLE = Qt.ItemDataRole.UserRole + 15
 ITEM_SOURCE_ROLE = Qt.ItemDataRole.UserRole + 16
 # A Model attachment row's model folder (the folder holding placement.json).
 ITEM_MODEL_PATH_ROLE = Qt.ItemDataRole.UserRole + 17
+# A folder row still being read: a spinning circle replaces its open/close triangle.
+ITEM_LOADING_ROLE = Qt.ItemDataRole.UserRole + 18
+# A folder row whose contents (Info, Source data, Media and its series) are not made yet: they
+# are made the first time it is opened, or restored as opened (ensure_folder_contents).
+ITEM_CONTENT_PENDING_ROLE = Qt.ItemDataRole.UserRole + 19
+# The loading circle turns this often (ms), one turn a second.
+LOADING_ANIMATION_INTERVAL_MS = 50
 ROW_TYPE_VIRTUAL = "virtual"
 ROW_TYPE_FOLDER = "folder"
 ROW_TYPE_GROUP = "series_group"
@@ -156,7 +170,6 @@ PHYSICAL_VALUE_COLUMN = 1
 PHYSICAL_COLUMN_COUNT = 2
 
 
-LOADING_MESSAGE = "Loading folder…"
 VALUE_CELL_PADDING = 4
 LOGICAL_HEADER_HEIGHT = 24
 LOGICAL_HEADER_RESIZE_MARGIN = 4
@@ -193,6 +206,39 @@ class CopyableTreeWidget(QTreeWidget):
         self._logical_value_click_active = False
         self.setMouseTracking(True)
         self.horizontalScrollBar().valueChanged.connect(self._enforce_horizontal_scroll_lock)
+        # Turns the loading circles while any row is still being read.
+        self._loading_timer = QTimer(self)
+        self._loading_timer.setInterval(LOADING_ANIMATION_INTERVAL_MS)
+        self._loading_timer.timeout.connect(self.viewport().update)
+
+    def set_loading_animation(self, active: bool) -> None:
+        """Turn the loading circles of rows marked ``ITEM_LOADING_ROLE``, or stop them."""
+        if active and not self._loading_timer.isActive():
+            self._loading_timer.start()
+        elif not active and self._loading_timer.isActive():
+            self._loading_timer.stop()
+
+    def drawBranches(self, painter, rect, index) -> None:  # noqa: N802 - Qt override
+        if not index.data(ITEM_LOADING_ROLE):
+            super().drawBranches(painter, rect, index)
+            return
+        # Where the open/close triangle would be: the last indentation step.
+        step = self.indentation()
+        cell = QRect(rect.right() - step + 1, rect.top(), step, rect.height())
+        size = max(6, min(12, cell.height() - 6, step - 6))
+        circle = QRect(0, 0, size, size)
+        circle.moveCenter(cell.center())
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = self.palette().color(QPalette.ColorRole.Text)
+        track = QColor(color)
+        track.setAlpha(50)
+        painter.setPen(QPen(track, 2))
+        painter.drawEllipse(circle)
+        painter.setPen(QPen(color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        start = -int((time.monotonic() % 1.0) * 360 * 16)
+        painter.drawArc(circle, start, 100 * 16)
+        painter.restore()
 
     def _enforce_horizontal_scroll_lock(self, value: int) -> None:
         if self._horizontal_scroll_lock is None or self._restoring_locked_scroll:
@@ -818,6 +864,8 @@ class DataNavigatorWidget(QWidget):
     """Browse imported HDF5 caches by folder and date-derived groupings."""
 
     series_activated = Signal(Path, str)
+    # The phase of a data folder read, as one line for the Internal log ("finding folders", ...).
+    loading_status = Signal(str)
     gnss_group_activated = Signal(Path, str)
     video_activated = Signal(Path, Path, float)
     video_context_menu_requested = Signal(Path, Path, QPoint)
@@ -869,7 +917,6 @@ class DataNavigatorWidget(QWidget):
         # On a data folder's first read, the folders read so far, shown until the read ends.
         # Never used as the previous snapshot of a refresh.
         self._partial_snapshot: _NavigatorSourceSnapshot | None = None
-        self._loading_progress = (0, 0)
         # What the snapshot job uses to find Source data rows; set_source_detection changes it.
         self.source_detection = SourceDetection()
         # None builds snapshots in a background job while an event loop runs
@@ -883,6 +930,11 @@ class DataNavigatorWidget(QWidget):
         self.folder_sort_column_id = ""
         self.folder_sort_direction = 0
         self._original_root_order: dict[int, int] = {}
+        # The folder rows shown, what each holds, and what decides the tree's layout; an
+        # update with the same layout changes only the folders whose data changed.
+        self._folder_items: dict[Path, QTreeWidgetItem] = {}
+        self._folder_plans: dict[Path, FolderPlan] = {}
+        self._view_key: tuple | None = None
         self._populating_tree = False
         self._applying_column_layout = False
         self._column_settings_dirty = False
@@ -1211,7 +1263,7 @@ class DataNavigatorWidget(QWidget):
 
     def _start_snapshot_job(self, root: Path, *, rescan: bool) -> None:
         self._info_edits_since_job_start = {}
-        self._loading_progress = (0, 0)
+        self._logged_phase = None
         self.loading_changed.emit(True)
         self._snapshot_job = NavigatorSnapshotJob(
             self,
@@ -1235,17 +1287,13 @@ class DataNavigatorWidget(QWidget):
                 snapshot.folder_infos[folder] = info
                 snapshot.info_signatures[folder] = signature
         self._partial_snapshot = snapshot
-        self.rebuild_tree()
+        self.update_tree_view()
 
-    def _on_snapshot_progress(self, done: int, total: int) -> None:
-        """Show how far the first read of the data folder is on its Loading row."""
-        self._loading_progress = (done, total)
-        if self.tree.topLevelItemCount() < 1:
-            return
-        item = self.tree.topLevelItem(0)
-        if item.data(0, ITEM_TYPE_ROLE) != ROW_TYPE_MESSAGE or not item.text(0).startswith(LOADING_MESSAGE):
-            return
-        self.set_item_values(item, {COLUMN_DATA: loading_progress_text(done, total)})
+    def _on_snapshot_progress(self, done: int, total: int, phase: str = PHASE_DATA) -> None:
+        """Report each phase of a data folder read once, as it starts, for the Internal log."""
+        if phase != getattr(self, "_logged_phase", None):
+            self._logged_phase = phase
+            self.loading_status.emit(loading_phase_text(phase, total))
 
     def _on_snapshot_job_finished(self, job: NavigatorSnapshotJob, result: object) -> None:
         if job is not self._snapshot_job:
@@ -1269,7 +1317,10 @@ class DataNavigatorWidget(QWidget):
                     result.snapshot.folder_infos[folder] = info
                     result.snapshot.info_signatures[folder] = signature
             if self._apply_snapshot_result(result):
-                self.rebuild_tree()
+                self.update_tree_view()
+            else:
+                # Nothing changed, but no folder is loading any more.
+                self.mark_loading_folders(frozenset())
         elif isinstance(result, BaseException):
             self.navigator_warning.emit(f"Could not read data folder {job.root}: {result}")
             if self._snapshot_for_root(job.root) is None:
@@ -1281,8 +1332,6 @@ class DataNavigatorWidget(QWidget):
 
     def _apply_snapshot_result(self, result: NavigatorSnapshotResult) -> bool:
         self._source_snapshot = result.snapshot
-        # Folders may have been renamed or linked differently since the last scan.
-        resolved_path.cache_clear()
         for folder, error in result.read_errors.items():
             self._report_metadata_read_failure(folder, error)
         for folder in result.read_ok:
@@ -1326,7 +1375,7 @@ class DataNavigatorWidget(QWidget):
             time_range = entry.time_range
             if time_range is None:
                 continue
-            folder = h5_path.parent.resolve()
+            folder = resolved_path(h5_path.parent)
             current = ranges_by_folder.get(folder)
             ranges_by_folder[folder] = time_range if current is None else (
                 min(current[0], time_range[0]), max(current[1], time_range[1])
@@ -1367,28 +1416,120 @@ class DataNavigatorWidget(QWidget):
         self._request_snapshot(data_folder, rescan=rescan)
 
     def rebuild_tree(self) -> None:
-        """Rebuild the tree widget from the current snapshot without disk scans."""
+        """Rebuild the tree widget from the current snapshot without disk scans.
+
+        Only the folder rows are made; each folder's contents are made when it is opened
+        (``ensure_folder_contents``), or when it is restored as opened.
+        """
         tree_state = self.capture_tree_state()
         self.update_active_column_geometry()
         self.clear_row_highlights()
         self._original_root_order = {}
+        self._folder_items = {}
+        self._folder_plans = {}
+        self._view_key = None
         self.tree.clear()
+        # The rows marked loading are gone; mark_loading_folders starts it again for new ones.
+        self.tree.set_loading_animation(False)
         data_folder = self.data_folder()
         if data_folder is None:
             return
         if not data_folder.is_dir():
             self.add_message_item(f"Folder does not exist: {data_folder}")
             return
-        snapshot = self._snapshot_for_root(data_folder)
-        partial = snapshot is None and self._partial_snapshot is not None and self._partial_snapshot.root == data_folder
-        if partial:
-            snapshot = self._partial_snapshot
+        snapshot, partial = self._current_snapshot(data_folder)
         if snapshot is None:
-            self.add_message_item(LOADING_MESSAGE)
+            # Nothing read yet; the Internal log says what is being read.
+            return
+        startup_mark("navigator snapshot and column preparation started")
+        view = self._prepare_view(snapshot, data_folder)
+        startup_mark("navigator snapshot and column preparation completed")
+        if isinstance(view, str):
+            self.add_message_item(view)
             return
 
-        mode = self.group_by_combo.currentText().strip() or GROUPING_NONE
-        startup_mark("navigator snapshot and column preparation started")
+        log_lengths_by_folder = self._folder_log_lengths_from_h5_data(snapshot.h5_data)
+        self._folder_plans = view.plans
+        self._populating_tree = True
+        startup_mark("navigator tree widget population started")
+        try:
+            if view.mode == GROUPING_NONE:
+                self.populate_folder_tree(data_folder, view.folders, view.root_files, view.info_index,
+                                          log_lengths_by_folder)
+            else:
+                self.populate_grouped_tree(data_folder, view.folders, view.root_files, view.mode, view.info_index,
+                                           log_lengths_by_folder)
+        finally:
+            self._populating_tree = False
+        startup_mark("navigator tree widget population completed")
+
+        startup_mark("navigator tree sorting and display finalization started")
+        self.sort_tree_children(self.tree.invisibleRootItem())
+        self._original_root_order = {
+            id(self.tree.topLevelItem(index)): index for index in range(self.tree.topLevelItemCount())
+        }
+        self.apply_folder_sort()
+        self.apply_diagnostic_row_styles()
+        self.tree.collapseAll()
+        self.restore_tree_state(tree_state)
+        self.resize_data_column_if_unsized()
+        self.mark_loading_folders(snapshot.loading if partial else frozenset())
+        self._view_key = view.key
+        startup_mark("navigator tree sorting and display finalization completed")
+
+    def update_tree_view(self) -> None:
+        """Show the current snapshot, changing only the folders whose data changed.
+
+        When the folders shown, their grouping and the filter are the same as the tree's, each
+        changed folder's row is updated, and its contents made again if it was opened; the rest
+        of the tree, its expansion and selection stay. Otherwise the tree is rebuilt.
+        """
+        data_folder = self.data_folder()
+        if self._view_key is None or data_folder is None or not self._folder_items:
+            self.rebuild_tree()
+            return
+        snapshot, partial = self._current_snapshot(data_folder)
+        if snapshot is None:
+            self.rebuild_tree()
+            return
+        view = self._prepare_view(snapshot, data_folder)
+        if isinstance(view, str) or view.key != self._view_key:
+            self.rebuild_tree()
+            return
+        log_lengths = self._folder_log_lengths_from_h5_data(snapshot.h5_data)
+        changed = [folder for folder, plan in view.plans.items() if not plan.same_as(self._folder_plans.get(folder))]
+        self._folder_plans = view.plans
+        if changed:
+            opened = [folder for folder in changed if not self._folder_items[folder].data(0, ITEM_CONTENT_PENDING_ROLE)]
+            state = self.capture_tree_state() if opened else None
+            for folder in changed:
+                item = self._folder_items[folder]
+                values = item.data(0, ITEM_COLUMN_VALUES_ROLE) or {}
+                display_name = str(values.get(COLUMN_DATA, folder.name))
+                self.set_item_values(item, self.folder_row_values(folder, display_name, view.info_index, log_lengths))
+                if folder in opened:
+                    for child in [item.child(index) for index in reversed(range(item.childCount()))]:
+                        if child.data(0, ITEM_TYPE_ROLE) != ROW_TYPE_FOLDER:
+                            item.removeChild(child)
+                    self._build_folder_contents(item, folder)
+                    self.sort_tree_children(item)
+            self.apply_diagnostic_row_styles()
+            if state is not None:
+                self.restore_tree_state(state)
+            self.apply_folder_sort()
+        self.mark_loading_folders(snapshot.loading if partial else frozenset())
+
+    def _current_snapshot(self, data_folder: Path) -> tuple[_NavigatorSourceSnapshot | None, bool]:
+        """The snapshot to show and whether it is a first read's part."""
+        snapshot = self._snapshot_for_root(data_folder)
+        partial = snapshot is None and self._partial_snapshot is not None and self._partial_snapshot.root == data_folder
+        return (self._partial_snapshot if partial else snapshot), partial
+
+    def _prepare_view(self, snapshot: _NavigatorSourceSnapshot, data_folder: Path) -> "_TreeView | str":
+        """The folders to show with the Group by and Filter settings, or a message to show instead.
+
+        Also brings the Group by and Filter choices and the columns up to date with the snapshot.
+        """
         h5_files = list(snapshot.h5_files)
         folders = list(snapshot.folders)
         info_index = add_default_info_keys(
@@ -1399,7 +1540,6 @@ class DataNavigatorWidget(QWidget):
         self.update_group_by_options(info_index.keys)
         self.update_filter_options(info_index)
         self.configure_tree_columns(info_index)
-        startup_mark("navigator snapshot and column preparation completed")
         filter_key = self.filter_key_combo.currentText().strip()
         filter_value = self.filter_value_combo.currentText()
         if filter_key and filter_key != FILTER_NONE and filter_value.strip():
@@ -1436,37 +1576,82 @@ class DataNavigatorWidget(QWidget):
 
         if not folders and not h5_files:
             filter_active = filter_key != FILTER_NONE and bool(filter_value.strip())
-            message = "No folders match the filter" if filter_active else "No folders or HDF5 files found"
-            self.add_message_item(message)
-            return
+            return "No folders match the filter" if filter_active else "No folders or HDF5 files found"
+        plans, root_files = self._build_folder_plans(snapshot, folders, h5_files)
+        group_paths = (tuple(self.group_path(folder, data_folder, mode, info_index) for folder in folders)
+                       if mode != GROUPING_NONE else ())
+        key = (data_folder, mode, tuple(folders), tuple(root_files), group_paths,
+               self.navigator_control_settings.hide_irrelevant_series)
+        return _TreeView(mode, info_index, folders, root_files, plans, key)
 
-        log_lengths_by_folder = self._folder_log_lengths_from_h5_data(snapshot.h5_data)
-        self._populating_tree = True
-        startup_mark("navigator tree widget population started")
-        try:
-            if mode == GROUPING_NONE:
-                self.populate_folder_tree(data_folder, folders, h5_files, info_index, log_lengths_by_folder)
+    def _folder_links(self, folder: Path, info: FolderInfoData | None) -> FolderLinks | None:
+        """A folder's attachment paths: from the background read, or resolved here after an edit."""
+        if info is None:
+            return None
+        snapshot = self._display_snapshot()
+        links = snapshot.links.get(resolved_path(folder)) if snapshot is not None else None
+        return links if links is not None and links.info is info else folder_links(folder, info)
+
+    def _build_folder_plans(
+        self, snapshot: _NavigatorSourceSnapshot, folders: list[Path], h5_files: list[Path],
+    ) -> tuple[dict[Path, "FolderPlan"], list[Path]]:
+        """Each folder's H5 files and linked audio, and the H5 files outside the folders.
+
+        Audio stored elsewhere, such as beside a video in a parent folder, appears only in the
+        linking folder's Media group. Audio H5 files whose link was removed are left out, like
+        the removed link.
+        """
+        folder_set = set(folders)
+        scanned = set(h5_files)
+        linked: set[Path] = set()
+        attached: dict[Path, list[Path]] = {}
+        for folder in folders:
+            links = self._folder_links(folder, snapshot.folder_infos.get(folder))
+            for audio_path, exists in links.audio if links is not None else ():
+                linked.add(audio_path)
+                if audio_path.parent != folder and (audio_path in scanned or exists):
+                    attached.setdefault(folder, []).append(audio_path)
+        attached_files = {path for paths in attached.values() for path in paths}
+        own: dict[Path, list[Path]] = {}
+        root_files: list[Path] = []
+        for path in h5_files:
+            if path in attached_files or (path.name.endswith(AUDIO_SUFFIX) and path not in linked):
+                continue
+            if path.parent in folder_set:
+                own.setdefault(path.parent, []).append(path)
             else:
-                self.populate_grouped_tree(data_folder, folders, h5_files, mode, info_index, log_lengths_by_folder)
-        finally:
-            self._populating_tree = False
-        startup_mark("navigator tree widget population completed")
+                root_files.append(path)
+        hide_irrelevant = self.navigator_control_settings.hide_irrelevant_series
+        plans: dict[Path, FolderPlan] = {}
+        for folder in folders:
+            audio, files = tuple(attached.get(folder, ())), tuple(own.get(folder, ()))
+            flags, data = 0, []
+            for path in (*audio, *files):
+                entry = snapshot.h5_data.get(path)
+                data.append(entry)
+                for series in entry.series if entry is not None else ():
+                    if hide_irrelevant and not series.visible:
+                        continue
+                    for metadata in series.metadata:
+                        if metadata.column_id == "warning":
+                            flags |= diagnostic_flags_from_warning(metadata.value)
+            plans[folder] = FolderPlan(
+                files, audio, flags,
+                (snapshot.folder_infos.get(folder), snapshot.source_rows.get(folder), *data))
+        return plans, root_files
 
-        startup_mark("navigator tree sorting and display finalization started")
-        self.sort_tree_children(self.tree.invisibleRootItem())
-        self._original_root_order = {
-            id(self.tree.topLevelItem(index)): index for index in range(self.tree.topLevelItemCount())
-        }
-        self.apply_folder_sort()
-        self.apply_diagnostic_row_styles()
-        self.tree.collapseAll()
-        self.restore_tree_state(tree_state)
-        self.resize_data_column_if_unsized()
-        if partial:
-            # The folders read so far are shown below the Loading row; the rest follow.
-            self.add_message_item(loading_progress_text(*self._loading_progress))
-            self.tree.insertTopLevelItem(0, self.tree.takeTopLevelItem(self.tree.topLevelItemCount() - 1))
-        startup_mark("navigator tree sorting and display finalization completed")
+    def mark_loading_folders(self, loading: frozenset[Path]) -> None:
+        """A loading circle on each folder row still being read; none once the read is done."""
+        previous = self._updating_info_items
+        self._updating_info_items = True
+        try:
+            for folder, item in self._folder_items.items():
+                still_loading = folder in loading
+                if bool(item.data(0, ITEM_LOADING_ROLE)) != still_loading:
+                    item.setData(0, ITEM_LOADING_ROLE, still_loading)
+        finally:
+            self._updating_info_items = previous
+        self.tree.set_loading_animation(any(folder in loading for folder in self._folder_items))
 
     def update_group_by_options(self, info_keys: set[str]) -> None:
         current_text = self.group_by_combo.currentText().strip()
@@ -1730,6 +1915,18 @@ class DataNavigatorWidget(QWidget):
                         0,
                         ITEM_DIAGNOSTIC_FLAGS_ROLE,
                         int(current.data(0, ITEM_DIAGNOSTIC_FLAGS_ROLE) or 0) | flags,
+                    )
+                    current = current.parent()
+
+            # A folder's flags come from its data, so they show before its contents are made.
+            for folder, item in self._folder_items.items():
+                plan = self._folder_plans.get(folder)
+                current = item if plan is not None and plan.flags else None
+                while current is not None:
+                    current.setData(
+                        0,
+                        ITEM_DIAGNOSTIC_FLAGS_ROLE,
+                        int(current.data(0, ITEM_DIAGNOSTIC_FLAGS_ROLE) or 0) | plan.flags,
                     )
                     current = current.parent()
 
@@ -2194,6 +2391,7 @@ class DataNavigatorWidget(QWidget):
         )
 
     def on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
+        self.ensure_folder_contents(item)
         if self._restoring_tree_expansion:
             return
         self.tree.setCurrentItem(
@@ -2520,12 +2718,71 @@ class DataNavigatorWidget(QWidget):
         return paths
 
     def restore_expanded_item_paths(self, expanded: set[tuple[tuple[str, ...], ...]]) -> None:
+        """Open the rows that were open; a folder opened again gets its contents first."""
         self._restoring_tree_expansion = True
+        seen: set[tuple[tuple[str, ...], ...]] = set()
+
+        def visit(item: QTreeWidgetItem, parent_path: tuple[tuple[str, ...], ...]) -> None:
+            path = (*parent_path, self.item_identity(item))
+            opened = path in expanded and path not in seen
+            seen.add(path)
+            if opened:
+                self.ensure_folder_contents(item)
+            item.setExpanded(opened)
+            for child_index in range(item.childCount()):
+                visit(item.child(child_index), path)
+
         try:
-            for path, item in self.item_identity_paths().items():
-                item.setExpanded(path in expanded)
+            for index in range(self.tree.topLevelItemCount()):
+                visit(self.tree.topLevelItem(index), ())
         finally:
             self._restoring_tree_expansion = False
+
+    def ensure_folder_contents(self, item: QTreeWidgetItem) -> bool:
+        """Make a folder row's contents if they are not made yet; True when they were made now."""
+        if not item.data(0, ITEM_CONTENT_PENDING_ROLE):
+            return False
+        previous = self._updating_info_items
+        self._updating_info_items = True
+        try:
+            item.setData(0, ITEM_CONTENT_PENDING_ROLE, False)
+            item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.DontShowIndicatorWhenChildless)
+        finally:
+            self._updating_info_items = previous
+        self._build_folder_contents(item, Path(str(item.data(0, ITEM_PATH_ROLE))))
+        self.sort_tree_children(item)
+        self.apply_diagnostic_row_styles()
+        return True
+
+    def ensure_all_folder_contents(self, *, expand: bool = False) -> None:
+        """Make every folder's contents, as if each had been opened; ``expand`` also opens them."""
+        previous = self._restoring_tree_expansion
+        self._restoring_tree_expansion = True
+        try:
+            for item in list(self._folder_items.values()):
+                self.ensure_folder_contents(item)
+                if expand:
+                    item.setExpanded(True)
+        finally:
+            self._restoring_tree_expansion = previous
+
+    def _build_folder_contents(self, item: QTreeWidgetItem, folder: Path) -> None:
+        """A folder's Info, Source data and Media rows and its series."""
+        plan = self._folder_plans.get(folder)
+        info = self._folder_info_from_snapshot(folder)
+        nodes: dict[tuple[str, ...], QTreeWidgetItem] = {}
+        previous = self._populating_tree
+        self._populating_tree = True
+        try:
+            self.add_folder_info_rows(item, folder, info)
+            self.add_folder_source_rows(item, folder)
+            self.add_folder_video_row(item, folder, info, nodes)
+            self.add_folder_image_rows(item, folder, info, nodes)
+            self.add_folder_model_rows(item, folder, info, nodes)
+            for h5_path in (*plan.linked_audio, *plan.h5_files) if plan is not None else ():
+                self.add_h5_series(item, h5_path, nodes, str(folder))
+        finally:
+            self._populating_tree = previous
 
     def capture_tree_state(self) -> dict[str, object]:
         """Save expansion, selection, current row and folder progress for a rebuild."""
@@ -2597,34 +2854,20 @@ class DataNavigatorWidget(QWidget):
         self,
         data_folder: Path,
         folders: list[Path],
-        h5_files: list[Path],
+        root_files: list[Path],
         info_index: FolderInfoIndex,
         log_lengths_by_folder: dict[Path, str],
     ) -> None:
+        """Folder rows (their contents are made when opened) and the H5 files outside folders."""
         folder_nodes: dict[Path, QTreeWidgetItem] = {}
-        series_group_nodes: dict[tuple[str, ...], QTreeWidgetItem] = {}
         for folder in folders:
             parent = folder_nodes.get(folder.parent, self.tree.invisibleRootItem())
-            item = self.make_folder_item(
-                folder,
-                folder.name,
-                info_index,
-                log_lengths_by_folder,
-            )
-            item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_FOLDER)
-            item.setData(0, ITEM_PATH_ROLE, str(folder))
-            self.reapply_item_values(item)
+            item = self.make_pending_folder_item(folder, folder.name, info_index, log_lengths_by_folder)
             parent.addChild(item)
-            info = self._folder_info_from_snapshot(folder)
-            self.add_folder_info_rows(item, folder, info)
-            self.add_folder_source_rows(item, folder)
-            self.add_folder_video_row(item, folder, info, series_group_nodes)
-            self.add_folder_image_rows(item, folder, info, series_group_nodes)
-            self.add_folder_model_rows(item, folder, info, series_group_nodes)
             folder_nodes[folder] = item
-
-        h5_files = self.add_linked_audio(folder_nodes, h5_files, series_group_nodes)
-        for h5_path in h5_files:
+        self._folder_items = folder_nodes
+        series_group_nodes: dict[tuple[str, ...], QTreeWidgetItem] = {}
+        for h5_path in root_files:
             parent = folder_nodes.get(h5_path.parent, self.tree.invisibleRootItem())
             self.add_h5_series(parent, h5_path, series_group_nodes, str(h5_path.parent))
 
@@ -2632,42 +2875,36 @@ class DataNavigatorWidget(QWidget):
         self,
         data_folder: Path,
         folders: list[Path],
-        h5_files: list[Path],
+        root_files: list[Path],
         mode: str,
         info_index: FolderInfoIndex,
         log_lengths_by_folder: dict[Path, str],
     ) -> None:
         group_nodes: dict[tuple[str, ...], QTreeWidgetItem] = {}
         folder_nodes: dict[Path, QTreeWidgetItem] = {}
-        series_group_nodes: dict[tuple[str, ...], QTreeWidgetItem] = {}
-
         for folder in folders:
             parent = self.add_group_nodes(group_nodes, self.group_path(folder, data_folder, mode, info_index))
             relative_folder = folder.relative_to(data_folder).as_posix()
-            item = self.make_folder_item(
-                folder,
-                relative_folder,
-                info_index,
-                log_lengths_by_folder,
-            )
-            item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_FOLDER)
-            item.setData(0, ITEM_PATH_ROLE, str(folder))
-            self.reapply_item_values(item)
+            item = self.make_pending_folder_item(folder, relative_folder, info_index, log_lengths_by_folder)
             parent.addChild(item)
-            info = self._folder_info_from_snapshot(folder)
-            self.add_folder_info_rows(item, folder, info)
-            self.add_folder_source_rows(item, folder)
-            self.add_folder_video_row(item, folder, info, series_group_nodes)
-            self.add_folder_image_rows(item, folder, info, series_group_nodes)
-            self.add_folder_model_rows(item, folder, info, series_group_nodes)
             folder_nodes[folder] = item
-
-        h5_files = self.add_linked_audio(folder_nodes, h5_files, series_group_nodes)
-        for h5_path in h5_files:
-            parent = folder_nodes.get(h5_path.parent)
-            if parent is None:
-                parent = self.add_group_nodes(group_nodes, self.group_path(h5_path.parent, data_folder, mode, info_index))
+        self._folder_items = folder_nodes
+        series_group_nodes: dict[tuple[str, ...], QTreeWidgetItem] = {}
+        for h5_path in root_files:
+            parent = self.add_group_nodes(group_nodes, self.group_path(h5_path.parent, data_folder, mode, info_index))
             self.add_h5_series(parent, h5_path, series_group_nodes, str(h5_path.parent))
+
+    def make_pending_folder_item(
+        self, folder: Path, display_name: str, info_index: FolderInfoIndex, log_lengths_by_folder: dict[Path, str],
+    ) -> QTreeWidgetItem:
+        """A folder row with an open/close triangle; its contents are made when it is opened."""
+        item = self.make_folder_item(folder, display_name, info_index, log_lengths_by_folder)
+        item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_FOLDER)
+        item.setData(0, ITEM_PATH_ROLE, str(folder))
+        item.setData(0, ITEM_CONTENT_PENDING_ROLE, True)
+        item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+        self.reapply_item_values(item)
+        return item
 
     def add_group_nodes(
         self,
@@ -2777,35 +3014,6 @@ class DataNavigatorWidget(QWidget):
             nodes = {}
         return self.add_series_group_nodes(folder_item, nodes, str(folder), MEDIA_GROUP)
 
-    def add_linked_audio(
-        self,
-        folder_nodes: dict[Path, QTreeWidgetItem],
-        h5_files: list[Path],
-        nodes: dict[tuple[str, ...], QTreeWidgetItem],
-    ) -> list[Path]:
-        """Add linked audio stored outside its folder; return the scanned files to list normally.
-
-        Audio stored elsewhere, such as beside a video in a parent folder, appears only in the
-        linking folder's Media group. Audio H5 files whose link was removed are left out, like
-        the removed link.
-        """
-        scanned = set(h5_files)
-        linked: set[Path] = set()
-        attached: set[Path] = set()
-        for folder, folder_item in folder_nodes.items():
-            info = self._folder_info_from_snapshot(folder)
-            for audio in info.audio if info is not None else []:
-                audio_path = attachment_path(folder, audio)
-                linked.add(audio_path)
-                if audio_path.parent != folder and (audio_path in scanned or audio_path.is_file()):
-                    self.add_h5_series(folder_item, audio_path, nodes, str(folder))
-                    attached.add(audio_path)
-        return [
-            path
-            for path in h5_files
-            if path not in attached and (not path.name.endswith(AUDIO_SUFFIX) or path in linked)
-        ]
-
     def add_folder_video_row(
         self,
         folder_item: QTreeWidgetItem,
@@ -2817,8 +3025,8 @@ class DataNavigatorWidget(QWidget):
         if info is None or not info.videos:
             return
         folder_item = self.media_group_item(folder_item, folder, nodes)
-        for video in info.videos:
-            video_path = video_attachment_path(folder, video)
+        links = self._folder_links(folder, info)
+        for video, video_path in zip(info.videos, links.videos if links is not None else ()):
             raw_offset = video.get("offset_seconds", "0")
             try:
                 offset = float(raw_offset or 0.0)
@@ -2846,8 +3054,8 @@ class DataNavigatorWidget(QWidget):
         if info is None or not info.images:
             return
         folder_item = self.media_group_item(folder_item, folder, nodes)
-        for image in info.images:
-            image_path = attachment_path(folder, image)
+        links = self._folder_links(folder, info)
+        for image_path in links.images if links is not None else ():
             item = self.make_item({COLUMN_DATA: image_path.name})
             item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_IMAGE)
             item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
@@ -2867,8 +3075,8 @@ class DataNavigatorWidget(QWidget):
         if info is None or not info.models:
             return
         folder_item = self.media_group_item(folder_item, folder, nodes)
-        for model in info.models:
-            model_path = attachment_path(folder, model)
+        links = self._folder_links(folder, info)
+        for model_path in links.models if links is not None else ():
             item = self.make_item({COLUMN_DATA: model_path.name})
             item.setData(0, ITEM_TYPE_ROLE, ROW_TYPE_MODEL)
             item.setData(0, ITEM_PATH_ROLE, str(resolved_path(folder)))
@@ -2977,17 +3185,22 @@ class DataNavigatorWidget(QWidget):
         info_index: FolderInfoIndex,
         log_lengths_by_folder: dict[Path, str],
     ) -> QTreeWidgetItem:
+        item = self.make_item(self.folder_row_values(folder, display_name, info_index, log_lengths_by_folder))
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        return item
+
+    def folder_row_values(
+        self, folder: Path, display_name: str, info_index: FolderInfoIndex, log_lengths_by_folder: dict[Path, str],
+    ) -> dict[str, str]:
+        """A folder row's logical cells: its name, log length and metadata columns."""
         folder = resolved_path(folder)
         values = {
             COLUMN_DATA: display_name,
             COLUMN_LOG_LENGTH: log_lengths_by_folder.get(folder, ""),
         }
-        info_values = info_index.values_by_folder.get(folder, {})
-        for key, value in info_values.items():
+        for key, value in info_index.values_by_folder.get(folder, {}).items():
             values[info_column_id(key)] = value
-        item = self.make_item(values)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-        return item
+        return values
 
     def make_series_item(self, series: H5Series) -> QTreeWidgetItem:
         values = {COLUMN_DATA: series.navigator_name}
@@ -3358,11 +3571,14 @@ class DataNavigatorWidget(QWidget):
         self.refresh_tree()
 
 
-def loading_progress_text(done: int, total: int) -> str:
-    """The Loading row while the data folder is read: what is known so far."""
-    if total <= 0:
-        return f"{LOADING_MESSAGE} finding folders"
-    return f"{LOADING_MESSAGE} {done} / {total} folders read ({done * 100 // total} %)"
+def loading_phase_text(phase: str, total: int) -> str:
+    """One Internal log line as a phase of a data folder read starts."""
+    if phase == PHASE_FINDING:
+        return "Finding folders…"
+    folders = f"{total} folder" + ("" if total == 1 else "s")
+    if phase == PHASE_SOURCES:
+        return f"Finding Source data in {folders}…"
+    return f"Reading data of {folders}…"
 
 
 def source_output_text(row: SourceRow) -> str:
@@ -3390,11 +3606,47 @@ def series_column_id(key: str) -> str:
     return key
 
 
+@dataclass(frozen=True)
+class FolderPlan:
+    """What a folder row holds, worked out from the snapshot without making its rows."""
+
+    h5_files: tuple[Path, ...]
+    # Audio H5 files stored elsewhere and linked to this folder.
+    linked_audio: tuple[Path, ...]
+    # Its series' Sample loss and Clipping flags (DIAGNOSTIC_*).
+    flags: int
+    # The snapshot objects its rows are made from: its info, Source data rows and H5 data.
+    parts: tuple
+
+    def same_as(self, other: "FolderPlan | None") -> bool:
+        """Whether a folder's rows would be the same: the same files and the same objects."""
+        return (other is not None and self.h5_files == other.h5_files and self.linked_audio == other.linked_audio
+                and self.flags == other.flags and len(self.parts) == len(other.parts)
+                and all(mine is theirs for mine, theirs in zip(self.parts, other.parts)))
+
+
+@dataclass(frozen=True)
+class _TreeView:
+    """The folders the tree shows and what decides its layout (``key``)."""
+
+    mode: str
+    info_index: FolderInfoIndex
+    folders: list[Path]
+    root_files: list[Path]
+    plans: dict[Path, FolderPlan]
+    key: tuple
+
+
 def diagnostic_flags_from_item(item: QTreeWidgetItem) -> int:
     values = item.data(0, ITEM_COLUMN_VALUES_ROLE)
     if not isinstance(values, dict):
         return 0
-    warning = str(values.get(series_column_id("warning"), "")).casefold()
+    return diagnostic_flags_from_warning(str(values.get(series_column_id("warning"), "")))
+
+
+def diagnostic_flags_from_warning(warning: str) -> int:
+    """DIAGNOSTIC_* flags named by a series' warning text."""
+    warning = warning.casefold()
     flags = 0
     if "sampleloss" in warning or "sample loss" in warning:
         flags |= DIAGNOSTIC_SAMPLE_LOSS
@@ -3445,7 +3697,8 @@ def tree_item_sort_key(item: QTreeWidgetItem) -> tuple[int, int, str]:
             return (1, 0 if row.kind == SOURCE_IMPORT else 1, f"{row.source.casefold()}|{row.output.casefold()}")
     if item_type == ROW_TYPE_DETAILED_INFO and bool(item.data(0, ITEM_INFO_EMPTY_ROLE)):
         return (2, 1, "")
-    return (1, 1 if item.childCount() == 0 else 0, item.text(0).casefold())
+    branch = item.childCount() > 0 or item_type == ROW_TYPE_FOLDER
+    return (1, 0 if branch else 1, item.text(0).casefold())
 
 
 def columns_for_category(

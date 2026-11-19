@@ -117,6 +117,8 @@ class VideoAttachmentTests(unittest.TestCase):
             LODGaZillaWindow.attach_video_to_folder(self.window, self.folder)
 
     def video_rows(self):
+        # Folder contents are made when a folder is opened; open them all, as a user would.
+        self.navigator.ensure_all_folder_contents(expand=True)
         rows = []
         iterator = QTreeWidgetItemIterator(self.navigator.tree)
         while iterator.value():

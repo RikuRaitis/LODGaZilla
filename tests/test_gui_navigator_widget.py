@@ -688,6 +688,7 @@ class NavigatorSettingsIntegrationTests(unittest.TestCase):
                 rect for column, rect in navigator.value_column_sections(folder_item, value_rect)
                 if column.column_id == info_column_id("place")
             )
+            navigator.ensure_folder_contents(folder_item)  # Made when the folder is opened.
             info_item = next(
                 folder_item.child(index) for index in range(folder_item.childCount())
                 if folder_item.child(index).data(0, ITEM_TYPE_ROLE) == ROW_TYPE_INFO
@@ -823,8 +824,9 @@ class NavigatorFolderSortingTests(unittest.TestCase):
         navigator = self.navigator
         tree = navigator.tree
         alpha = tree.topLevelItem(0)
-        info = alpha.child(0)
+        # Opening a folder makes its contents.
         alpha.setExpanded(True)
+        info = alpha.child(0)
         info.setExpanded(True)
         tree.setCurrentItem(alpha, PHYSICAL_DATA_COLUMN)
         tree.selectionModel().select(
@@ -1213,6 +1215,8 @@ def make_sample_navigator_folder(root: Path) -> Path:
 
 
 def first_item_of_type(navigator: DataNavigatorWidget, row_type: str) -> QTreeWidgetItem:
+    # Folder contents are made when a folder is opened; open them all, as a user would.
+    navigator.ensure_all_folder_contents(expand=True)
     for item in navigator.tree_items():
         if item.data(0, ITEM_TYPE_ROLE) == row_type:
             return item
@@ -1220,6 +1224,7 @@ def first_item_of_type(navigator: DataNavigatorWidget, row_type: str) -> QTreeWi
 
 
 def detailed_info_item_for_key(navigator: DataNavigatorWidget, key: str) -> QTreeWidgetItem:
+    navigator.ensure_all_folder_contents(expand=True)
     for item in navigator.tree_items():
         if (
             item.data(0, ITEM_TYPE_ROLE) == ROW_TYPE_DETAILED_INFO

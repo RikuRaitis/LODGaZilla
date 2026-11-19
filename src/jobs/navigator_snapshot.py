@@ -15,6 +15,7 @@ from src.data.navigator_data import (
     H5NavigatorData,
     ensure_folder_info_files,
     read_h5_navigator_data,
+    resolved_path,
     scan_navigator_folder,
 )
 from src.jobs.source_detection import (
@@ -33,6 +34,40 @@ class FileSignature:
     size: int
 
 
+@dataclass(frozen=True)
+class FolderLinks:
+    """A folder's attachment paths, resolved in the background read.
+
+    The Navigator lists them without asking the disk on the GUI thread (on Windows each
+    path resolve reads the disk). ``info`` is the FolderInfoData they were resolved from:
+    after an edit replaces it, the Navigator resolves that folder's links itself.
+    """
+
+    info: object
+    videos: tuple[Path, ...]
+    images: tuple[Path, ...]
+    models: tuple[Path, ...]
+    # Linked audio H5 files and whether each exists.
+    audio: tuple[tuple[Path, bool], ...]
+
+
+def folder_links(folder: Path, info: FolderInfoData) -> FolderLinks:
+    """Resolve a folder's video, image, model and audio links (disk access)."""
+
+    def resolve(entries) -> tuple[Path, ...]:  # type: ignore[no-untyped-def]
+        paths = []
+        for entry in entries:
+            try:
+                paths.append(attachment_path(folder, entry))
+            except (OSError, ValueError):
+                paths.append(Path(folder) / entry.get("path", ""))
+        return tuple(paths)
+
+    audio = resolve(info.audio)
+    return FolderLinks(info, resolve(info.videos), resolve(info.images), resolve(info.models),
+                       tuple((path, path.is_file()) for path in audio))
+
+
 @dataclass
 class NavigatorSourceSnapshot:
     """Disk-backed navigator data, reused for UI-only tree rebuilds."""
@@ -49,6 +84,11 @@ class NavigatorSourceSnapshot:
     source_rows: dict[Path, list[SourceRow]] = field(default_factory=dict)
     source_signatures: dict[Path, FileSignature | None] = field(default_factory=dict)
     detection: SourceDetection = field(default_factory=SourceDetection)
+    # A first read's part: the folders not read completely yet (their Source data is
+    # found last). Empty in a finished read.
+    loading: frozenset[Path] = field(default_factory=frozenset)
+    # Each folder's attachment paths, resolved off the GUI thread.
+    links: dict[Path, FolderLinks] = field(default_factory=dict)
 
     def copy(self) -> "NavigatorSourceSnapshot":
         """Return a copy whose containers the GUI thread can keep mutating."""
@@ -63,6 +103,8 @@ class NavigatorSourceSnapshot:
             dict(self.source_rows),
             dict(self.source_signatures),
             self.detection,
+            self.loading,
+            dict(self.links),
         )
 
 
@@ -73,6 +115,14 @@ class NavigatorSnapshotResult:
     changed: bool
     read_errors: dict[Path, str] = field(default_factory=dict)
     read_ok: set[Path] = field(default_factory=set)
+
+
+# The phases of a folder read, as ``progress(done, total, phase)`` reports them: finding the
+# folders, reading their info and H5 files, and finding their Source data (the importer
+# plugins look at every file, the slowest part).
+PHASE_FINDING = "finding"
+PHASE_DATA = "data"
+PHASE_SOURCES = "sources"
 
 
 class SnapshotCancelled(Exception):
@@ -108,7 +158,7 @@ def build_navigator_snapshot(
     rescan: bool,
     cancelled: Callable[[], bool] = lambda: False,
     detection: SourceDetection | None = None,
-    progress: Callable[[int, int], None] | None = None,
+    progress: Callable[[int, int, str], None] | None = None,
     partial: Callable[[NavigatorSourceSnapshot], None] | None = None,
 ) -> NavigatorSnapshotResult:
     """Scan folders, read changed ``_info.json`` files and inspect changed H5 files.
@@ -117,24 +167,31 @@ def build_navigator_snapshot(
     that no longer exist and never creates metadata files, so a deleted or
     renamed folder cannot be recreated on disk.
 
-    Each folder is read completely (its info, its H5 files and its Source data rows)
-    before the next, and ``progress(done, total)`` is called after each; ``(0, 0)``
-    while the folders are still being found. On a first read (no ``previous``),
-    ``partial(snapshot)`` receives the folders read so far, at most every
-    ``PARTIAL_INTERVAL_SECONDS``, so they can be shown while the rest are read.
+    The read runs in phases: the folders are found (``progress(0, 0, PHASE_FINDING)``),
+    every folder's info is read, then each folder's H5 files (``progress(done, total,
+    PHASE_DATA)`` after each folder), and last each folder's Source data rows
+    (``PHASE_SOURCES``). On a first read (no ``previous``), ``partial(snapshot)`` receives
+    every folder found once found, again once their info is read and when the H5 files
+    are read, and in between at most every ``PARTIAL_INTERVAL_SECONDS``; its ``loading``
+    names the folders whose Source data is not found yet, so the tree can be shown, and
+    filled in, while the rest is read.
     """
 
     def check_cancelled() -> None:
         if cancelled():
             raise SnapshotCancelled()
 
-    report = progress or (lambda _done, _total: None)
+    report = progress or (lambda _done, _total, _phase: None)
     root = root.resolve()
     if previous is not None and previous.root != root:
         previous = None
+    if previous is None or rescan:
+        # Folders may have been renamed or linked differently: forget remembered resolves
+        # here, off the GUI thread, which then finds the new ones already remembered.
+        resolved_path.cache_clear()
     errors: dict[Path, str] = {}
     if previous is None or rescan:
-        report(0, 0)
+        report(0, 0, PHASE_FINDING)
         scan = scan_navigator_folder(root)
         check_cancelled()
         folders = _resolved_within(scan.folders, root, Path.is_dir)
@@ -157,6 +214,8 @@ def build_navigator_snapshot(
     reuse_sources = previous is not None and not rescan and previous.detection == detection
     folder_infos: dict[Path, FolderInfoData | None] = {}
     info_signatures: dict[Path, FileSignature | None] = {}
+    links: dict[Path, FolderLinks] = {}
+    previous_links = previous.links if previous is not None else {}
     h5_data: dict[Path, H5NavigatorData] = {}
     h5_signatures: dict[Path, FileSignature | None] = {}
     source_rows: dict[Path, list[SourceRow]] = {}
@@ -177,11 +236,28 @@ def build_navigator_snapshot(
     for h5_path in h5_files:
         h5_by_folder.setdefault(h5_path.parent, []).append(h5_path)
     total = len(folders)
-    report(0, total)
     send_partial = partial if previous is None else None
     read_h5_files: list[Path] = []
     last_partial = time.monotonic()
-    for done, folder in enumerate(folders, start=1):
+
+    def send(loading) -> None:  # type: ignore[no-untyped-def]
+        nonlocal last_partial
+        last_partial = time.monotonic()
+        # Copies: the GUI keeps this while the rest is read into the originals.
+        send_partial(NavigatorSourceSnapshot(
+            root, list(folders), list(read_h5_files), dict(folder_infos), dict(info_signatures), dict(h5_data),
+            dict(h5_signatures), dict(source_rows), dict(source_signatures), detection, frozenset(loading),
+            dict(links)))
+
+    def due() -> bool:
+        return send_partial is not None and time.monotonic() - last_partial >= PARTIAL_INTERVAL_SECONDS
+
+    # The folder list first: every folder is shown, still loading.
+    report(0, total, PHASE_DATA)
+    if send_partial is not None and total:
+        send(folders)
+    # Then each folder's _info.json: small files, read for all folders at once.
+    for folder in folders:
         check_cancelled()
         signature = file_signature(info_file_path(folder))
         info_signatures[folder] = signature
@@ -196,23 +272,25 @@ def build_navigator_snapshot(
                 errors[folder] = str(error)
             else:
                 read_ok.add(folder)
+        # The folder's attachment paths and the paths the GUI looks up, resolved here.
+        resolved_path(folder)
+        info = folder_infos[folder]
+        if info is not None:
+            known = previous_links.get(folder)
+            links[folder] = known if known is not None and known.info is info else folder_links(folder, info)
+    for h5_path in h5_files:
+        resolved_path(h5_path)
+    if send_partial is not None and total:
+        send(folders)
+    # Then each folder's H5 files: its series appear as each folder is read.
+    for done, folder in enumerate(folders, start=1):
         for h5_path in h5_by_folder.pop(folder, []):
             check_cancelled()
             read_h5(h5_path)
             read_h5_files.append(h5_path)
-        rows, source_signatures[folder] = _folder_source_rows(
-            folder, folder_infos[folder], info_signatures[folder], h5_data, previous, detection,
-            reuse=reuse_sources)
-        source_rows[folder] = rows
-        if previous is None or previous.source_rows.get(folder) != rows:
-            changed = True
-        report(done, total)
-        if send_partial is not None and done < total and time.monotonic() - last_partial >= PARTIAL_INTERVAL_SECONDS:
-            last_partial = time.monotonic()
-            # Copies: the GUI keeps this while the rest is read into the originals.
-            send_partial(NavigatorSourceSnapshot(
-                root, folders[:done], list(read_h5_files), dict(folder_infos), dict(info_signatures), dict(h5_data),
-                dict(h5_signatures), dict(source_rows), dict(source_signatures), detection))
+        report(done, total, PHASE_DATA)
+        if done < total and due():
+            send(folders)
 
     # H5 files outside the scanned folders (in the data folder itself), and linked
     # audio stored elsewhere; inspected here too, off the GUI thread.
@@ -225,12 +303,29 @@ def build_navigator_snapshot(
     for h5_path in [*(path for paths in h5_by_folder.values() for path in paths), *linked_audio]:
         check_cancelled()
         read_h5(h5_path)
+    # Last each folder's Source data: the importer plugins look at every file.
+    loading = set(folders)
+    if send_partial is not None and total:
+        send(loading)
+    report(0, total, PHASE_SOURCES)
+    for done, folder in enumerate(folders, start=1):
+        check_cancelled()
+        rows, source_signatures[folder] = _folder_source_rows(
+            folder, folder_infos[folder], info_signatures[folder], h5_data, previous, detection,
+            reuse=reuse_sources)
+        source_rows[folder] = rows
+        if previous is None or previous.source_rows.get(folder) != rows:
+            changed = True
+        loading.discard(folder)
+        report(done, total, PHASE_SOURCES)
+        if done < total and due():
+            send(loading)
     if previous is not None and set(previous.source_rows) != set(source_rows):
         changed = True
 
     snapshot = NavigatorSourceSnapshot(
         root, folders, h5_files, folder_infos, info_signatures, h5_data, h5_signatures,
-        source_rows, source_signatures, detection,
+        source_rows, source_signatures, detection, links=links,
     )
     return NavigatorSnapshotResult(snapshot, changed, errors, read_ok)
 
@@ -263,8 +358,8 @@ PARTIAL_INTERVAL_SECONDS = 1.0
 
 class _SnapshotSignals(QObject):
     completed = Signal(object)
-    # Folders read and found; (0, 0) while finding them.
-    progress = Signal(int, int)
+    # Folders read and found, and the phase (PHASE_*); (0, 0) while finding them.
+    progress = Signal(int, int, str)
     # A first read's folders so far (NavigatorSourceSnapshot).
     partial = Signal(object)
 
@@ -280,12 +375,12 @@ class _SnapshotTask(QRunnable):
         self._last_progress = 0.0
         self.signals = _SnapshotSignals()
 
-    def _report_progress(self, done: int, total: int) -> None:
+    def _report_progress(self, done: int, total: int, phase: str) -> None:
         # At most a few updates a second: every one crosses to the GUI thread.
         now = time.monotonic()
         if done in {0, total} or now - self._last_progress >= PROGRESS_INTERVAL_SECONDS:
             self._last_progress = now
-            self.signals.progress.emit(done, total)
+            self.signals.progress.emit(done, total, phase)
 
     def run(self) -> None:
         try:
@@ -317,14 +412,14 @@ class NavigatorSnapshotJob(QObject):
         *,
         rescan: bool,
         detection: SourceDetection | None = None,
-        on_progress: Callable[[int, int], None] | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
         on_partial: Callable[[NavigatorSourceSnapshot], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.root = root
         self.callback = callback
-        # Called on the owner's thread with (folders read, folders found), and with the
-        # folders read so far on a first read.
+        # Called on the owner's thread with (folders read, folders found, phase), and on a
+        # first read with the parts read so far.
         self.on_progress = on_progress
         self.on_partial = on_partial
         self._stop_event = threading.Event()
@@ -343,10 +438,10 @@ class NavigatorSnapshotJob(QObject):
     def cancel(self) -> None:
         self._stop_event.set()
 
-    @Slot(int, int)
-    def _progress(self, done: int, total: int) -> None:
+    @Slot(int, int, str)
+    def _progress(self, done: int, total: int, phase: str) -> None:
         if not self.cancelled and self.on_progress is not None:
-            self.on_progress(done, total)
+            self.on_progress(done, total, phase)
 
     @Slot(object)
     def _partial(self, snapshot: object) -> None:

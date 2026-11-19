@@ -72,6 +72,17 @@ All notable changes to LODGaZilla are listed here. The format follows
 
 ### Changed
 
+- The Navigator reads a data folder in phases: every folder is listed at once, then its
+  info and data series are filled in, and its Source data last. A folder still loading has a
+  turning circle where its open/close triangle is, and the Loading row names the phase.
+- Reading a data folder is faster: a series' Sample loss and Clipping warnings are read from
+  its own diagnostic groups instead of walking the whole H5 file (on a 96-file folder, from
+  34 s to 5 s).
+- The splash screen appears sooner: it no longer waits for OpenGL to start.
+- The Navigator stays usable while a data folder loads: a folder's contents are made when it is
+  opened, each part of the read updates only the folders that changed instead of rebuilding the
+  tree, and attachment paths are resolved in the background. The loading phases are written to
+  the Internal log instead of a Loading row.
 - The Internal log's collapse arrow is at the top of its scroll bar.
 - The Settings button moved from the Plot navigator to the end of the workspace buttons,
   after Save workspace as.

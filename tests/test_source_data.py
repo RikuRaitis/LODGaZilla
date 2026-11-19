@@ -258,6 +258,8 @@ class NavigatorSourceRowTests(unittest.TestCase):
                 navigator = DataNavigatorWidget(root, settings_path=settings)
                 navigator.set_source_detection(SourceDetection(("sample",)))
             try:
+                # A folder's contents are made when it is opened.
+                navigator.ensure_all_folder_contents(expand=True)
                 items = list(navigator.tree_items())
                 folder = next(item for item in items if item.data(0, ITEM_TYPE_ROLE) == ROW_TYPE_FOLDER)
                 children = [folder.child(index) for index in range(folder.childCount())]

@@ -155,6 +155,8 @@ class AudioAttachmentTests(unittest.TestCase):
             setattr(self.window, name, getattr(LODGaZillaWindow, name).__get__(self.window))
 
     def tree_rows(self):
+        # Folder contents are made when a folder is opened; open them all, as a user would.
+        self.navigator.ensure_all_folder_contents(expand=True)
         iterator = QTreeWidgetItemIterator(self.navigator.tree)
         rows = []
         while iterator.value():

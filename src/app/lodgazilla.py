@@ -174,7 +174,7 @@ from src.jobs.plugin import run_plugin_process
 from src.app.branding import configure_application, lodgazilla_asset_path, version_text
 from src.app.demo_data import DEMO_DATA_ROOT, DemoDataJob, demo_data_exists, demo_workspace, is_inside, uses_folder
 from src.app.log_paths import log_path
-from src.app.graphics import configure_graphics, shutdown_web_engine
+from src.app.graphics import compose_with_opengl, configure_graphics, shutdown_web_engine
 from src.jobs.process_tree import start_process_tree
 from src.jobs.magic_drop import DraftImportJob, MagicDropJob, PluginDropJob, SignInCheck
 from src.jobs.plugin_chat import PluginChatJob
@@ -2146,6 +2146,8 @@ class LODGaZillaWindow(QMainWindow):
     ) -> None:
         configure_graphics()
         super().__init__()
+        # Composed with OpenGL from the start, before the first map or video card needs it.
+        compose_with_opengl(self)
         # The GUI owns one deferred settings session for its lifetime.  The
         # normal entry point starts it first; this also covers embedded use.
         begin_app_settings_cache(settings_path)
@@ -2321,6 +2323,7 @@ class LODGaZillaWindow(QMainWindow):
         self.navigator.metadata_write_failed.connect(self.on_metadata_write_failed)
         self.navigator.navigator_warning.connect(self.on_navigator_warning)
         self.navigator.loading_changed.connect(self.on_navigator_loading_changed)
+        self.navigator.loading_status.connect(self.internal_logger.info)
         # What is still loading in the background, logged in the Internal log panel.
         self._navigator_loading = False
         self._loading_cards = False

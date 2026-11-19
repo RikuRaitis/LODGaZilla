@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from tests.qt_wait import qt_wait
-from src.app.graphics import configure_graphics, shutdown_web_engine
+from src.app.graphics import compose_with_opengl, configure_graphics, shutdown_web_engine
 from src.gui.plots.base import PlotBaseWidget
 from src.gui.plots.workspace_layout import PlotStackSplitter
 from shiboken6 import delete
@@ -37,7 +37,15 @@ class HostWindow(QWidget):
             self.native_handle_changes += 1
         return super().event(event)
 
+# A plain window, as the splash screen is, does not start OpenGL.
+plain = QWidget()
+plain.show()
+qt_wait(50)
+assert plain.windowHandle().surfaceType() == QSurface.SurfaceType.RasterSurface
+plain.close()
 window = HostWindow()
+# As the main window does: composed with OpenGL before it is shown.
+compose_with_opengl(window)
 layout = QVBoxLayout(window)
 stack = PlotStackSplitter()
 layout.addWidget(stack)

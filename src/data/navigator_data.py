@@ -167,8 +167,6 @@ def read_h5_series_from_file(h5_file: h5py.File) -> tuple[list[H5Series], str | 
     series: list[H5Series] = []
 
     def collect(name: str, group: h5py.Group) -> None:
-        if not isinstance(group, h5py.Group) or "value" not in group:
-            return
         display_name = attribute_text(group.attrs.get("display_name", name))
         navigator_name = attribute_text(group.attrs.get("navigator_name", display_name))
         navigator_group = attribute_text(group.attrs.get("navigator_group", "Ungrouped"))
@@ -186,7 +184,7 @@ def read_h5_series_from_file(h5_file: h5py.File) -> tuple[list[H5Series], str | 
             warning_metadata_for_group(group),
         ))
 
-    series_root.visititems(collect)
+    visit_series_groups(series_root, collect)
     return sorted(series, key=lambda item: (item.navigator_group.lower(), item.navigator_name.lower())), None
 
 
@@ -229,8 +227,28 @@ def read_h5_series_index(h5_file: h5py.File) -> list[H5Series] | None:
     return sorted(series, key=lambda entry: (entry.navigator_group.lower(), entry.navigator_name.lower()))
 
 
+def visit_series_groups(series_root: h5py.Group, visit) -> None:  # type: ignore[no-untyped-def]
+    """Call ``visit(path, group)`` for each series group (one with ``value``) below ``series_root``.
+
+    Unlike ``visititems`` it does not enter a series group: its LOD levels and diagnostic
+    lists can hold thousands of objects, and walking them made reading a folder slow.
+    """
+    pending = [("", series_root)]
+    while pending:
+        prefix, group = pending.pop()
+        for name in group:
+            child = group.get(name, getlink=False)
+            if not isinstance(child, h5py.Group):
+                continue
+            path = f"{prefix}{name}"
+            if "value" in child:
+                visit(path, child)
+            else:
+                pending.append((f"{path}/", child))
+
+
 def diagnostic_warnings_by_series(h5_file: h5py.File) -> dict[tuple[str, str], str]:
-    """Scan the HDF5 series tree once and index its diagnostic warnings."""
+    """Index each series' diagnostic warning, reading only the series groups."""
 
     series_root = h5_file.get("series")
     if not isinstance(series_root, h5py.Group):
@@ -238,15 +256,13 @@ def diagnostic_warnings_by_series(h5_file: h5py.File) -> dict[tuple[str, str], s
     warnings: dict[tuple[str, str], str] = {}
 
     def collect(_name: str, group: h5py.Group) -> None:
-        if not isinstance(group, h5py.Group) or "value" not in group:
-            return
         key = (
             attribute_text(group.attrs.get("navigator_group", "Ungrouped")),
             attribute_text(group.attrs.get("navigator_name", "")),
         )
         warnings[key] = diagnostic_warning_for_group(group)
 
-    series_root.visititems(collect)
+    visit_series_groups(series_root, collect)
     return warnings
 
 

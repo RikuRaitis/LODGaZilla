@@ -37,7 +37,6 @@ from src.gui.navigator.widget import (  # noqa: E402
     ITEM_PATH_ROLE,
     ITEM_SERIES_ROLE,
     ITEM_TYPE_ROLE,
-    LOADING_MESSAGE,
     PHYSICAL_DATA_COLUMN,
     PHYSICAL_VALUE_COLUMN,
     ROW_TYPE_DETAILED_INFO,
@@ -73,6 +72,8 @@ def make_sample_navigator_folder(root: Path) -> Path:
 
 
 def first_item_of_type(navigator, row_type):
+    # Folder contents are made when a folder is opened; open them all, as a user would.
+    navigator.ensure_all_folder_contents(expand=True)
     for item in navigator.tree_items():
         if item.data(0, ITEM_TYPE_ROLE) == row_type:
             return item
@@ -80,6 +81,7 @@ def first_item_of_type(navigator, row_type):
 
 
 def detailed_info_item_for_key(navigator, key):
+    navigator.ensure_all_folder_contents(expand=True)
     for item in navigator.tree_items():
         if (
             item.data(0, ITEM_TYPE_ROLE) == ROW_TYPE_DETAILED_INFO
@@ -101,6 +103,7 @@ def folder_item(navigator, folder: Path):
 
 
 def add_metadata_row(navigator, folder: Path):
+    navigator.ensure_all_folder_contents(expand=True)
     for item in navigator.tree_items():
         if (
             item.data(0, ITEM_TYPE_ROLE) == ROW_TYPE_DETAILED_INFO
@@ -267,14 +270,17 @@ class BackgroundSnapshotTests(NavigatorTestCase):
         self.assertTrue(all(thread is not threading.main_thread() for thread in threads))
         self.assertEqual(len(folder_items(navigator)), 2)
 
-    def test_first_background_load_shows_loading_then_tree(self):
+    def test_first_background_load_logs_its_phases_then_shows_the_tree(self):
         navigator = DataNavigatorWidget(None, settings_path=None)
         self.addCleanup(self.close_navigator, navigator)
         navigator.background_refresh = True
+        statuses = []
+        navigator.loading_status.connect(statuses.append)
         navigator.set_data_folder(self.data_folder)
-        top = navigator.tree.topLevelItem(0)
-        self.assertEqual(navigator.item_logical_value(top, COLUMN_DATA), LOADING_MESSAGE)
+        # Nothing read yet: an empty tree; the phases go to the Internal log.
+        self.assertEqual(navigator.tree.topLevelItemCount(), 0)
         self.wait_for_jobs()
+        self.assertEqual(statuses, ["Finding folders…", "Reading data of 1 folder…", "Finding Source data in 1 folder…"])
         self.assertEqual([navigator.item_logical_value(item, COLUMN_DATA) for item in folder_items(navigator)],
                          ["First"])
 
@@ -291,8 +297,7 @@ class BackgroundSnapshotTests(NavigatorTestCase):
         with mock.patch("src.jobs.navigator_snapshot.read_h5_navigator_data", side_effect=recording_reader):
             navigator = DataNavigatorWidget(self.data_folder, settings_path=None, defer_initial_load=True)
             self.addCleanup(self.close_navigator, navigator)
-            top = navigator.tree.topLevelItem(0)
-            self.assertEqual(navigator.item_logical_value(top, COLUMN_DATA), LOADING_MESSAGE)
+            self.assertEqual(navigator.tree.topLevelItemCount(), 0)
             self.assertEqual(threads, [])
             self.app.processEvents()
             self.assertTrue(navigator.snapshot_refresh_in_progress())
@@ -321,8 +326,7 @@ class BackgroundSnapshotTests(NavigatorTestCase):
             # As the main window's settings do while it is built, before the event loop runs.
             navigator.refresh_tree()
             self.assertEqual(threads, [])
-            self.assertEqual(navigator.item_logical_value(navigator.tree.topLevelItem(0), COLUMN_DATA),
-                             LOADING_MESSAGE)
+            self.assertEqual(navigator.tree.topLevelItemCount(), 0)
             self.app.processEvents()
             self.wait_for_jobs()
 

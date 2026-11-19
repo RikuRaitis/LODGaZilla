@@ -418,6 +418,8 @@ class ModelAttachmentTests(unittest.TestCase):
 
     def model_rows(self):
         from src.gui.navigator.widget import ITEM_TYPE_ROLE, ROW_TYPE_MODEL
+        # Folder contents are made when a folder is opened; open them all, as a user would.
+        self.navigator.ensure_all_folder_contents(expand=True)
         rows, iterator = [], QTreeWidgetItemIterator(self.navigator.tree)
         while iterator.value():
             if iterator.value().data(0, ITEM_TYPE_ROLE) == ROW_TYPE_MODEL:
